@@ -22,8 +22,6 @@ jobs:
       # Bootstraps the Pages site (build_type=workflow) on first run
       - name: Setup Pages
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - uses: actions/setup-node@v4
         with:
           node-version: 20
