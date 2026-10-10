@@ -15,6 +15,8 @@ import { UI } from './ui/ui.js';
 import { Audio } from './audio.js';
 import { Sky } from './sky.js';
 import { smeltResult } from './ui/recipes.js';
+import { ParticleManager } from './particles.js';
+import { FirstPersonArm } from './arm.js';
 
 const canvas = document.getElementById('game-canvas');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
@@ -152,6 +154,54 @@ const game = {
 };
 const ui = new UI(game);
 game.ui = ui;
+
+// ---- particles, first-person arm, target wireframe & crack overlay ----
+const particles = new ParticleManager(scene, atlasCanvas);
+const firstPersonArm = new FirstPersonArm(camera, atlasTex, game.itemIconsCanvas);
+
+// A. Target selection wireframe
+const selectionWireframe = new THREE.LineSegments(
+  new THREE.EdgesGeometry(new THREE.BoxGeometry(1.002, 1.002, 1.002)),
+  new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 2, transparent: true, opacity: 0.45 })
+);
+selectionWireframe.visible = false;
+scene.add(selectionWireframe);
+
+// B. Block crack overlay mesh (cracks 0-9)
+const crackGeometry = new THREE.BoxGeometry(1.003, 1.003, 1.003);
+const crackMaterial = new THREE.MeshBasicMaterial({
+  map: atlasTex,
+  transparent: true,
+  depthWrite: false,
+  polygonOffset: true,
+  polygonOffsetFactor: -1,
+  polygonOffsetUnits: -1,
+});
+const crackOverlayMesh = new THREE.Mesh(crackGeometry, crackMaterial);
+crackOverlayMesh.visible = false;
+scene.add(crackOverlayMesh);
+
+let currentCrackTile = -1;
+function updateCrackOverlayUV(stage) {
+  const tile = TILES.destroy0 + stage;
+  if (tile === currentCrackTile) return;
+  currentCrackTile = tile;
+
+  const tx = tile % 16, ty = Math.floor(tile / 16);
+  const s = 1 / 16;
+  const u0 = tx * s, v0 = 1 - (ty + 1) * s;
+  const u1 = (tx + 1) * s, v1 = 1 - ty * s;
+
+  const uvAttr = crackGeometry.getAttribute('uv');
+  for (let i = 0; i < uvAttr.count; i++) {
+    uvAttr.setXY(
+      i,
+      u0 + (uvAttr.getX(i) < 0.5 ? 0 : 1) * (u1 - u0),
+      v0 + (uvAttr.getY(i) < 0.5 ? 0 : 1) * (v1 - v0)
+    );
+  }
+  uvAttr.needsUpdate = true;
+}
 
 // ---- chunk streaming ----
 const chunkQueue = [];
@@ -360,10 +410,14 @@ function tryBreakBlock(dt) {
     player.mining.total = total;
   }
   player.mining.progress += dt;
-  if (Math.random() < dt * 6) audio.dig(id);
+  if (Math.random() < dt * 6) {
+    audio.dig(id);
+    particles.spawnDig(hit, id);
+  }
 
   if (player.mining.progress >= total) {
     // break!
+    particles.spawnBreak(hit.x, hit.y, hit.z, id);
     world.setBlock(hit.x, hit.y, hit.z, AIR);
     if (canHarvest(id, held ? held.id : null)) dropBlock(hit.x, hit.y, hit.z, id);
     if (held) player.useHeldOn(id);
@@ -392,12 +446,19 @@ function tryPlaceBlock() {
     player.health = Math.min(20, player.health + itemDef.food);
     player.consumeHeld();
     audio.eat();
+    firstPersonArm.triggerPlaceSwing();
     ui.refresh();
     return;
   }
 
   if (!isBlock(held.id)) return;
-  const px = hit.x + hit.face[0], py = hit.y + hit.face[1], pz = hit.z + hit.face[2];
+
+  // Replaceable blocks: if hit is TALL_GRASS, SAPLING, WATER, or LAVA, place directly at hit
+  const hitBlockId = world.getBlock(hit.x, hit.y, hit.z);
+  const isReplaceable = (hitBlockId === TALL_GRASS || hitBlockId === SAPLING || hitBlockId === WATER || hitBlockId === LAVA);
+  const px = isReplaceable ? hit.x : hit.x + hit.face[0];
+  const py = isReplaceable ? hit.y : hit.y + hit.face[1];
+  const pz = isReplaceable ? hit.z : hit.z + hit.face[2];
 
   // don't place inside the player
   const pminX = player.pos.x - 0.35, pmaxX = player.pos.x + 0.35;
@@ -406,12 +467,13 @@ function tryPlaceBlock() {
   if (px + 1 > pminX && px < pmaxX && py + 1 > pminY && py < pmaxY && pz + 1 > pminZ && pz < pmaxZ) return;
 
   const existing = world.getBlock(px, py, pz);
-  if (existing !== AIR && !getBlock(existing).liquid) return;
+  if (existing !== AIR && !getBlock(existing).liquid && !isReplaceable) return;
 
   world.setBlock(px, py, pz, held.id);
   player.consumeHeld();
   audio.place(held.id);
   player.stats.blocksPlaced++;
+  firstPersonArm.triggerPlaceSwing();
   ui.refresh();
 }
 
@@ -667,7 +729,7 @@ function refreshFurnace() {
 }
 
 // ---- input: interact ----
-let rightClickCooldown = 0;
+let placeCooldown = 0;
 const tntFuses = []; // {x, y, z, timer}
 document.addEventListener('mousedown', (e) => {
   if (ui.mode !== 'game' || !player.pointerLocked) return;
@@ -693,7 +755,7 @@ document.addEventListener('mousedown', (e) => {
       }
     }
     tryPlaceBlock();
-    rightClickCooldown = 0.25;
+    placeCooldown = 0.25;
   }
 });
 
@@ -742,13 +804,54 @@ function frame() {
       if (player.leftDown && player.pointerLocked) tryBreakBlock(dt);
       else if (!player.leftDown) { player.mining.active = false; }
 
+      // D. Continuous block placement with repeat cooldown
+      if (player.rightDown && player.pointerLocked) {
+        placeCooldown -= dt;
+        if (placeCooldown <= 0) {
+          tryPlaceBlock();
+          placeCooldown = 0.25;
+        }
+      } else {
+        placeCooldown = 0;
+      }
+
       mobs.update(dt, player, sky.timeOfDay, effects, audio);
       updateItems(dt);
       updateArrows(dt);
       updateFurnaces(dt);
       updateTNT(dt);
+      particles.update(dt, world);
 
       // eating with right click hold handled in tryPlaceBlock; also allow F key? no.
+    }
+
+    // A. Target selection wireframe
+    const hit = player.raycast(world, 5);
+    if (hit && player.pointerLocked && ui.mode === 'game') {
+      selectionWireframe.position.set(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5);
+      selectionWireframe.visible = true;
+    } else {
+      selectionWireframe.visible = false;
+    }
+
+    // B. Block break cracking stages (0-9)
+    if (player.mining.active && player.mining.total > 0 && player.pointerLocked && ui.mode === 'game') {
+      const stage = Math.min(9, Math.floor((player.mining.progress / player.mining.total) * 10));
+      updateCrackOverlayUV(stage);
+      crackOverlayMesh.position.set(player.mining.x + 0.5, player.mining.y + 0.5, player.mining.z + 0.5);
+      crackOverlayMesh.visible = true;
+    } else {
+      crackOverlayMesh.visible = false;
+    }
+
+    // E. First-person arm animation & held item update
+    if (ui.mode === 'game') {
+      firstPersonArm.root.visible = true;
+      firstPersonArm.setHeldItem(player.heldStack);
+      const isMoving = player.onGround && Math.hypot(player.vel.x, player.vel.z) > 0.5;
+      firstPersonArm.update(dt, isMoving, player.leftDown && player.pointerLocked);
+    } else {
+      firstPersonArm.root.visible = false;
     }
 
     updateChunks();
