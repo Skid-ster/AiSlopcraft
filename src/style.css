@@ -1,0 +1,408 @@
+/* AiSlopcraft — classic beta UI look */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #000;
+  font-family: 'Courier New', monospace;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#game-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  image-rendering: pixelated;
+}
+
+#ui {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+}
+#ui .screen, #ui .hud .hotbar, #ui button, #ui .slot {
+  pointer-events: auto;
+}
+
+/* ---------- overlays ---------- */
+#hurt-overlay {
+  position: fixed; inset: 0;
+  background: radial-gradient(ellipse at center, transparent 40%, rgba(200, 0, 0, 0.55) 100%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+  z-index: 5;
+}
+#water-overlay {
+  position: fixed; inset: 0;
+  background: rgba(30, 60, 190, 0.45);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s;
+  z-index: 4;
+}
+
+/* ---------- screens ---------- */
+.screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  z-index: 20;
+}
+
+.title-screen {
+  background:
+    linear-gradient(rgba(0,0,0,0.35), rgba(0,0,0,0.55)),
+    repeating-conic-gradient(#6b4c2e 0% 25%, #7a5836 0% 50%) 0 0 / 32px 32px;
+}
+
+.title-logo {
+  text-align: center;
+  margin-bottom: 28px;
+  position: relative;
+}
+.title-main {
+  font-size: 72px;
+  font-weight: 900;
+  color: #fff;
+  text-shadow: 4px 4px 0 #3a2c1a, 8px 8px 0 rgba(0,0,0,0.35);
+  letter-spacing: 3px;
+}
+.title-sub {
+  font-size: 18px;
+  color: #d8d8d8;
+  text-shadow: 2px 2px 0 #222;
+  margin-top: 6px;
+  letter-spacing: 1px;
+}
+.splash {
+  position: absolute;
+  right: -60px;
+  bottom: -8px;
+  color: #ffff55;
+  font-size: 18px;
+  font-weight: bold;
+  text-shadow: 2px 2px 0 #3f3f00;
+  transform-origin: center;
+}
+.title-foot {
+  position: absolute;
+  bottom: 14px;
+  left: 16px;
+  color: #cfcfcf;
+  font-size: 12px;
+  text-shadow: 1px 1px 0 #222;
+}
+
+/* ---------- buttons ---------- */
+.btn {
+  min-width: 340px;
+  padding: 12px 18px;
+  font-family: inherit;
+  font-size: 18px;
+  color: #fff;
+  background: linear-gradient(#8b8b8b, #6e6e6e);
+  border: 2px solid #000;
+  outline: 2px solid #555;
+  cursor: pointer;
+  text-shadow: 2px 2px 0 #333;
+  image-rendering: pixelated;
+}
+.btn:hover { background: linear-gradient(#a8a8c8, #7a7aa8); }
+.btn:active { background: linear-gradient(#5c5c5c, #7a7a7a); }
+.btn-big { min-width: 400px; font-size: 22px; padding: 16px 22px; }
+
+/* ---------- HUD ---------- */
+.hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.crosshair {
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  color: rgba(255,255,255,0.85);
+  font-size: 26px;
+  mix-blend-mode: difference;
+  font-family: monospace;
+}
+
+.hotbar {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 2px;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 3px;
+  border: 2px solid rgba(30,30,30,0.8);
+  pointer-events: auto;
+}
+
+.slot {
+  width: 44px;
+  height: 44px;
+  background: rgba(139, 139, 139, 0.72);
+  border: 2px solid;
+  border-color: #555 #ccc #ccc #555;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  image-rendering: pixelated;
+}
+.hotbar-slot { width: 50px; height: 50px; }
+.hotbar-slot.selected {
+  outline: 3px solid #fff;
+  z-index: 2;
+  background: rgba(180, 180, 180, 0.85);
+}
+.slot canvas { image-rendering: pixelated; width: 34px; height: 34px; }
+.hotbar-slot canvas { width: 40px; height: 40px; }
+.slot .count {
+  position: absolute;
+  right: 2px; bottom: 0;
+  color: #fff;
+  font-size: 15px;
+  font-weight: bold;
+  text-shadow: 2px 2px 0 #222;
+}
+.slot .durability {
+  position: absolute;
+  left: 3px; bottom: 3px;
+  height: 3px;
+  background: #4c4;
+}
+
+.hearts {
+  position: absolute;
+  bottom: 74px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 496px;
+  display: flex;
+  gap: 1px;
+  margin-left: -5px;
+}
+.heart {
+  font-size: 22px;
+  line-height: 22px;
+  text-shadow: 1.5px 1.5px 0 #400;
+}
+.heart.full { color: #e02020; }
+.heart.half { color: #e02020; opacity: 0.55; }
+.heart.empty { color: #4a2222; }
+
+.water-bar {
+  position: absolute;
+  bottom: 100px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 496px;
+  display: flex;
+  gap: 1px;
+}
+.bubble { font-size: 18px; color: #c8e8ff; text-shadow: 1px 1px 0 #234; }
+.bubble.empty { opacity: 0.3; }
+
+.held-name {
+  position: absolute;
+  bottom: 132px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #fff;
+  font-size: 17px;
+  text-shadow: 2px 2px 0 #222;
+  opacity: 0;
+  transition: opacity 0.5s;
+  white-space: nowrap;
+}
+
+.hint {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: rgba(255,255,255,0.85);
+  font-size: 13px;
+  text-shadow: 1.5px 1.5px 0 #222;
+  background: rgba(0,0,0,0.3);
+  padding: 5px 12px;
+  border-radius: 2px;
+}
+
+.debug {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.45;
+  text-shadow: 1.5px 1.5px 0 #222;
+  background: rgba(0,0,0,0.38);
+  padding: 8px 10px;
+  pointer-events: none;
+}
+
+/* ---------- panels ---------- */
+.panel-screen {
+  background: rgba(0, 0, 0, 0.62);
+}
+.panel {
+  background: #c6c6c6;
+  border: 4px solid;
+  border-color: #fff #555 #555 #fff;
+  padding: 18px 22px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+.inv-title {
+  font-size: 16px;
+  color: #3a3a3a;
+  margin: 10px 0 8px 2px;
+  font-weight: bold;
+}
+.inv-main {
+  display: grid;
+  grid-template-columns: repeat(9, 44px);
+  gap: 2px;
+}
+.inv-hotbar {
+  display: grid;
+  grid-template-columns: repeat(9, 44px);
+  gap: 2px;
+  margin-top: 10px;
+}
+.craft-area {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 6px;
+}
+.craft-grid {
+  display: grid;
+  gap: 2px;
+}
+.craft-arrow {
+  font-size: 30px;
+  color: #555;
+}
+.craft-out {
+  width: 52px; height: 52px;
+  background: rgba(120, 120, 120, 0.85);
+}
+.cursor-item {
+  position: fixed;
+  width: 36px; height: 36px;
+  pointer-events: none;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cursor-item canvas { width: 32px; height: 32px; image-rendering: pixelated; }
+.cursor-item .count {
+  position: absolute;
+  right: -4px; bottom: -6px;
+  color: #fff;
+  font-size: 15px;
+  font-weight: bold;
+  text-shadow: 2px 2px 0 #222;
+}
+
+/* furnace */
+.furnace-panel { min-width: 420px; }
+.furnace-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 8px 0;
+}
+.furnace-flame { font-size: 26px; width: 36px; text-align: center; }
+.furnace-progress {
+  width: 100px; height: 16px;
+  background: #8b8b8b;
+  border: 2px solid #555;
+}
+#f-prog-fill {
+  height: 100%;
+  background: #e8e8e8;
+  width: 0%;
+  transition: width 0.2s;
+}
+
+/* pause & death */
+.pause-screen, .death-screen {
+  background: rgba(0, 0, 0, 0.55);
+}
+.pause-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+}
+.pause-inner h2 {
+  color: #fff;
+  font-size: 32px;
+  text-shadow: 3px 3px 0 #222;
+  margin-bottom: 12px;
+}
+.pause-hint {
+  color: #bbb;
+  font-size: 13px;
+  margin-top: 14px;
+  text-shadow: 1px 1px 0 #222;
+}
+.death-screen {
+  background: rgba(120, 0, 0, 0.42);
+}
+.death-title {
+  color: #fff;
+  font-size: 52px;
+  text-shadow: 4px 4px 0 #400;
+  margin-bottom: 8px;
+}
+.death-score {
+  color: #ffff55;
+  font-size: 22px;
+  text-shadow: 2px 2px 0 #442;
+  margin-bottom: 24px;
+}
+
+/* options */
+.options-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 420px;
+}
+.options-panel h2 {
+  color: #3a3a3a;
+  text-align: center;
+}
+.options-panel label {
+  color: #2f2f2f;
+  font-size: 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.options-panel input[type=range] {
+  width: 100%;
+}
+
+@media (max-width: 720px) {
+  .title-main { font-size: 42px; }
+  .btn { min-width: 260px; }
+  .hearts, .water-bar { width: 300px; }
+}
