@@ -362,6 +362,11 @@ export class UI {
     }
   }
 
+  hide(id) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  }
+
   setMode(mode) {
     this.mode = mode;
     const hud = document.getElementById('hud');
