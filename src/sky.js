@@ -18,6 +18,7 @@ const CLOUD_BASE = 108;     // bottom of the cloud layer
 const CLOUD_GRID = 34;      // slabs per side around the player
 const CLOUD_DENSITY = 0.11; // chance a slab exists
 const CLOUD_NIGHT = new THREE.Color(0x3a4059);
+const CLOUD_WHITE = new THREE.Color(0xffffff);
 
 // time: 0 = midnight, 0.25 = sunrise, 0.5 = noon, 0.75 = sunset
 export function sunElevation(timeOfDay) {
@@ -45,6 +46,7 @@ export class Sky {
     this.renderDistance = 6;
     this._sky = new THREE.Color();
     this._fog = new THREE.Color();
+    this._cloudColor = new THREE.Color();
 
     // sun & moon
     const sunTex = this.makeSunTexture();
@@ -266,7 +268,10 @@ export class Sky {
       this.scene.fog.far = reach * 0.98;
     }
     this.cloudMat.uniforms.uSky.value.copy(this._sky);
-    this.cloudMat.uniforms.uCloud.value.setRGB(1, 1, 1).lerp(CLOUD_NIGHT, 1 - this.dayFactor);
+    // Clouds are lit by the sky they sit in: bright and white at noon, warm
+    // at sunset and a dim blue-grey at night.
+    this._cloudColor.copy(this._sky).lerp(CLOUD_WHITE, 0.75).lerp(CLOUD_NIGHT, (1 - this.dayFactor) * 0.65);
+    this.cloudMat.uniforms.uCloud.value.copy(this._cloudColor);
     this.cloudMat.uniforms.uFade.value.set(reach * 1.05, reach * 2.6);
 
     return this.dayFactor;
