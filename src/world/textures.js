@@ -597,23 +597,38 @@ export function buildAtlas() {
   });
 
   // --- destroy stage overlay (cracks) ---
+  // Precompute a single set of crack segments with a stable seed so each
+  // successive stage adds to the same pattern instead of jumping.
+  const crackSegments = [];
+  {
+    const r = tileRand(TILES.destroy0 * 7919 + 17);
+    for (let i = 0; i < 12; i++) {
+      const cx = 8 + (r() * 6 - 3);
+      const cy = 8 + (r() * 6 - 3);
+      const dx = r() * 2 - 1;
+      const dy = r() * 2 - 1;
+      const len = 5 + r() * 9;
+      crackSegments.push({ cx, cy, dx, dy, len });
+    }
+  }
   for (let stage = 0; stage < 10; stage++) {
     put(TILES.destroy0 + stage, (ox, oy, rnd) => {
-      const density = (stage + 1) / 11;
       for (let y = 0; y < TS; y++) for (let x = 0; x < TS; x++) {
         px(ctx, ox + x, oy + y, 0, 0, 0, 0);
       }
-      // crack lines radiating from center
       const n = 3 + stage;
       for (let i = 0; i < n; i++) {
-        let x = 8 + (rnd() * 6 - 3), y = 8 + (rnd() * 6 - 3);
-        const dx = rnd() * 2 - 1, dy = rnd() * 2 - 1;
-        const len = 4 + rnd() * 10 * density;
-        for (let s = 0; s < len; s++) {
+        const seg = crackSegments[i];
+        let x = seg.cx, y = seg.cy;
+        for (let s = 0; s < seg.len; s++) {
           const px_ = Math.round(x), py_ = Math.round(y);
-          if (px_ >= 0 && px_ < TS && py_ >= 0 && py_ < TS)
-            px(ctx, ox + px_, oy + py_, 20, 16, 12, 190);
-          x += dx + (rnd() - 0.5); y += dy + (rnd() - 0.5);
+          if (px_ >= 0 && px_ < TS && py_ >= 0 && py_ < TS) {
+            px(ctx, ox + px_, oy + py_, 20, 16, 12, 210);
+            // thicken slightly for visibility
+            if (px_ + 1 < TS) px(ctx, ox + px_ + 1, oy + py_, 20, 16, 12, 150);
+          }
+          x += seg.dx + (rnd() - 0.5) * 0.4;
+          y += seg.dy + (rnd() - 0.5) * 0.4;
         }
       }
     });
