@@ -40,7 +40,7 @@ html, body {
 }
 #water-overlay {
   position: fixed; inset: 0;
-  background: rgba(30, 60, 190, 0.45);
+  background: linear-gradient(rgba(35, 84, 190, 0.58), rgba(20, 58, 155, 0.48));
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.25s;
@@ -223,9 +223,11 @@ html, body {
   transform: translateX(-50%);
   color: #fff;
   font-size: 17px;
-  text-shadow: 2px 2px 0 #222;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-shadow: 2px 2px 0 #3f3f3f, -1px -1px 0 #2b2b2b, 1px -1px 0 #2b2b2b, -1px 1px 0 #2b2b2b;
   opacity: 0;
-  transition: opacity 0.5s;
+  transition: opacity 0.35s;
   white-space: nowrap;
 }
 

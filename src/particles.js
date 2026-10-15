@@ -177,6 +177,25 @@ export class ParticleManager {
     }
   }
 
+  spawnEffect(position, { color = 0xffa020, life = 0.45, scale = 0.7, vx = 0, vy = 1.4, vz = 0, gravity = -0.4 } = {}) {
+    if (this.particles.length >= MAX_PARTICLES) this.particles.shift();
+    const tint = color?.isColor ? color.clone() : new THREE.Color(color);
+    this.particles.push({
+      x: position.x + (Math.random() - 0.5) * 0.45,
+      y: position.y + Math.random() * 0.5,
+      z: position.z + (Math.random() - 0.5) * 0.45,
+      vx: vx + (Math.random() - 0.5) * 0.5,
+      vy: vy + Math.random() * 0.5,
+      vz: vz + (Math.random() - 0.5) * 0.5,
+      color: tint,
+      life,
+      maxLife: life,
+      scale,
+      gravity,
+      collide: false,
+    });
+  }
+
   // 1-2 small particles while digging
   spawnDig(hit, blockId) {
     if (!hit || !blockId) return;
@@ -222,8 +241,8 @@ export class ParticleManager {
         continue;
       }
 
-      // Physics: gravity
-      p.vy -= 18 * dt;
+      // Block fragments fall; fire/smoke effect particles drift upward.
+      p.vy -= (p.gravity ?? 18) * dt;
 
       // Integrate position
       p.x += p.vx * dt;
@@ -231,7 +250,7 @@ export class ParticleManager {
       p.z += p.vz * dt;
 
       // Simple ground / block bounce or damping
-      if (world) {
+      if (world && p.collide !== false) {
         const bx = Math.floor(p.x);
         const by = Math.floor(p.y);
         const bz = Math.floor(p.z);

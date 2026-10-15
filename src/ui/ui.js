@@ -6,6 +6,14 @@ import { matchRecipe, smeltResult } from './recipes.js';
 const SLOT = 36;
 const SLOT_GAP = 2;
 
+function stackLimit(stack) {
+  return ITEMS[stack.id]?.durability ? 1 : 64;
+}
+
+function canStack(a, b) {
+  return !!a && !!b && a.id === b.id && (a.damage || 0) === (b.damage || 0) && stackLimit(a) > 1;
+}
+
 export class UI {
   constructor(game) {
     this.game = game;
@@ -255,8 +263,8 @@ export class UI {
           player.cursorStack = { ...s, count: half };
           s.count -= half;
           if (s.count <= 0) player.inventory[index] = null;
-        } else if (player.cursorStack && s && s.id === player.cursorStack.id) {
-          if (s.count < 64) { s.count++; player.cursorStack.count--; }
+        } else if (player.cursorStack && canStack(s, player.cursorStack)) {
+          if (s.count < stackLimit(s)) { s.count++; player.cursorStack.count--; }
           if (player.cursorStack.count <= 0) player.cursorStack = null;
         }
       } else {
@@ -268,8 +276,8 @@ export class UI {
           player.cursorStack = s;
           player.inventory[index] = null;
         } else if (player.cursorStack && s) {
-          if (s.id === player.cursorStack.id) {
-            const add = Math.min(64 - s.count, player.cursorStack.count);
+          if (canStack(s, player.cursorStack)) {
+            const add = Math.min(stackLimit(s) - s.count, player.cursorStack.count);
             s.count += add;
             player.cursorStack.count -= add;
             if (player.cursorStack.count <= 0) player.cursorStack = null;
@@ -291,7 +299,7 @@ export class UI {
           player.cursorStack = { ...s, count: half };
           s.count -= half;
           if (s.count <= 0) this.craftSlots[index] = null;
-        } else if (player.cursorStack && s && s.id === player.cursorStack.id && s.count < 64) {
+        } else if (player.cursorStack && canStack(s, player.cursorStack) && s.count < stackLimit(s)) {
           s.count++; player.cursorStack.count--;
           if (player.cursorStack.count <= 0) player.cursorStack = null;
         }
@@ -303,8 +311,8 @@ export class UI {
           player.cursorStack = s;
           this.craftSlots[index] = null;
         } else if (player.cursorStack && s) {
-          if (s.id === player.cursorStack.id) {
-            const add = Math.min(64 - s.count, player.cursorStack.count);
+          if (canStack(s, player.cursorStack)) {
+            const add = Math.min(stackLimit(s) - s.count, player.cursorStack.count);
             s.count += add;
             player.cursorStack.count -= add;
             if (player.cursorStack.count <= 0) player.cursorStack = null;
@@ -317,9 +325,12 @@ export class UI {
     } else if (type === 'out') {
       const result = matchRecipe(this.craftSlots, this.craftSize);
       if (result) {
-        if (!player.cursorStack || (player.cursorStack.id === result.id && player.cursorStack.count + result.count <= 64)) {
+        const outputStack = { id: result.id, count: result.count, damage: 0 };
+        const canReceive = !player.cursorStack ||
+          (canStack(player.cursorStack, outputStack) && player.cursorStack.count + result.count <= stackLimit(player.cursorStack));
+        if (canReceive) {
           if (player.cursorStack) player.cursorStack.count += result.count;
-          else player.cursorStack = { id: result.id, count: result.count, damage: 0 };
+          else player.cursorStack = outputStack;
           // consume ingredients
           for (let i = 0; i < 9; i++) {
             const s = this.craftSlots[i];
@@ -367,6 +378,24 @@ export class UI {
     if (el) el.style.display = 'none';
   }
 
+  returnStack(stack) {
+    if (!stack || !stack.count) return;
+    const player = this.game.player;
+    let inserted = 0;
+    if (typeof player.insertItem === 'function') {
+      inserted = player.insertItem(stack.id, stack.count, stack.damage || 0);
+    } else {
+      const result = player.addItem?.(stack.id, stack.count, stack.damage || 0);
+      inserted = result === false ? 0 : stack.count;
+    }
+    const remainder = stack.count - inserted;
+    if (remainder > 0 && this.game.dropItem) {
+      this.game.dropItem({ ...stack, count: remainder });
+    } else if (remainder > 0) {
+      player.overflowStack = { ...stack, count: remainder };
+    }
+  }
+
   setMode(mode) {
     this.mode = mode;
     const hud = document.getElementById('hud');
@@ -384,10 +413,10 @@ export class UI {
     if (mode === 'game') {
       // return cursor stack + craft grid items to inventory
       const p = this.game.player;
-      if (p.cursorStack) { p.addItem(p.cursorStack.id, p.cursorStack.count); p.cursorStack = null; }
+      if (p.cursorStack) { this.returnStack(p.cursorStack); p.cursorStack = null; }
       for (let i = 0; i < 9; i++) {
         if (this.craftSlots[i]) {
-          p.addItem(this.craftSlots[i].id, this.craftSlots[i].count);
+          this.returnStack(this.craftSlots[i]);
           this.craftSlots[i] = null;
         }
       }
@@ -416,14 +445,19 @@ export class UI {
     }
     // hearts
     this.renderHearts();
-    // held item name
-    const held = player.inventory[player.hotbarIndex];
-    if (held && this._lastName !== (held.id + '')) {
-      this._lastName = held.id + '';
-      this.heldNameEl.textContent = itemName(held.id);
-      this.heldNameEl.style.opacity = 1;
+    // Classic selected-slot tooltip: refresh even when two slots hold the same item.
+    if (this._lastHotbarIndex !== player.hotbarIndex) {
+      this._lastHotbarIndex = player.hotbarIndex;
+      const held = player.inventory[player.hotbarIndex];
       clearTimeout(this._nameTimer);
-      this._nameTimer = setTimeout(() => { this.heldNameEl.style.opacity = 0; }, 1600);
+      if (held) {
+        this.heldNameEl.textContent = itemName(held.id);
+        this.heldNameEl.style.opacity = 1;
+        this._nameTimer = setTimeout(() => { this.heldNameEl.style.opacity = 0; }, 2000);
+      } else {
+        this.heldNameEl.textContent = '';
+        this.heldNameEl.style.opacity = 0;
+      }
     }
 
     // inventory panel
@@ -626,6 +660,10 @@ export const ITEM_ICON_INDEX = {
   358: 71,  // map
   341: 72,  // slimeball
   298: 73, 299: 74, 300: 75, 301: 76, // leather armor
+  306: 78, 307: 79, 308: 80, 309: 81, // iron armor
+  310: 82, 311: 83, 312: 84, 313: 85, // diamond armor
+  314: 86, 315: 87, 316: 88, 317: 89, // gold armor
+  348: 91, 367: 90, // glowstone dust, rotten flesh
   323: 61,  // sign
   328: 62,  // minecart
   329: 63,  // saddle

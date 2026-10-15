@@ -98,6 +98,12 @@ export class Audio {
     this._tone(240, 0.14, 0.12, 'square', 160);
   }
 
+  mobDeath(type = 'mob') {
+    const pitch = type === 'skeleton' ? 150 : type === 'spider' ? 120 : 180;
+    this._tone(pitch, 0.24, 0.14, 'triangle', pitch * 0.55);
+    this._noise(0.18, 360, 1.1, 0.12, 'bandpass', 180);
+  }
+
   mobAttack() {
     this._noise(0.12, 500, 1.0, 0.2);
     this._tone(200, 0.1, 0.1, 'square', 120);

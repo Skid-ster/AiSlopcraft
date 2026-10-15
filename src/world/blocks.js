@@ -107,7 +107,7 @@ def(STONE, 'Stone', { tiles: faces(TILES.stone, TILES.stone, TILES.stone), hardn
 def(GRASS, 'Grass', { tiles: faces(TILES.grass_top, TILES.dirt, TILES.grass_side), hardness: 0.6, tool: 'shovel', drops: DIRT, tint: 'grass' });
 def(DIRT, 'Dirt', { tiles: faces(TILES.dirt, TILES.dirt, TILES.dirt), hardness: 0.5, tool: 'shovel' });
 def(COBBLE, 'Cobblestone', { tiles: faces(TILES.cobble, TILES.cobble, TILES.cobble), hardness: 2.0, tool: 'pickaxe' });
-def(PLANKS, 'Planks', { tiles: faces(TILES.planks, TILES.planks, TILES.planks), hardness: 2.0, tool: 'axe' });
+def(PLANKS, 'Oak Planks', { tiles: faces(TILES.planks, TILES.planks, TILES.planks), hardness: 2.0, tool: 'axe' });
 def(SAPLING, 'Sapling', { solid: false, opaque: false, cross: true, tiles: faces(TILES.sapling, TILES.sapling, TILES.sapling), hardness: 0.0, render: 'cross' });
 def(BEDROCK, 'Bedrock', { tiles: faces(TILES.bedrock, TILES.bedrock, TILES.bedrock), hardness: -1, drops: 0 });
 def(WATER, 'Water', { solid: false, opaque: false, liquid: true, tiles: faces(TILES.water, TILES.water, TILES.water), hardness: 100, render: 'liquid' });
@@ -215,8 +215,16 @@ export const ITEMS = {
   295: { name: 'Wheat Seeds', },
   296: { name: 'Wheat', },
   297: { name: 'Bread', food: 5 },
-  298: { name: 'Leather Helmet' }, 299: { name: 'Leather Chestplate' },
-  300: { name: 'Leather Leggings' }, 301: { name: 'Leather Boots' },
+  298: { name: 'Leather Helmet', durability: 56 }, 299: { name: 'Leather Chestplate', durability: 81 },
+  300: { name: 'Leather Leggings', durability: 76 }, 301: { name: 'Leather Boots', durability: 66 },
+  306: { name: 'Iron Helmet', durability: 166 }, 307: { name: 'Iron Chestplate', durability: 241 },
+  308: { name: 'Iron Leggings', durability: 226 }, 309: { name: 'Iron Boots', durability: 196 },
+  310: { name: 'Diamond Helmet', durability: 364 }, 311: { name: 'Diamond Chestplate', durability: 529 },
+  312: { name: 'Diamond Leggings', durability: 496 }, 313: { name: 'Diamond Boots', durability: 430 },
+  314: { name: 'Golden Helmet', durability: 78 }, 315: { name: 'Golden Chestplate', durability: 113 },
+  316: { name: 'Golden Leggings', durability: 106 }, 317: { name: 'Golden Boots', durability: 92 },
+  348: { name: 'Glowstone Dust' },
+  367: { name: 'Rotten Flesh' },
   318: { name: 'Flint', },
   319: { name: 'Raw Porkchop', food: 3 },
   320: { name: 'Cooked Porkchop', food: 8 },

@@ -10,11 +10,12 @@ import {
   TILES, SAPLING, TALL_GRASS, PLANKS, TNT
 } from './world/blocks.js';
 import { Player } from './entities/player.js';
-import { MobManager } from './entities/mobs.js';
+import { advanceEating } from './entities/eating.js';
+import { MobManager, findSafeGround, rollMobDrops } from './entities/mobs.js';
 import { UI } from './ui/ui.js';
 import { Audio } from './audio.js';
 import { Sky } from './sky.js';
-import { smeltResult } from './ui/recipes.js';
+import { createFurnaceState, tickFurnace, interactWithFurnaceSlot } from './ui/furnace.js';
 import { ParticleManager } from './particles.js';
 import { FirstPersonArm } from './arm.js';
 
@@ -131,24 +132,33 @@ const game = {
   started: false,
   time: 0,
   seed: SEED,
+  dropItem(stack) {
+    spawnItem(player.pos.x, player.pos.y, player.pos.z, stack.id, stack.count, stack.damage || 0);
+  },
+  prepareSpawn() {
+    // Keep the spawn region generated even after the player has streamed far away.
+    for (let cz = -1; cz <= 1; cz++) {
+      for (let cx = -1; cx <= 1; cx++) world.generateChunk(cx, cz);
+    }
+    const x = 8.5, z = 8.5;
+    const y = findSafeGround(world, x, z, 0.6, 1.8);
+    return { x, y: y ?? (world.heightAt(8, 8) + 1.001), z };
+  },
   respawn() {
-    const y = world.heightAt(8, 8);
-    player.respawn(y + 0.5);
+    const spawn = this.prepareSpawn();
+    player.respawn(spawn.y, spawn.x, spawn.z);
+    mobs.attackCooldown = 0;
+    updateChunks(true);
+    processChunkQueue();
     ui.setMode('game');
   },
   start() {
     if (this.started) return;
     this.started = true;
-    // synchronously generate the spawn chunks so the player doesn't fall
-    for (let dz = -1; dz <= 1; dz++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        world.generateChunk(dx, dz);
-      }
-    }
+    const spawn = this.prepareSpawn();
+    player.respawn(spawn.y, spawn.x, spawn.z);
     updateChunks(true);
     processChunkQueue();
-    const y = world.heightAt(8, 8);
-    player.respawn(y + 0.5);
     mobs.spawnInitial(player);
   },
 };
@@ -287,7 +297,7 @@ const itemEntities = [];
 const itemGroup = new THREE.Group();
 scene.add(itemGroup);
 
-function spawnItem(x, y, z, id, count = 1) {
+function spawnItem(x, y, z, id, count = 1, damage = 0) {
   // item entity: small rotating cube using block texture or item icon
   let mesh;
   if (isBlock(id)) {
@@ -321,7 +331,7 @@ function spawnItem(x, y, z, id, count = 1) {
   }
   mesh.position.set(x + 0.5, y + 0.3, z + 0.5);
   itemGroup.add(mesh);
-  itemEntities.push({ mesh, id, count, vy: 2, age: 0, onGround: false });
+  itemEntities.push({ mesh, id, count, damage, vy: 2, age: 0, onGround: false });
 }
 
 let _itemTex = null;
@@ -356,15 +366,22 @@ function updateItems(dt) {
     // pickup
     const d = it.mesh.position.distanceTo(player.pos.clone().add(new THREE.Vector3(0, 0.8, 0)));
     if (d < 1.4 && it.age > 0.4) {
-      if (player.addItem(it.id, it.count)) {
-        it.dead = true;
+      const inserted = player.insertItem(it.id, it.count, it.damage || 0);
+      if (inserted > 0) {
+        it.count -= inserted;
         audio.pop();
+        if (it.count <= 0) it.dead = true;
       }
     }
     if (it.age > 300) it.dead = true;
   }
   for (const it of itemEntities) {
-    if (it.dead) itemGroup.remove(it.mesh);
+    if (it.dead) {
+      itemGroup.remove(it.mesh);
+      it.mesh.geometry?.dispose();
+      if (Array.isArray(it.mesh.material)) it.mesh.material.forEach(material => material.dispose());
+      else it.mesh.material?.dispose();
+    }
   }
   for (let i = itemEntities.length - 1; i >= 0; i--) {
     if (itemEntities[i].dead) itemEntities.splice(i, 1);
@@ -435,23 +452,22 @@ function tryBreakBlock(dt) {
   }
 }
 
-function tryPlaceBlock() {
-  const hit = player.raycast(world, 5);
-  const held = player.heldStack;
-  if (!hit || !held) return;
-  const itemDef = ITEMS[held.id];
+let eating = null;
 
-  // food eating
-  if (itemDef && itemDef.food && player.health < 20) {
-    player.health = Math.min(20, player.health + itemDef.food);
-    player.consumeHeld();
-    audio.eat();
-    firstPersonArm.triggerPlaceSwing();
-    ui.refresh();
+function tryPlaceBlock() {
+  const held = player.heldStack;
+  if (!held) { eating = null; return; }
+  const itemDef = ITEMS[held.id];
+  if (itemDef?.food) {
+    if (player.health < player.maxHealth) {
+      if (!eating || eating.id !== held.id) eating = { id: held.id, progress: 0 };
+    } else eating = null;
     return;
   }
 
-  if (!isBlock(held.id)) return;
+  eating = null;
+  const hit = player.raycast(world, 5);
+  if (!hit || !isBlock(held.id)) return;
 
   // Replaceable blocks: if hit is TALL_GRASS, SAPLING, WATER, or LAVA, place directly at hit
   const hitBlockId = world.getBlock(hit.x, hit.y, hit.z);
@@ -475,6 +491,15 @@ function tryPlaceBlock() {
   player.stats.blocksPlaced++;
   firstPersonArm.triggerPlaceSwing();
   ui.refresh();
+}
+
+function updateEating(dt) {
+  const result = advanceEating(eating, dt, player, audio, ui.mode === 'game');
+  eating = result.eating;
+  if (result.completed) {
+    firstPersonArm.triggerPlaceSwing();
+    ui.refresh();
+  }
 }
 
 // ---- explosions (creepers, TNT) ----
@@ -546,81 +571,47 @@ function updateArrows(dt) {
 const effects = {
   explosion: (pos, radius, p) => explode(pos, radius, p),
   shootArrow: (mob, p) => shootArrow(mob, p),
+  mobBurn: (mob) => {
+    const pos = new THREE.Vector3(mob.pos.x, mob.pos.y + 0.45, mob.pos.z);
+    particles.spawnEffect(pos, { color: Math.random() < 0.5 ? 0xff8a1c : 0xffd247, life: 0.35, scale: 0.7, vy: 1.5, gravity: -0.2 });
+    if (Math.random() < 0.45) particles.spawnEffect(pos, { color: 0x777777, life: 0.6, scale: 0.55, vy: 0.9, gravity: -0.15 });
+  },
   dropMobLoot: (mob) => {
     if (!mob.killed) return; // despawned or exploded — no drops
-    const drops = mob.def.drops || [];
-    for (const [id, min, extra] of drops) {
-      const count = (min || 0) + (extra ? Math.floor(Math.random() * (extra + 1)) : 0);
-      if (count > 0) {
-        spawnItem(Math.floor(mob.pos.x), Math.floor(mob.pos.y), Math.floor(mob.pos.z), id, count);
-      }
+    for (const { id, count } of rollMobDrops(mob)) {
+      spawnItem(Math.floor(mob.pos.x), Math.floor(mob.pos.y), Math.floor(mob.pos.z), id, count);
     }
   },
 };
 
 // ---- furnace handling ----
+const furnaces = new Map();
+
 function updateFurnaces(dt) {
-  // find furnaces near the player and smelt (simplified: process all loaded chunks' furnace edits)
-  // We track furnaces in a map when placed/found: x,y,z -> {input, output, fuel, burn, cook}
-  for (const [key, f] of furnaces) {
+  for (const [key, furnace] of furnaces) {
     const [x, y, z] = key.split(',').map(Number);
-    // only process if chunk loaded
-    if (!world.getChunk(Math.floor(x / CH), Math.floor(z / CH))) continue;
+    const chunk = world.getChunk(Math.floor(x / CH), Math.floor(z / CH));
+    if (!chunk?.generated || world.getBlock(x, y, z) !== FURNACE) continue;
 
-    const canSmelt = f.input && f.input.count > 0 && smeltResult(f.input.id) != null &&
-      (!f.output || (f.output.id === smeltResult(f.input.id) && f.output.count < 64));
-
-    if (f.burn > 0) {
-      f.burn -= dt;
+    const state = tickFurnace(furnace, dt);
+    furnace.soundTimer = Math.max(0, (furnace.soundTimer || 0) - dt);
+    if (state.burning && furnace.soundTimer <= 0) {
       audio.furnace();
-    } else if (canSmelt && f.fuel && f.fuel.count > 0) {
-      // consume fuel
-      const fuelTime = FUEL_TIMES[f.fuel.id] || 0;
-      if (fuelTime > 0) {
-        f.burn = fuelTime;
-        f.burnMax = fuelTime;
-        f.fuel.count--;
-        if (f.fuel.count <= 0) f.fuel = null;
-      }
-    }
-
-    if (f.burn > 0 && canSmelt) {
-      f.cook += dt;
-      if (f.cook >= 6) {
-        f.cook = 0;
-        const outId = smeltResult(f.input.id);
-        if (f.output) f.output.count++;
-        else f.output = { id: outId, count: 1, damage: 0 };
-        f.input.count--;
-        if (f.input.count <= 0) f.input = null;
-      }
-    } else {
-      f.cook = Math.max(0, f.cook - dt * 2);
+      furnace.soundTimer = 0.75;
     }
   }
+  if (ui.mode === 'furnace') refreshFurnace();
 }
 
-const furnaces = new Map();
-const FUEL_TIMES = {
-  [LOG]: 15,          // log
-  [PLANKS]: 15,       // planks
-  [280]: 5,           // stick
-  [263]: 80,          // coal (incl. charcoal)
-  [47]: 15,           // bookshelf
-  [58]: 15,           // crafting table
-};
-
-// make furnace blocks interactable: right-click opens furnace UI
 function openFurnace(x, y, z) {
   const key = `${x},${y},${z}`;
-  if (!furnaces.has(key)) furnaces.set(key, { input: null, output: null, fuel: null, burn: 0, cook: 0 });
-  const f = furnaces.get(key);
-  game.openFurnaceData = { key, f };
+  if (!furnaces.has(key)) furnaces.set(key, createFurnaceState());
+  game.openFurnaceData = { key, f: furnaces.get(key) };
   ui.setMode('furnace');
-  buildFurnaceUI(f);
+  buildFurnaceUI();
 }
 
-function buildFurnaceUI(f) {
+function buildFurnaceUI() {
   let panel = document.getElementById('furnace-screen');
   if (!panel) {
     panel = document.createElement('div');
@@ -646,86 +637,57 @@ function buildFurnaceUI(f) {
       </div>
     `;
     document.getElementById('ui').appendChild(panel);
+
+    const main = panel.querySelector('#f-inv-main');
+    const hot = panel.querySelector('#f-inv-hotbar');
+    for (let i = 9; i < 36; i++) {
+      const slot = document.createElement('div');
+      slot.className = 'slot';
+      slot.dataset.inv = i;
+      slot.addEventListener('mousedown', event => { ui.slotClick(event, 'inv', i); refreshFurnace(); });
+      slot.addEventListener('contextmenu', event => event.preventDefault());
+      main.appendChild(slot);
+    }
+    for (let i = 0; i < 9; i++) {
+      const slot = document.createElement('div');
+      slot.className = 'slot';
+      slot.dataset.inv = i;
+      slot.addEventListener('mousedown', event => { ui.slotClick(event, 'inv', i); refreshFurnace(); });
+      slot.addEventListener('contextmenu', event => event.preventDefault());
+      hot.appendChild(slot);
+    }
+
+    const onFurnaceSlot = which => event => {
+      event.preventDefault();
+      const current = game.openFurnaceData?.f;
+      if (!current) return;
+      const result = interactWithFurnaceSlot(current, which, player.cursorStack, event.button);
+      if (!result.changed) return;
+      player.cursorStack = result.cursorStack;
+      refreshFurnace();
+      ui.refresh();
+    };
+    panel.querySelector('#f-in').addEventListener('mousedown', onFurnaceSlot('input'));
+    panel.querySelector('#f-fuel').addEventListener('mousedown', onFurnaceSlot('fuel'));
+    panel.querySelector('#f-out').addEventListener('mousedown', onFurnaceSlot('output'));
+    for (const id of ['#f-in', '#f-fuel', '#f-out']) {
+      panel.querySelector(id).addEventListener('contextmenu', event => event.preventDefault());
+    }
   }
   panel.style.display = 'flex';
-  // build slots
-  const main = panel.querySelector('#f-inv-main');
-  const hot = panel.querySelector('#f-inv-hotbar');
-  main.innerHTML = ''; hot.innerHTML = '';
-  for (let i = 9; i < 36; i++) {
-    const s = document.createElement('div');
-    s.className = 'slot';
-    s.dataset.inv = i;
-    s.addEventListener('mousedown', e => { ui.slotClick(e, 'inv', i); refreshFurnace(); });
-    main.appendChild(s);
-  }
-  for (let i = 0; i < 9; i++) {
-    const s = document.createElement('div');
-    s.className = 'slot';
-    s.dataset.inv = i;
-    s.addEventListener('mousedown', e => { ui.slotClick(e, 'inv', i); refreshFurnace(); });
-    hot.appendChild(s);
-  }
-  // furnace slots click
-  const slotHandler = (which) => (e) => {
-    e.preventDefault();
-    const p = player;
-    const src = which === 'in' ? f.input : which === 'out' ? f.output : f.fuel;
-    if (which === 'out') {
-      if (f.output && !p.cursorStack) {
-        p.cursorStack = f.output;
-        f.output = null;
-      } else if (f.output && p.cursorStack && p.cursorStack.id === f.output.id) {
-        p.cursorStack.count += f.output.count;
-        f.output = null;
-      }
-    } else {
-      if (p.cursorStack && !src) {
-        const target = { ...p.cursorStack, count: 1 };
-        if (which === 'in') f.input = target;
-        else f.fuel = target;
-        if (e.button === 2) {
-          p.cursorStack.count--;
-        } else {
-          if (which === 'in') f.input = p.cursorStack;
-          else f.fuel = p.cursorStack;
-          p.cursorStack = null;
-        }
-      } else if (!p.cursorStack && src) {
-        if (e.button === 2 && src.count > 1) {
-          const half = Math.ceil(src.count / 2);
-          p.cursorStack = { ...src, count: half };
-          src.count -= half;
-        } else {
-          p.cursorStack = src;
-          if (which === 'in') f.input = null;
-          else f.fuel = null;
-        }
-      } else if (p.cursorStack && src && src.id === p.cursorStack.id && src.count < 64) {
-        src.count++;
-        p.cursorStack.count--;
-        if (p.cursorStack.count <= 0) p.cursorStack = null;
-      }
-    }
-    refreshFurnace();
-    ui.refresh();
-  };
-  panel.querySelector('#f-in').addEventListener('mousedown', slotHandler('in'));
-  panel.querySelector('#f-out').addEventListener('mousedown', slotHandler('out'));
-  panel.querySelector('#f-fuel').addEventListener('mousedown', slotHandler('fuel'));
   refreshFurnace();
 }
 
 function refreshFurnace() {
   const panel = document.getElementById('furnace-screen');
-  if (!panel || panel.style.display === 'none' || !game.openFurnaceData) return;
-  const f = game.openFurnaceData.f;
-  ui.renderSlot(panel.querySelector('#f-in'), f.input);
-  ui.renderSlot(panel.querySelector('#f-out'), f.output);
-  ui.renderSlot(panel.querySelector('#f-fuel'), f.fuel);
-  panel.querySelector('#f-flame').style.opacity = f.burn > 0 ? 1 : 0.25;
-  const fill = panel.querySelector('#f-prog-fill');
-  fill.style.width = ((f.cook / 6) * 100) + '%';
+  const furnace = game.openFurnaceData?.f;
+  if (!panel || panel.style.display === 'none' || !furnace) return;
+  ui.renderSlot(panel.querySelector('#f-in'), furnace.input);
+  ui.renderSlot(panel.querySelector('#f-out'), furnace.output);
+  ui.renderSlot(panel.querySelector('#f-fuel'), furnace.fuel);
+  panel.querySelector('#f-flame').style.opacity = furnace.burn > 0 ? 1 : 0.25;
+  panel.querySelector('#f-prog-fill').style.width = `${Math.min(100, Math.max(0, furnace.cook / 6 * 100))}%`;
+  panel.querySelectorAll('[data-inv]').forEach(slot => ui.renderSlot(slot, player.inventory[+slot.dataset.inv]));
 }
 
 // ---- input: interact ----
@@ -801,8 +763,16 @@ function frame() {
 
     if (!paused) {
       player.update(dt, world, audio);
-      if (player.leftDown && player.pointerLocked) tryBreakBlock(dt);
-      else if (!player.leftDown) { player.mining.active = false; }
+      if (player.leftDown && player.pointerLocked) {
+        if (mobs.raycastTarget(player, 3.5)) {
+          mobs.attack(player, player.heldStack?.id ?? null, audio, 3.5);
+          player.mining.active = false;
+          player.mining.progress = 0;
+        } else tryBreakBlock(dt);
+      } else if (!player.leftDown) {
+        player.mining.active = false;
+        player.mining.progress = 0;
+      }
 
       // D. Continuous block placement with repeat cooldown
       if (player.rightDown && player.pointerLocked) {
@@ -814,6 +784,7 @@ function frame() {
       } else {
         placeCooldown = 0;
       }
+      updateEating(dt);
 
       mobs.update(dt, player, sky.timeOfDay, effects, audio);
       updateItems(dt);
@@ -860,6 +831,13 @@ function frame() {
 
     const dayFactor = sky.update(dt, camera.position);
     applyDayLight(dayFactor);
+    const head = world.getBlock(Math.floor(player.pos.x), Math.floor(player.pos.y + 1.62), Math.floor(player.pos.z));
+    const underwater = head === WATER;
+    if (underwater && scene.fog) {
+      scene.fog.color.set(0x174a9b);
+      scene.fog.near = 0.1;
+      scene.fog.far = 30;
+    }
     // water texture scroll (beta animated water)
     waterTex.offset.y = (game.time * 0.012) % 1;
     waterTex.offset.x = (game.time * 0.004) % 1;
@@ -870,10 +848,9 @@ function frame() {
       hurtOverlay.style.opacity = player.hurtTime > 0 ? 0.32 : 0;
     }
 
-    // drowning overlay
-    const head = world.getBlock(Math.floor(player.pos.x), Math.floor(player.pos.y + 1.62), Math.floor(player.pos.z));
+    // Underwater tint and shortened fog accompany the oxygen bubbles in the HUD.
     const waterOverlay = document.getElementById('water-overlay');
-    if (waterOverlay) waterOverlay.style.opacity = head === WATER ? 0.45 : 0;
+    if (waterOverlay) waterOverlay.style.opacity = underwater ? 0.56 : 0;
 
     // debug
     if (ui.showDebug) {
@@ -894,6 +871,7 @@ function frame() {
     }
 
     ui.update();
+    if (ui.hintEl) ui.hintEl.style.display = ui.mode === 'game' && !player.pointerLocked ? 'block' : 'none';
     if (player.dead && ui.mode !== 'death') {
       ui.showDeath(player.stats.blocksMined * 10 + player.stats.blocksPlaced * 5);
     }

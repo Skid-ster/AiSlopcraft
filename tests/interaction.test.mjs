@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { World } from '../src/world/world.js';
 import { Player } from '../src/entities/player.js';
+import { advanceEating, EAT_DURATION } from '../src/entities/eating.js';
 import {
   AIR, STONE, DIRT, GRASS, WATER, LAVA, TALL_GRASS, SAPLING, PLANKS,
   TILES, breakTime, canHarvest, getBlock
@@ -169,6 +170,42 @@ check('lava is replaceable', isReplaceable(LAVA) === true);
 check('stone is NOT replaceable', isReplaceable(STONE) === false);
 check('dirt is NOT replaceable', isReplaceable(DIRT) === false);
 check('planks is NOT replaceable', isReplaceable(PLANKS) === false);
+
+// --- 6. Survival inventory, eating and respawn invariants ---
+player.inventory.fill(null);
+player.health = 10;
+player.inventory[0] = { id: 320, count: 2, damage: 0 }; // cooked pork restores eight health points
+player.pointerLocked = true;
+player.rightDown = true;
+let ate = 0;
+const eatAudio = { eat() { ate++; } };
+let eatingState = { id: 320, progress: 0 };
+let eatingStep = advanceEating(eatingState, 1.5, player, eatAudio, true);
+eatingState = eatingStep.eating;
+check('food does not heal or consume before the eating timer completes',
+  !eatingStep.completed && eatingState.progress < EAT_DURATION && player.health === 10 && player.inventory[0].count === 2);
+eatingStep = advanceEating(eatingState, 0.1, player, eatAudio, true);
+eatingState = eatingStep.eating;
+check('holding right-click for the full eating timer heals and consumes once',
+  eatingStep.completed && eatingState === null && player.health === 18 && player.inventory[0].count === 1 && ate === 1);
+player.rightDown = false;
+eatingStep = advanceEating({ id: 320, progress: 1.2 }, 0.5, player, eatAudio, true);
+check('releasing right-click cancels eating without consuming food',
+  !eatingStep.completed && eatingStep.eating === null && player.inventory[0].count === 1 && ate === 1);
+player.rightDown = true;
+player.health = 20;
+check('food cannot be wasted at full health', !player.eatHeld({ eat() { ate++; } }) && player.inventory[0].count === 1 && ate === 1);
+
+player.inventory.fill(null);
+player.inventory[0] = { id: PLANKS, count: 63, damage: 0 };
+check('inventory insertion fills a partial stack and preserves the remainder',
+  player.insertItem(PLANKS, 3) === 3 && player.inventory[0].count === 64 && player.inventory[1].count === 2);
+player.dead = true;
+player.health = 0;
+player.air = 0;
+player.respawn(72.001, 8.5, 8.5);
+check('respawn restores position, health, air and movement state',
+  !player.dead && player.health === 20 && player.air === 300 && player.pos.x === 8.5 && player.pos.y === 72.001 && player.vel.lengthSq() === 0);
 
 console.log(failures === 0 ? '\nALL INTERACTION TESTS PASSED' : `\n${failures} INTERACTION TEST(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);
