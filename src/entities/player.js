@@ -49,6 +49,15 @@ export class Player {
     });
     document.addEventListener('pointerlockchange', () => {
       this.pointerLocked = document.pointerLockElement === canvas;
+      if (!this.pointerLocked) {
+        this.leftDown = false;
+        this.rightDown = false;
+        this.mouseDX = 0;
+        this.mouseDY = 0;
+        this.mining.active = false;
+        this.mining.progress = 0;
+        for (const code of ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'ShiftRight']) this.keys[code] = false;
+      }
     });
     document.addEventListener('mousemove', (e) => {
       if (this.pointerLocked) {
@@ -87,14 +96,30 @@ export class Player {
 
   get heldStack() { return this.inventory[this.hotbarIndex]; }
 
-  respawn(spawnY) {
-    this.pos.set(8, spawnY, 8);
+  respawn(spawnY, spawnX = 8.5, spawnZ = 8.5) {
+    this.pos.set(spawnX, spawnY, spawnZ);
     this.vel.set(0, 0, 0);
-    this.health = 20;
+    this.yaw = 0;
+    this.pitch = 0;
+    this.health = this.maxHealth;
     this.dead = false;
     this.fallStart = null;
     this.air = 300;
+    this.breath = 0;
     this.hurtTime = 0;
+    this.inWater = false;
+    this.inLava = false;
+    this._drownAcc = 0;
+    this._lavaAcc = 0;
+    this.leftDown = false;
+    this.rightDown = false;
+    this.mouseDX = 0;
+    this.mouseDY = 0;
+    this.mining.active = false;
+    this.mining.progress = 0;
+    this.keys = {};
+    this.camera.position.set(spawnX, spawnY + EYE, spawnZ);
+    this.camera.lookAt(spawnX, spawnY + EYE, spawnZ - 1);
   }
 
   update(dt, world, audio, onPlace, onBreak) {
@@ -116,8 +141,9 @@ export class Player {
     // check fluids at feet / body
     const feet = world.getBlock(Math.floor(this.pos.x), Math.floor(this.pos.y + 0.2), Math.floor(this.pos.z));
     const mid = world.getBlock(Math.floor(this.pos.x), Math.floor(this.pos.y + 1.2), Math.floor(this.pos.z));
-    this.inWater = feet === WATER || mid === WATER;
-    this.inLava = feet === LAVA || mid === LAVA;
+    const headFluid = world.getBlock(Math.floor(this.pos.x), Math.floor(this.pos.y + EYE), Math.floor(this.pos.z));
+    this.inWater = feet === WATER || mid === WATER || headFluid === WATER;
+    this.inLava = feet === LAVA || mid === LAVA || headFluid === LAVA;
 
     // acceleration
     let speed = 4.317;
@@ -174,14 +200,12 @@ export class Player {
       this.vel.z *= maxH / hv;
     }
 
-    // integrate with collision
-    const oldY = this.pos.y;
+    // integrate vertically first so landing and jumping remain deterministic
     this.moveAxis(1, this.vel.y * dt, world);
-    const wasGround = this.onGround;
-    this.onGround = this.moveAxis(0, this.vel.x * dt, world) === 'blocked' ? this.moveAxis(0, 0, world) === 'ground' : false;
-    // simpler ground check
     this.onGround = this.checkGround(world);
+    this.moveAxis(0, this.vel.x * dt, world);
     this.moveAxis(2, this.vel.z * dt, world);
+    this.onGround = this.checkGround(world);
 
     // fall damage
     if (this.onGround) {
@@ -349,27 +373,53 @@ export class Player {
     return null;
   }
 
-  addItem(id, count = 1) {
-    // try to stack
-    for (let i = 0; i < 36; i++) {
-      const s = this.inventory[i];
-      if (s && s.id === id && s.count < 64 && id >= 256 === (id >= 256)) {
-        if (id < 256 || true) {
-          const add = Math.min(64 - s.count, count);
-          s.count += add;
-          count -= add;
-          if (count <= 0) return true;
-        }
+  insertItem(id, count = 1, damage = 0) {
+    let remaining = Math.max(0, Math.floor(count));
+    if (!remaining) return 0;
+    const maxStack = ITEMS[id]?.durability ? 1 : 64;
+
+    if (maxStack > 1) {
+      for (let i = 0; i < this.inventory.length && remaining > 0; i++) {
+        const stack = this.inventory[i];
+        if (!stack || stack.id !== id || (stack.damage || 0) !== damage || stack.count >= maxStack) continue;
+        const inserted = Math.min(maxStack - stack.count, remaining);
+        stack.count += inserted;
+        remaining -= inserted;
       }
     }
-    for (let i = 0; i < 36; i++) {
-      if (!this.inventory[i]) {
-        this.inventory[i] = { id, count: Math.min(64, count), damage: 0 };
-        count -= Math.min(64, count);
-        if (count <= 0) return true;
+
+    for (let i = 0; i < this.inventory.length && remaining > 0; i++) {
+      if (this.inventory[i]) continue;
+      const inserted = Math.min(maxStack, remaining);
+      this.inventory[i] = { id, count: inserted, damage };
+      remaining -= inserted;
+    }
+    return Math.floor(count) - remaining;
+  }
+
+  addItem(id, count = 1, damage = 0) {
+    const wanted = Math.max(0, Math.floor(count));
+    if (!wanted) return true;
+    const maxStack = ITEMS[id]?.durability ? 1 : 64;
+    let capacity = 0;
+    if (maxStack > 1) {
+      for (const stack of this.inventory) {
+        if (stack && stack.id === id && (stack.damage || 0) === damage) capacity += Math.max(0, maxStack - stack.count);
       }
     }
-    return count <= 0;
+    capacity += this.inventory.filter(stack => !stack).length * maxStack;
+    if (capacity < wanted) return false;
+    return this.insertItem(id, wanted, damage) === wanted;
+  }
+
+  eatHeld(audio) {
+    const stack = this.heldStack;
+    const food = stack && ITEMS[stack.id]?.food;
+    if (!food || this.health >= this.maxHealth || this.dead) return false;
+    this.health = Math.min(this.maxHealth, this.health + food);
+    this.consumeHeld();
+    if (audio) audio.eat();
+    return true;
   }
 
   consumeHeld() {

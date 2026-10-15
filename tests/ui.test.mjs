@@ -19,8 +19,6 @@ global.document = dom.window.document;
 // NOTE: do NOT alias global.performance to dom.window.performance — it makes
 // jsdom's Performance.now wrapper recurse (RangeError) once ui.update() runs.
 // Node's own global `performance` is what ui.js's performance.now() resolves to.
-global.clearTimeout = dom.window.clearTimeout.bind(dom.window);
-global.setTimeout = dom.window.setTimeout.bind(dom.window);
 
 // jsdom has no 2d canvas context without the native `canvas` package; ui.js's
 // drawIcon only needs a permissive no-op 2d context.
@@ -99,6 +97,23 @@ try {
   check('mode is game', ui.mode === 'game');
   check('HUD visible', document.getElementById('hud').style.display === 'block');
   check('game unpaused (uiPause false)', global.window.uiPause === false);
+
+  // ---------- hotbar tooltip ----------
+  player.inventory[1] = { id: PLANKS, count: 2, damage: 0 };
+  player.hotbarIndex = 1;
+  ui.refresh();
+  check('switching hotbar slots shows the selected item name',
+    document.getElementById('held-name').textContent === 'Oak Planks' && document.getElementById('held-name').style.opacity === '1');
+  player.inventory[2] = { id: PLANKS, count: 1, damage: 0 };
+  player.hotbarIndex = 2;
+  ui.refresh();
+  check('tooltip refreshes when changing to a different slot with the same item',
+    document.getElementById('held-name').style.opacity === '1');
+  player.hotbarIndex = 0;
+  player.inventory[1] = null;
+  player.inventory[2] = null;
+  ui.refresh();
+  check('empty hotbar slots clear stale item names', document.getElementById('held-name').textContent === '');
 
   // ---------- inventory + crafting ----------
   player.inventory[9] = { id: PLANKS, count: 3, damage: 0 };

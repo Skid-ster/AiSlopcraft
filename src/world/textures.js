@@ -1041,6 +1041,25 @@ export function buildItemIcons() {
       rect(ox, oy, 5, 5, 2, 2, 202, 130, 78);
     });
   });
+  const armorColors = [[188, 188, 188], [88, 220, 214], [242, 208, 64]];
+  armorColors.forEach(([r, g, b], material) => {
+    armor.forEach((shape, piece) => {
+      draw(78 + material * 4 + piece, (ox, oy) => {
+        shape.forEach(([x, y, w, h]) => rect(ox, oy, x, y, w, h, r, g, b));
+        rect(ox, oy, 5, 5, 2, 2, Math.min(255, r + 35), Math.min(255, g + 35), Math.min(255, b + 35));
+      });
+    });
+  });
+  // rotten flesh
+  draw(90, (ox, oy) => {
+    rect(ox, oy, 3, 5, 10, 7, 142, 48, 40);
+    rect(ox, oy, 4, 4, 8, 1, 184, 68, 48);
+    rect(ox, oy, 5, 7, 5, 3, 172, 82, 54);
+    rect(ox, oy, 7, 9, 2, 1, 104, 36, 36);
+  });
+  draw(91, (ox, oy, rnd) => {
+    for (let i = 0; i < 12; i++) rect(ox, oy, 4 + (rnd() * 8 | 0), 4 + (rnd() * 8 | 0), 2, 2, 226, 214, 78);
+  });
   // mushroom stew icon already; reeds/sugar cane item
   draw(77, (ox, oy) => {
     for (let x = 4; x < 12; x++) for (let y = 1; y < 15; y++) {
