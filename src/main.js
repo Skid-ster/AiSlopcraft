@@ -43,7 +43,8 @@ renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
 const atlasCanvas = buildAtlas();
 const atlasTex = new THREE.CanvasTexture(atlasCanvas);
 atlasTex.magFilter = THREE.NearestFilter;
-atlasTex.minFilter = THREE.NearestMipMapNearestFilter;
+atlasTex.minFilter = THREE.NearestFilter;
+atlasTex.generateMipmaps = false;
 atlasTex.colorSpace = THREE.NoColorSpace;
 
 const waterCanvas = document.createElement('canvas');
@@ -192,6 +193,9 @@ crackOverlayMesh.visible = false;
 scene.add(crackOverlayMesh);
 
 let currentCrackTile = -1;
+// Preserve the original BoxGeometry UVs (0/1) so repeated stage changes remap
+// from a stable source instead of from already-remapped coordinates.
+const crackBaseUVs = crackGeometry.getAttribute('uv').array.slice();
 function updateCrackOverlayUV(stage) {
   const tile = TILES.destroy0 + stage;
   if (tile === currentCrackTile) return;
@@ -199,15 +203,18 @@ function updateCrackOverlayUV(stage) {
 
   const tx = tile % 16, ty = Math.floor(tile / 16);
   const s = 1 / 16;
-  const u0 = tx * s, v0 = 1 - (ty + 1) * s;
-  const u1 = (tx + 1) * s, v1 = 1 - ty * s;
+  const e = 0.0002;
+  const u0 = tx * s + e, v0 = 1 - (ty + 1) * s + e;
+  const u1 = (tx + 1) * s - e, v1 = 1 - ty * s - e;
 
   const uvAttr = crackGeometry.getAttribute('uv');
   for (let i = 0; i < uvAttr.count; i++) {
+    const bx = crackBaseUVs[i * 2];
+    const by = crackBaseUVs[i * 2 + 1];
     uvAttr.setXY(
       i,
-      u0 + (uvAttr.getX(i) < 0.5 ? 0 : 1) * (u1 - u0),
-      v0 + (uvAttr.getY(i) < 0.5 ? 0 : 1) * (v1 - v0)
+      u0 + (bx < 0.5 ? 0 : 1) * (u1 - u0),
+      v0 + (by < 0.5 ? 0 : 1) * (v1 - v0)
     );
   }
   uvAttr.needsUpdate = true;

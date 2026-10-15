@@ -190,10 +190,9 @@ html, body {
   bottom: 74px;
   left: 50%;
   transform: translateX(-50%);
-  width: 496px;
   display: flex;
-  gap: 1px;
-  margin-left: -5px;
+  gap: 2px;
+  justify-content: center;
 }
 .heart {
   font-size: 22px;
@@ -209,9 +208,9 @@ html, body {
   bottom: 100px;
   left: 50%;
   transform: translateX(-50%);
-  width: 496px;
   display: flex;
-  gap: 1px;
+  gap: 2px;
+  justify-content: center;
 }
 .bubble { font-size: 18px; color: #c8e8ff; text-shadow: 1px 1px 0 #234; }
 .bubble.empty { opacity: 0.3; }
@@ -406,5 +405,8 @@ html, body {
 @media (max-width: 720px) {
   .title-main { font-size: 42px; }
   .btn { min-width: 260px; }
-  .hearts, .water-bar { width: 300px; }
+  .hotbar-slot { width: 42px; height: 42px; }
+  .slot canvas { width: 28px; height: 28px; }
+  .heart { font-size: 18px; }
+  .bubble { font-size: 15px; }
 }

@@ -45,11 +45,14 @@ export class Sky {
 
     // clouds — flat white plane at y=108 with a procedural texture
     const cloudTex = this.makeCloudTexture();
+    cloudTex.magFilter = THREE.NearestFilter;
+    cloudTex.minFilter = THREE.NearestFilter;
+    cloudTex.generateMipmaps = false;
     cloudTex.wrapS = cloudTex.wrapT = THREE.RepeatWrapping;
-    cloudTex.repeat.set(12, 12);
+    cloudTex.repeat.set(16, 16);
     this.cloudMat = new THREE.MeshBasicMaterial({
-      map: cloudTex, transparent: true, opacity: 0.85, depthWrite: false,
-      side: THREE.DoubleSide, fog: true, alphaTest: 0.1
+      map: cloudTex, transparent: true, opacity: 0.9, depthWrite: false,
+      side: THREE.DoubleSide, fog: false, alphaTest: 0.5
     });
     this.clouds = new THREE.Mesh(new THREE.PlaneGeometry(2048, 2048), this.cloudMat);
     this.clouds.rotation.x = -Math.PI / 2;
@@ -64,13 +67,17 @@ export class Sky {
     const c = document.createElement('canvas');
     c.width = 32; c.height = 32;
     const ctx = c.getContext('2d');
-    const g = ctx.createRadialGradient(16, 16, 2, 16, 16, 16);
-    g.addColorStop(0, 'rgba(255,250,220,1)');
-    g.addColorStop(0.55, 'rgba(255,230,140,0.95)');
-    g.addColorStop(1, 'rgba(255,220,120,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, 32, 32);
+    ctx.clearRect(0, 0, 32, 32);
+    for (const [r, color] of [[12, 'rgba(255,210,90,0.6)'], [8, 'rgba(255,236,150,0.95)'], [4, 'rgba(255,252,220,1)']]) {
+      ctx.fillStyle = color;
+      ctx.fillRect(16 - r, 16 - r, r * 2, r * 2);
+    }
+    ctx.fillStyle = 'rgba(255,230,120,0.8)';
+    for (const [x, y] of [[16, 0], [16, 28], [0, 16], [28, 16]]) ctx.fillRect(x, y, 4, 4);
     const t = new THREE.CanvasTexture(c);
+    t.magFilter = THREE.NearestFilter;
+    t.minFilter = THREE.NearestFilter;
+    t.generateMipmaps = false;
     return t;
   }
 
@@ -84,7 +91,11 @@ export class Sky {
     ctx.fillRect(9, 10, 5, 5);
     ctx.fillRect(17, 15, 6, 5);
     ctx.fillRect(11, 20, 4, 3);
-    return new THREE.CanvasTexture(c);
+    const t = new THREE.CanvasTexture(c);
+    t.magFilter = THREE.NearestFilter;
+    t.minFilter = THREE.NearestFilter;
+    t.generateMipmaps = false;
+    return t;
   }
 
   makeCloudTexture() {
@@ -92,43 +103,44 @@ export class Sky {
     c.width = 128; c.height = 128;
     const ctx = c.getContext('2d');
     ctx.clearRect(0, 0, 128, 128);
-    // blocky cloud noise
-    const cell = 8;
+    // small, coherent pixel clouds: 4px cells, clustered
+    const cell = 4;
+    const n = 128 / cell;
     const rand = (() => {
-      let s = 12345;
+      let s = 98765;
       return () => {
         s = (s * 1103515245 + 12345) & 0x7fffffff;
         return s / 0x7fffffff;
       };
     })();
     const grid = [];
-    for (let y = 0; y < 128 / cell; y++) {
+    for (let y = 0; y < n; y++) {
       grid[y] = [];
-      for (let x = 0; x < 128 / cell; x++) {
-        grid[y][x] = rand() > 0.62;
-      }
+      for (let x = 0; x < n; x++) grid[y][x] = rand() > 0.72;
     }
-    // smooth
-    for (let pass = 0; pass < 2; pass++) {
-      const g2 = grid.map(r => r.slice());
-      for (let y = 0; y < grid.length; y++) {
-        for (let x = 0; x < grid.length; x++) {
-          let n = 0;
-          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-            n += grid[(y + dy + grid.length) % grid.length][(x + dx + grid.length) % grid.length] ? 1 : 0;
-          }
-          g2[y][x] = n >= 5;
+    // one smoothing pass: keep cells with enough neighbors (coherent clusters)
+    const g2 = grid.map(r => r.slice());
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        let count = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          count += grid[(y + dy + n) % n][(x + dx + n) % n] ? 1 : 0;
         }
+        g2[y][x] = count >= 5;
       }
-      for (let y = 0; y < grid.length; y++) for (let x = 0; x < grid.length; x++) grid[y][x] = g2[y][x];
     }
-    ctx.fillStyle = 'rgba(255,255,255,0.92)';
-    for (let y = 0; y < grid.length; y++) {
-      for (let x = 0; x < grid.length; x++) {
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) grid[y][x] = g2[y][x];
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
         if (grid[y][x]) ctx.fillRect(x * cell, y * cell, cell, cell);
       }
     }
-    return new THREE.CanvasTexture(c);
+    const t = new THREE.CanvasTexture(c);
+    t.magFilter = THREE.NearestFilter;
+    t.minFilter = THREE.NearestFilter;
+    t.generateMipmaps = false;
+    return t;
   }
 
   // time: 0 = dawn, 0.25 = noon, 0.5 = dusk, 0.75 = midnight

@@ -52,6 +52,8 @@ function buildMobModel(type, texture) {
       add('body', 1.0, 0.8, 1.4, 0, 0.55, 0, 0xffffff, textured);
       add('head', 0.72, 0.72, 0.72, 0, 0.76, -0.78, 0xffffff, textured);
       add('snout', 0.38, 0.28, 0.24, 0, 0.61, -1.23, 0xd88b91);
+      add('eye1', 0.1, 0.1, 0.03, -0.18, 0.82, -1.14, 0x1a1a1a);
+      add('eye2', 0.1, 0.1, 0.03, 0.18, 0.82, -1.14, 0x1a1a1a);
       add('leg1', 0.25, 0.42, 0.25, -0.3, 0.2, -0.48, 0xc97880);
       add('leg2', 0.25, 0.42, 0.25, 0.3, 0.2, -0.48, 0xc97880);
       add('leg3', 0.25, 0.42, 0.25, -0.3, 0.2, 0.48, 0xc97880);
@@ -63,6 +65,8 @@ function buildMobModel(type, texture) {
       const face = type === 'cow' ? 0x8a6242 : 0xd2b48e;
       add('body', 0.95, 0.8, 1.35, 0, 0.65, 0, coat);
       add('head', 0.62, 0.62, 0.62, 0, 0.86, -0.78, face);
+      add('eye1', 0.09, 0.09, 0.03, -0.16, 0.92, -1.1, 0x1a1a1a);
+      add('eye2', 0.09, 0.09, 0.03, 0.16, 0.92, -1.1, 0x1a1a1a);
       for (const [name, x, z] of [['leg1', -0.28, -0.43], ['leg2', 0.28, -0.43], ['leg3', -0.28, 0.43], ['leg4', 0.28, 0.43]]) {
         add(name, 0.24, 0.58, 0.24, x, 0.29, z, coat);
       }
@@ -75,6 +79,8 @@ function buildMobModel(type, texture) {
     case 'chicken':
       add('body', 0.48, 0.5, 0.62, 0, 0.34, 0, 0xe8e8e8);
       add('head', 0.34, 0.38, 0.34, 0, 0.69, -0.38, 0xf0f0f0);
+      add('eye1', 0.07, 0.07, 0.03, -0.1, 0.73, -0.55, 0x1a1a1a);
+      add('eye2', 0.07, 0.07, 0.03, 0.1, 0.73, -0.55, 0x1a1a1a);
       add('beak', 0.22, 0.12, 0.2, 0, 0.61, -0.62, 0xe8902a);
       add('comb', 0.16, 0.12, 0.12, 0, 0.92, -0.4, 0xc93432);
       add('leg1', 0.1, 0.26, 0.1, -0.12, 0.13, 0, 0xe8902a);
@@ -105,6 +111,8 @@ function buildMobModel(type, texture) {
       add('arm1', 0.22, 0.72, 0.22, -0.4, 1.06, 0, skin);
       add('arm2', 0.22, 0.72, 0.22, 0.4, 1.06, 0, skin);
       add('head', 0.48, 0.48, 0.48, 0, 1.68, 0, skin);
+      add('eye1', 0.1, 0.1, 0.03, -0.12, 1.72, -0.25, 0x1a1a1a);
+      add('eye2', 0.1, 0.1, 0.03, 0.12, 1.72, -0.25, 0x1a1a1a);
       if (!zombie) add('bow', 0.06, 0.8, 0.06, 0.57, 1.05, -0.24, 0x6b4c2a);
       break;
     }
@@ -460,7 +468,7 @@ export class Mob {
     // The models face local -Z; movement heading points along +Z at yaw zero.
     this.group.rotation.y = this.yaw + Math.PI;
     this.animate(dt);
-    this.updateColor();
+    this.updateColor(timeOfDay);
   }
 
   animate(dt) {
@@ -478,9 +486,12 @@ export class Mob {
     }
   }
 
-  updateColor() {
+  updateColor(timeOfDay = 0.5) {
     const flashing = this.type === 'creeper' && this.fuse > 0 && Math.floor(this.fuse * 10) % 2 === 0;
     let tint = this.hurtTime > 0 ? 0xff5555 : flashing ? 0xffffff : null;
+    // Simple day/night shading for mobs (no scene lights): darken at night.
+    const daylight = timeOfDay > 0.22 && timeOfDay < 0.78;
+    const brightness = daylight ? 1 : 0.5;
     this.group.traverse(object => {
       if (!object.material) return;
       const materials = Array.isArray(object.material) ? object.material : [object.material];
@@ -488,6 +499,7 @@ export class Mob {
         if (!material.color) continue;
         if (material.userData.baseColor === undefined) material.userData.baseColor = material.color.getHex();
         material.color.setHex(tint ?? material.userData.baseColor);
+        if (!tint) material.color.multiplyScalar(brightness);
       }
     });
   }
