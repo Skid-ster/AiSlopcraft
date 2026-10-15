@@ -6,6 +6,134 @@ import { matchRecipe, smeltResult } from './recipes.js';
 const SLOT = 36;
 const SLOT_GAP = 2;
 
+// ---------------------------------------------------------------------------
+// Pixel art HUD sprites (9x9, like the beta GUI icons).
+// ---------------------------------------------------------------------------
+const HEART_MASK = [
+  '.##...##.',
+  '#########',
+  '#########',
+  '#########',
+  '.#######.',
+  '..#####..',
+  '...###...',
+  '....#....',
+  '.........',
+];
+
+const BUBBLE_MASK = [
+  '..#####..',
+  '.##...##.',
+  '##..#..##',
+  '##.....##',
+  '##.....##',
+  '##.....##',
+  '.##...##.',
+  '..#####..',
+  '.........',
+];
+
+const HEART_RED = '#d8342c';
+const HEART_DARK = '#2a1414';
+const BUBBLE_LIGHT = '#bfe6ff';
+const BUBBLE_DARK = '#2a3a4a';
+
+function drawMask(canvas, mask, colorAt) {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const w = mask[0].length;
+  const h = mask.length;
+  canvas.width = w;
+  canvas.height = h;
+  ctx.clearRect(0, 0, w, h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (mask[y][x] !== '#') continue;
+      const color = colorAt(x, y);
+      if (!color) continue;
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y, 1, 1);
+    }
+  }
+}
+
+function drawHeart(canvas, type) {
+  drawMask(canvas, HEART_MASK, (x) => {
+    if (type === 'empty') return HEART_DARK;
+    if (type === 'half' && x >= 5) return HEART_DARK;
+    return HEART_RED;
+  });
+}
+
+function drawBubble(canvas, type) {
+  drawMask(canvas, BUBBLE_MASK, (x, y) => {
+    if (type === 'empty') return BUBBLE_DARK;
+    if (type === 'half' && x >= 5) return BUBBLE_DARK;
+    return (x === 3 && y === 2) ? '#ffffff' : BUBBLE_LIGHT;
+  });
+}
+
+// Beta style flame used by the furnace screen.
+const FLAME_MASK = [
+  '....#....',
+  '...###...',
+  '...###...',
+  '..#####..',
+  '..#####..',
+  '.#######.',
+  '.#######.',
+  '#########',
+  '.........',
+];
+
+export function drawFlame(canvas, burning) {
+  drawMask(canvas, FLAME_MASK, (x, y) => {
+    if (y >= 7) return burning ? '#e8a33d' : '#6b4a22';
+    if (y >= 5) return burning ? '#f0c04a' : '#8a5f2a';
+    return burning ? '#fff2a0' : '#a87a3a';
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Item / block icons.  Blocks are drawn as small isometric cubes so the
+// hotbar reads like the beta inventory instead of a flat square.
+// ---------------------------------------------------------------------------
+export function drawBlockIcon(ctx, atlas, id) {
+  if (!ctx || !atlas) return;
+  const bd = getBlock(id);
+  const tiles = bd.tiles || [TILES.stone, TILES.stone, TILES.stone, TILES.stone, TILES.stone, TILES.stone];
+  if (bd.cross || bd.render === 'cross' || bd.render === 'torch' || bd.render === 'flat') {
+    // flat items (grass, flowers, torches) show their side texture
+    const tile = tiles[2];
+    ctx.drawImage(atlas, (tile % 16) * 16, Math.floor(tile / 16) * 16, 16, 16, 8, 8, 16, 16);
+    return;
+  }
+  const top = tiles[0], left = tiles[2], right = tiles[3] ?? tiles[2];
+  const face = (tile, m) => {
+    ctx.save();
+    ctx.setTransform(m[0], m[1], m[2], m[3], m[4], m[5]);
+    if (m[6] && m[6] !== 1) ctx.filter = `brightness(${m[6]})`;
+    ctx.drawImage(atlas, (tile % 16) * 16, Math.floor(tile / 16) * 16, 16, 16, 0, 0, 1, 1);
+    ctx.restore();
+  };
+  // top face: (0,8) -> (16,0) -> (32,8) -> (16,16)
+  face(top, [16, -8, 16, 8, 0, 8, 1.08]);
+  // left face: (0,8) -> (16,16) -> (16,32) -> (0,24)
+  face(left, [16, 8, 0, 16, 0, 8, 0.7]);
+  // right face: (16,16) -> (32,8) -> (32,24) -> (16,32)
+  face(right, [16, -8, 0, 16, 16, 16, 0.85]);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.filter = 'none';
+}
+
+export function drawItemIcon(ctx, itemIcons, id) {
+  if (!ctx || !itemIcons) return;
+  const idx = ITEM_ICON_INDEX[id] ?? 0;
+  ctx.drawImage(itemIcons, (idx % 16) * 16, Math.floor(idx / 16) * 16, 16, 16, 0, 0, 32, 32);
+}
+
+export { drawHeart, drawBubble };
+
 function stackLimit(stack) {
   return ITEMS[stack.id]?.durability ? 1 : 64;
 }
@@ -110,12 +238,19 @@ export class UI {
     div.className = 'hud';
     div.id = 'hud';
     div.style.display = 'none';
+    // The bottom HUD lives in one container so the hotbar, the hearts, the
+    // air bubbles and the held item name always share the same centre line
+    // and scale together on small screens.
     div.innerHTML = `
       <div class="crosshair">+</div>
-      <div class="hotbar" id="hotbar"></div>
-      <div class="hearts" id="hearts"></div>
-      <div class="water-bar" id="water-bar" style="display:none"></div>
-      <div class="held-name" id="held-name"></div>
+      <div class="hud-bottom">
+        <div class="held-name" id="held-name"></div>
+        <div class="status-row">
+          <div class="hearts" id="hearts"></div>
+          <div class="water-bar" id="water-bar" style="display:none"></div>
+        </div>
+        <div class="hotbar" id="hotbar"></div>
+      </div>
       <div class="hint" id="hint">Click to play &nbsp;|&nbsp; WASD move · Space jump · E inventory · F3 debug · Esc pause</div>
     `;
     this.root.appendChild(div);
@@ -441,14 +576,18 @@ export class UI {
     const slots = this.hotbarEl.children;
     for (let i = 0; i < 9; i++) {
       this.renderSlot(slots[i], player.inventory[i], i === player.hotbarIndex);
-      slots[i].className = 'slot hotbar-slot' + (i === player.hotbarIndex ? ' selected' : '');
+      slots[i].className = 'slot hotbar-slot'
+        + (player.inventory[i] ? ' has-item' : '')
+        + (i === player.hotbarIndex ? ' selected' : '');
     }
     // hearts
     this.renderHearts();
-    // Classic selected-slot tooltip: refresh even when two slots hold the same item.
-    if (this._lastHotbarIndex !== player.hotbarIndex) {
-      this._lastHotbarIndex = player.hotbarIndex;
-      const held = player.inventory[player.hotbarIndex];
+    // Classic selected-slot tooltip: refresh even when two slots hold the
+    // same item, and clear as soon as the selected slot is empty.
+    const held = player.inventory[player.hotbarIndex];
+    const heldKey = `${player.hotbarIndex}:${held ? held.id : ''}`;
+    if (this._lastHotbarKey !== heldKey) {
+      this._lastHotbarKey = heldKey;
       clearTimeout(this._nameTimer);
       if (held) {
         this.heldNameEl.textContent = itemName(held.id);
@@ -505,29 +644,46 @@ export class UI {
 
   renderHearts() {
     const hp = this.game.player.health;
-    let html = '';
+    const air = this.game.player.air;
+    // only rebuild the sprites when the values actually change — refresh()
+    // runs every frame and the canvases are expensive to recreate
+    const key = `${hp}:${air}`;
+    if (this._heartsKey === key) return;
+    this._heartsKey = key;
+    this.heartsEl.innerHTML = '';
     for (let i = 0; i < 10; i++) {
       const v = hp - i * 2;
-      if (v >= 2) html += '<span class="heart full">♥</span>';
-      else if (v >= 1) html += '<span class="heart half">♥</span>';
-      else html += '<span class="heart empty">♡</span>';
+      const type = v >= 2 ? 'full' : v >= 1 ? 'half' : 'empty';
+      const c = document.createElement('canvas');
+      c.className = 'heart ' + type;
+      drawHeart(c, type);
+      this.heartsEl.appendChild(c);
     }
-    // armor row (beta had armor icons only when wearing)
-    this.heartsEl.innerHTML = html;
     // water bar
     const wb = document.getElementById('water-bar');
-    if (this.game.player.air < 300) {
-      wb.style.display = 'block';
-      let w = '';
+    if (air < 300) {
+      wb.style.display = 'flex';
+      wb.innerHTML = '';
       for (let i = 0; i < 10; i++) {
-        const v = this.game.player.air / 30 - i;
-        w += v >= 1 ? '<span class="bubble full">●</span>' : v > 0 ? '<span class="bubble half">●</span>' : '<span class="bubble empty">○</span>';
+        const v = air / 30 - i;
+        const type = v >= 1 ? 'full' : v > 0 ? 'half' : 'empty';
+        const c = document.createElement('canvas');
+        c.className = 'bubble ' + type;
+        drawBubble(c, type);
+        wb.appendChild(c);
       }
-      wb.innerHTML = w;
     } else wb.style.display = 'none';
   }
 
   renderSlot(el, stack, selected) {
+    if (!el) return;
+    const id = stack ? stack.id : 0;
+    const count = stack ? stack.count : 0;
+    const damage = stack ? (stack.damage || 0) : 0;
+    // skip the DOM churn when the slot did not change
+    const key = `${id}:${count}:${damage}`;
+    if (el._slotKey === key) return;
+    el._slotKey = key;
     if (!stack) {
       el.innerHTML = '';
       el.classList.remove('has-item');
@@ -550,37 +706,13 @@ export class UI {
     if (canvas._drawn === id) return;
     canvas._drawn = id;
     const ctx = canvas.getContext('2d');
+    if (!ctx) return;
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, 32, 32);
-    const atlas = this.game.atlasCanvas;
-    const itemIcons = this.game.itemIconsCanvas;
     if (isBlock(id)) {
-      const bd = getBlock(id);
-      const tiles = bd.tiles || [TILES.stone, TILES.stone, TILES.stone, TILES.stone, TILES.stone, TILES.stone];
-      const drawTile = (tile, dx, dy, flip) => {
-        const sx = (tile % 16) * 16, sy = Math.floor(tile / 16) * 16;
-        ctx.drawImage(atlas, sx, sy, 16, 16, dx, dy, 16, 16);
-      };
-      // isometric-ish: top + front + side
-      const top = tiles[0], side = tiles[2], front = tiles[3] ?? tiles[2];
-      if (bd.cross || bd.render === 'cross' || bd.render === 'torch' || bd.render === 'flat') {
-        drawTile(tiles[2], 8, 8);
-        ctx.drawImage(canvas, 8, 8, 16, 16, 8, 8, 16, 16);
-      } else {
-        // simple 2.5D: draw side then top strip
-        drawTile(side, 4, 10);
-        drawTile(front, 4, 10);
-        // top face as a lighter parallelogram-ish block
-        ctx.save();
-        ctx.globalAlpha = 1;
-        drawTile(top, 8, 2);
-        ctx.restore();
-      }
+      drawBlockIcon(ctx, this.game.atlasCanvas, id);
     } else {
-      // item icons live in rows: known mapping
-      const idx = ITEM_ICON_INDEX[id] ?? 0;
-      const sx = (idx % 16) * 16, sy = Math.floor(idx / 16) * 16;
-      ctx.drawImage(itemIcons, sx, sy, 16, 16, 0, 0, 32, 32);
+      drawItemIcon(ctx, this.game.itemIconsCanvas, id);
     }
   }
 

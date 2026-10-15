@@ -2,7 +2,8 @@
 import * as THREE from 'three';
 import { getBlock, AIR, WATER, LAVA, LEAVES, LOG, CACTUS, ICE, ITEMS } from '../world/blocks.js';
 import { WORLD_H } from '../world/chunk.js';
-import { buildMobTexture } from '../world/textures.js';
+import { buildMobTexture, SKIN_CELLS, SKIN_W, SKIN_H, SKIN_CELL } from '../world/textures.js';
+import { daylightFactor } from '../sky.js';
 
 export const MOB_DEFS = {
   pig: { w: 0.9, h: 0.9, hp: 10, speed: 1.4, hostile: false, drops: [[319, 1, 2]] },
@@ -24,22 +25,83 @@ export function rollMobDrops(mobOrType, random = Math.random) {
   })).filter(drop => drop.count > 0);
 }
 
-const boxGeoCache = new Map();
-function boxGeo(w, h, d) {
-  const key = `${w},${h},${d}`;
-  if (!boxGeoCache.has(key)) boxGeoCache.set(key, new THREE.BoxGeometry(w, h, d));
-  return boxGeoCache.get(key);
+// --- model construction -----------------------------------------------------
+// Every part of a mob is a box that samples the 64x32 skin sheet of its mob.
+// The box faces are mapped onto the sheet cell-by-cell (front, back, left,
+// right, top, bottom) so markings such as eyes or a creeper face always end
+// up on the correct side, and the models are sized against the hitboxes in
+// MOB_DEFS so what you see matches what you can hit.
+const BOX_FACES = ['px', 'nx', 'py', 'ny', 'pz', 'nz'];
+// Classic per-face brightness, identical to the terrain mesher.
+const FACE_SHADE = { px: 0.6, nx: 0.6, py: 1.0, ny: 0.5, pz: 0.8, nz: 0.8 };
+
+const geoCache = new WeakMap();
+function skinBox(texture, w, h, d, cells, pivotTop = false) {
+  // Geometries are cached per skin sheet: two mobs that happen to use the
+  // same part size still have to sample their own texture.
+  let cache = geoCache.get(texture);
+  if (!cache) { cache = new Map(); geoCache.set(texture, cache); }
+  const key = `${w},${h},${d},${cells.key},${pivotTop ? 'p' : ''}`;
+  const cached = cache.get(key);
+  if (cached) return cached;
+  const geo = new THREE.BoxGeometry(w, h, d);
+  const uv = geo.getAttribute('uv');
+  const colors = [];
+  for (let f = 0; f < 6; f++) {
+    const face = BOX_FACES[f];
+    const rect = cells[face] || cells.fallback;
+    if (!rect) continue;
+    const u0 = rect[0] / SKIN_W;
+    const u1 = (rect[0] + SKIN_CELL) / SKIN_W;
+    const v0 = 1 - (rect[1] + SKIN_CELL) / SKIN_H;
+    const v1 = 1 - rect[1] / SKIN_H;
+    const shade = FACE_SHADE[face];
+    for (let j = 0; j < 4; j++) {
+      const i = f * 4 + j;
+      const bu = j % 2;
+      const bv = 1 - Math.floor(j / 2);
+      uv.setXY(i, u0 + bu * (u1 - u0), v0 + bv * (v1 - v0));
+      colors.push(shade, shade, shade, 1);
+    }
+  }
+  uv.needsUpdate = true;
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 4));
+  if (pivotTop) geo.translate(0, -h / 2, 0);
+  geo.computeBoundingBox();
+  cache.set(key, geo);
+  return geo;
 }
+
+// cell maps: each entry points at a region of the skin sheet
+const C = SKIN_CELLS;
+// The models look towards local -Z, so the "-Z" side of every box carries
+// the front of the skin and the "+Z" side carries its back.
+// Every part also carries a `fallback` cell: faces without their own cell
+// (a leg has no separate top texture, for example) reuse it instead of
+// accidentally sampling the whole sheet.
+const CELLS = {
+  head: { key: 'head', px: C.head.right, nx: C.head.left, py: C.head.top, ny: C.head.bottom, pz: C.head.back, nz: C.head.front, fallback: C.head.front },
+  body: { key: 'body', px: C.body.right, nx: C.body.left, py: C.body.top, ny: C.body.bottom, pz: C.body.back, nz: C.body.front, fallback: C.body.front },
+  leg: { key: 'leg', px: C.leg.right, nx: C.leg.left, py: C.leg.left, ny: C.leg.front, pz: C.leg.back, nz: C.leg.front, fallback: C.leg.front },
+  arm: { key: 'arm', px: C.arm.right, nx: C.arm.left, py: C.arm.left, ny: C.arm.front, pz: C.arm.back, nz: C.arm.front, fallback: C.arm.front },
+  snout: { key: 'snout', px: C.extra.right, nx: C.extra.left, py: C.extra.front, ny: C.extra.front, pz: C.extra.back, nz: C.extra.front, fallback: C.extra.front },
+  horn: { key: 'horn', px: C.extra2.right, nx: C.extra2.left, py: C.extra2.front, ny: C.extra2.front, pz: C.extra2.back, nz: C.extra2.front, fallback: C.extra2.front },
+  comb: { key: 'comb', px: C.extra.right, nx: C.extra.left, py: C.extra.front, ny: C.extra.front, pz: C.extra.back, nz: C.extra.front, fallback: C.extra.front },
+  beak: { key: 'beak', px: C.extra2.right, nx: C.extra2.left, py: C.extra2.front, ny: C.extra2.front, pz: C.extra2.back, nz: C.extra2.front, fallback: C.extra2.front },
+};
 
 function buildMobModel(type, texture) {
   const group = new THREE.Group();
   const parts = { legs: [], arms: [] };
-  const textured = new THREE.MeshBasicMaterial({ map: texture });
-  const add = (name, w, h, d, x, y, z, color = 0xffffff, material = null) => {
-    const mat = material || new THREE.MeshBasicMaterial({ color });
-    const mesh = new THREE.Mesh(boxGeo(w, h, d), mat);
+  const textured = new THREE.MeshBasicMaterial({ map: texture, vertexColors: true });
+
+  const add = (name, w, h, d, x, y, z, cells, opts = {}) => {
+    const mesh = new THREE.Mesh(skinBox(texture, w, h, d, cells, !!opts.pivotTop), textured);
     mesh.position.set(x, y, z);
     mesh.name = name;
+    if (opts.rot) mesh.rotation.set(opts.rot[0] || 0, opts.rot[1] || 0, opts.rot[2] || 0);
+    mesh.userData.baseRotX = mesh.rotation.x;
+    mesh.userData.baseRotZ = mesh.rotation.z;
     group.add(mesh);
     if (name.startsWith('leg')) parts.legs.push(mesh);
     if (name.startsWith('arm')) parts.arms.push(mesh);
@@ -48,85 +110,83 @@ function buildMobModel(type, texture) {
   };
 
   switch (type) {
-    case 'pig':
-      add('body', 1.0, 0.8, 1.4, 0, 0.55, 0, 0xffffff, textured);
-      add('head', 0.72, 0.72, 0.72, 0, 0.76, -0.78, 0xffffff, textured);
-      add('snout', 0.38, 0.28, 0.24, 0, 0.61, -1.23, 0xd88b91);
-      add('eye1', 0.1, 0.1, 0.03, -0.18, 0.82, -1.14, 0x1a1a1a);
-      add('eye2', 0.1, 0.1, 0.03, 0.18, 0.82, -1.14, 0x1a1a1a);
-      add('leg1', 0.25, 0.42, 0.25, -0.3, 0.2, -0.48, 0xc97880);
-      add('leg2', 0.25, 0.42, 0.25, 0.3, 0.2, -0.48, 0xc97880);
-      add('leg3', 0.25, 0.42, 0.25, -0.3, 0.2, 0.48, 0xc97880);
-      add('leg4', 0.25, 0.42, 0.25, 0.3, 0.2, 0.48, 0xc97880);
-      break;
-    case 'cow':
-    case 'sheep': {
-      const coat = type === 'cow' ? 0x7a5232 : 0xe8e8e8;
-      const face = type === 'cow' ? 0x8a6242 : 0xd2b48e;
-      add('body', 0.95, 0.8, 1.35, 0, 0.65, 0, coat);
-      add('head', 0.62, 0.62, 0.62, 0, 0.86, -0.78, face);
-      add('eye1', 0.09, 0.09, 0.03, -0.16, 0.92, -1.1, 0x1a1a1a);
-      add('eye2', 0.09, 0.09, 0.03, 0.16, 0.92, -1.1, 0x1a1a1a);
-      for (const [name, x, z] of [['leg1', -0.28, -0.43], ['leg2', 0.28, -0.43], ['leg3', -0.28, 0.43], ['leg4', 0.28, 0.43]]) {
-        add(name, 0.24, 0.58, 0.24, x, 0.29, z, coat);
-      }
-      if (type === 'cow') {
-        add('horn1', 0.1, 0.22, 0.1, -0.22, 1.22, -0.82, 0xe2d7bc);
-        add('horn2', 0.1, 0.22, 0.1, 0.22, 1.22, -0.82, 0xe2d7bc);
-      }
+    case 'pig': {
+      // 0.9 x 0.9 hitbox
+      add('leg1', 0.19, 0.30, 0.19, -0.20, 0.30, -0.24, CELLS.leg, { pivotTop: true });
+      add('leg2', 0.19, 0.30, 0.19, 0.20, 0.30, -0.24, CELLS.leg, { pivotTop: true });
+      add('leg3', 0.19, 0.30, 0.19, -0.20, 0.30, 0.26, CELLS.leg, { pivotTop: true });
+      add('leg4', 0.19, 0.30, 0.19, 0.20, 0.30, 0.26, CELLS.leg, { pivotTop: true });
+      add('body', 0.62, 0.58, 0.72, 0, 0.59, 0.04, CELLS.body);
+      add('head', 0.44, 0.44, 0.44, 0, 0.67, -0.46, CELLS.head);
+      add('snout', 0.22, 0.17, 0.16, 0, 0.58, -0.70, CELLS.snout);
       break;
     }
-    case 'chicken':
-      add('body', 0.48, 0.5, 0.62, 0, 0.34, 0, 0xe8e8e8);
-      add('head', 0.34, 0.38, 0.34, 0, 0.69, -0.38, 0xf0f0f0);
-      add('eye1', 0.07, 0.07, 0.03, -0.1, 0.73, -0.55, 0x1a1a1a);
-      add('eye2', 0.07, 0.07, 0.03, 0.1, 0.73, -0.55, 0x1a1a1a);
-      add('beak', 0.22, 0.12, 0.2, 0, 0.61, -0.62, 0xe8902a);
-      add('comb', 0.16, 0.12, 0.12, 0, 0.92, -0.4, 0xc93432);
-      add('leg1', 0.1, 0.26, 0.1, -0.12, 0.13, 0, 0xe8902a);
-      add('leg2', 0.1, 0.26, 0.1, 0.12, 0.13, 0, 0xe8902a);
+    case 'cow': {
+      // 0.9 x 1.3 hitbox
+      add('leg1', 0.22, 0.55, 0.22, -0.24, 0.55, -0.32, CELLS.leg, { pivotTop: true });
+      add('leg2', 0.22, 0.55, 0.22, 0.24, 0.55, -0.32, CELLS.leg, { pivotTop: true });
+      add('leg3', 0.22, 0.55, 0.22, -0.24, 0.55, 0.34, CELLS.leg, { pivotTop: true });
+      add('leg4', 0.22, 0.55, 0.22, 0.24, 0.55, 0.34, CELLS.leg, { pivotTop: true });
+      add('body', 0.68, 0.60, 0.94, 0, 0.85, 0.02, CELLS.body);
+      add('head', 0.46, 0.46, 0.46, 0, 1.02, -0.56, CELLS.head);
+      add('horn1', 0.09, 0.16, 0.09, -0.19, 1.30, -0.58, CELLS.horn);
+      add('horn2', 0.09, 0.16, 0.09, 0.19, 1.30, -0.58, CELLS.horn);
       break;
-    case 'creeper': {
-      const green = 0x52b648;
-      for (const [name, x, z] of [['leg1', -0.18, -0.2], ['leg2', 0.18, -0.2], ['leg3', -0.18, 0.2], ['leg4', 0.18, 0.2]]) {
-        add(name, 0.24, 0.64, 0.24, x, 0.32, z, green);
-      }
-      add('body', 0.56, 0.66, 0.48, 0, 0.96, 0, green);
-      add('head', 0.62, 0.62, 0.62, 0, 1.61, -0.02, green);
-      const face = new THREE.MeshBasicMaterial({ color: 0x111111 });
-      add('eye1', 0.13, 0.18, 0.025, -0.14, 1.68, -0.34, 0xffffff, face);
-      add('eye2', 0.13, 0.18, 0.025, 0.14, 1.68, -0.34, 0xffffff, face);
-      add('mouth', 0.28, 0.16, 0.025, 0, 1.43, -0.34, 0xffffff, face);
+    }
+    case 'sheep': {
+      // 0.9 x 1.3 hitbox
+      add('leg1', 0.20, 0.48, 0.20, -0.24, 0.48, -0.30, CELLS.leg, { pivotTop: true });
+      add('leg2', 0.20, 0.48, 0.20, 0.24, 0.48, -0.30, CELLS.leg, { pivotTop: true });
+      add('leg3', 0.20, 0.48, 0.20, -0.24, 0.48, 0.32, CELLS.leg, { pivotTop: true });
+      add('leg4', 0.20, 0.48, 0.20, 0.24, 0.48, 0.32, CELLS.leg, { pivotTop: true });
+      add('body', 0.72, 0.64, 0.92, 0, 0.80, 0.02, CELLS.body);
+      add('head', 0.44, 0.44, 0.44, 0, 0.99, -0.54, CELLS.head);
+      break;
+    }
+    case 'chicken': {
+      // 0.6 x 0.7 hitbox
+      add('leg1', 0.08, 0.16, 0.08, -0.10, 0.16, -0.02, CELLS.leg, { pivotTop: true });
+      add('leg2', 0.08, 0.16, 0.08, 0.10, 0.16, -0.02, CELLS.leg, { pivotTop: true });
+      add('body', 0.34, 0.40, 0.44, 0, 0.36, 0.02, CELLS.body);
+      add('wing1', 0.05, 0.24, 0.32, -0.19, 0.38, 0.03, CELLS.body);
+      add('wing2', 0.05, 0.24, 0.32, 0.19, 0.38, 0.03, CELLS.body);
+      add('head', 0.24, 0.24, 0.24, 0, 0.60, -0.24, CELLS.head);
+      add('beak', 0.14, 0.10, 0.14, 0, 0.57, -0.40, CELLS.beak);
+      add('comb', 0.09, 0.12, 0.18, 0, 0.76, -0.22, CELLS.comb);
       break;
     }
     case 'zombie':
     case 'skeleton': {
-      const zombie = type === 'zombie';
-      const skin = zombie ? 0x3e7a3e : 0xb6b6b6;
-      const shirt = zombie ? 0x2a4878 : 0xa6a6a6;
-      const pants = zombie ? 0x263d65 : 0x898989;
-      add('leg1', 0.25, 0.68, 0.25, -0.16, 0.34, 0, pants);
-      add('leg2', 0.25, 0.68, 0.25, 0.16, 0.34, 0, pants);
-      add('body', 0.55, 0.72, 0.3, 0, 1.06, 0, shirt);
-      add('arm1', 0.22, 0.72, 0.22, -0.4, 1.06, 0, skin);
-      add('arm2', 0.22, 0.72, 0.22, 0.4, 1.06, 0, skin);
-      add('head', 0.48, 0.48, 0.48, 0, 1.68, 0, skin);
-      add('eye1', 0.1, 0.1, 0.03, -0.12, 1.72, -0.25, 0x1a1a1a);
-      add('eye2', 0.1, 0.1, 0.03, 0.12, 1.72, -0.25, 0x1a1a1a);
-      if (!zombie) add('bow', 0.06, 0.8, 0.06, 0.57, 1.05, -0.24, 0x6b4c2a);
+      // 0.6 x 1.8 hitbox
+      const skeleton = type === 'skeleton';
+      add('leg1', 0.22, 0.72, 0.22, -0.15, 0.72, 0, CELLS.leg, { pivotTop: true });
+      add('leg2', 0.22, 0.72, 0.22, 0.15, 0.72, 0, CELLS.leg, { pivotTop: true });
+      add('body', 0.50, 0.64, 0.26, 0, 1.04, 0, CELLS.body);
+      // arms held out in front, like the classic undead
+      add('arm1', 0.20, 0.64, 0.20, -0.36, 1.32, 0, CELLS.arm, { pivotTop: true, rot: [1.45, 0, 0] });
+      add('arm2', 0.20, 0.64, 0.20, 0.36, 1.32, 0, CELLS.arm, { pivotTop: true, rot: [1.45, 0, 0] });
+      add('head', 0.46, 0.46, 0.46, 0, 1.57, 0, CELLS.head);
+      if (skeleton) add('bow', 0.05, 0.62, 0.05, 0.56, 1.30, -0.20, CELLS.arm);
+      break;
+    }
+    case 'creeper': {
+      // 0.6 x 1.8 hitbox
+      add('leg1', 0.20, 0.62, 0.20, -0.15, 0.62, 0, CELLS.leg, { pivotTop: true });
+      add('leg2', 0.20, 0.62, 0.20, 0.15, 0.62, 0, CELLS.leg, { pivotTop: true });
+      add('body', 0.50, 0.62, 0.26, 0, 0.93, 0, CELLS.body);
+      add('arm1', 0.16, 0.42, 0.16, -0.33, 1.24, 0, CELLS.arm, { pivotTop: true, rot: [0.25, 0, 0] });
+      add('arm2', 0.16, 0.42, 0.16, 0.33, 1.24, 0, CELLS.arm, { pivotTop: true, rot: [0.25, 0, 0] });
+      add('head', 0.50, 0.50, 0.50, 0, 1.55, 0, CELLS.head);
       break;
     }
     case 'spider': {
-      const dark = 0x2a2020;
-      add('body', 0.95, 0.42, 1.1, 0, 0.42, 0, dark);
-      add('head', 0.62, 0.42, 0.62, 0, 0.48, -0.72, 0x352828);
-      add('eye1', 0.12, 0.12, 0.025, -0.15, 0.52, -1.04, 0xcc2222);
-      add('eye2', 0.12, 0.12, 0.025, 0.15, 0.52, -1.04, 0xcc2222);
+      // 0.9 x 0.9 hitbox
+      add('body', 0.64, 0.42, 0.54, 0, 0.42, 0.10, CELLS.body);
+      add('head', 0.42, 0.36, 0.40, 0, 0.44, -0.36, CELLS.head);
       for (let i = 0; i < 4; i++) {
-        const z = -0.48 + i * 0.32;
-        add(`legL${i}`, 0.7, 0.08, 0.08, -0.64, 0.34, z, dark);
-        add(`legR${i}`, 0.7, 0.08, 0.08, 0.64, 0.34, z, dark);
-        parts.legs.push(group.children[group.children.length - 2], group.children[group.children.length - 1]);
+        const z = -0.26 + i * 0.24;
+        add(`legL${i}`, 0.62, 0.07, 0.07, -0.46, 0.34, z, CELLS.leg, { rot: [0, 0, 0.18] });
+        add(`legR${i}`, 0.62, 0.07, 0.07, 0.46, 0.34, z, CELLS.leg, { rot: [0, 0, -0.18] });
       }
       break;
     }
@@ -274,14 +334,20 @@ export class Mob {
     this.texture = new THREE.CanvasTexture(buildMobTexture(type));
     this.texture.magFilter = THREE.NearestFilter;
     this.texture.minFilter = THREE.NearestFilter;
+    this.texture.generateMipmaps = false;
+    this.texture.colorSpace = THREE.NoColorSpace;
     const model = buildMobModel(type, this.texture);
     this.group = model.group;
     this.parts = model.parts;
-    // Correct the vertical proportions of the legacy box models to match their hitboxes.
-    if (type === 'zombie' || type === 'skeleton') this.group.scale.y = 0.95;
-    else if (type === 'creeper') this.group.scale.y = 1.02;
-    else if (type === 'cow' || type === 'sheep') this.group.scale.y = 0.95;
-    else if (type === 'chicken') this.group.scale.y = 0.78;
+    // Fit the model to the mob's hitbox so what you see matches what you hit.
+    // The height is authoritative; limbs may stick out a little (a zombie's
+    // arms do in beta too) but never far beyond the hitbox.
+    this.group.updateMatrixWorld(true);
+    const size = new THREE.Box3().setFromObject(this.group).getSize(new THREE.Vector3());
+    let fit = this.def.h / Math.max(0.001, size.y);
+    const maxWidth = this.def.w * 1.8;
+    if (size.x * fit > maxWidth) fit = maxWidth / Math.max(0.001, size.x);
+    if (fit > 0 && Math.abs(fit - 1) > 0.001) this.group.scale.setScalar(fit);
     this.group.position.copy(this.pos);
     this._legPhase = Math.random() * Math.PI * 2;
   }
@@ -476,22 +542,30 @@ export class Mob {
     if (walking) this._legPhase += dt * (this.type === 'spider' ? 11 : 8);
     const swing = walking ? Math.sin(this._legPhase) * 0.48 : 0;
     if (this.parts.legs) {
-      this.parts.legs.forEach((leg, i) => { leg.rotation.x = swing * (i % 2 === 0 ? 1 : -1); });
+      this.parts.legs.forEach((leg, i) => {
+        const base = leg.userData.baseRotX || 0;
+        leg.rotation.x = base + swing * (i % 2 === 0 ? 1 : -1);
+      });
     }
     if (this.parts.arms) {
-      this.parts.arms.forEach((arm, i) => { arm.rotation.x = swing * (i % 2 === 0 ? -0.7 : 0.7); });
+      this.parts.arms.forEach((arm, i) => {
+        const base = arm.userData.baseRotX || 0;
+        // the undead keep their arms stretched out; only the swing changes
+        arm.rotation.x = base + swing * (i % 2 === 0 ? -0.22 : 0.22);
+      });
     }
     if (this.type === 'spider') {
-      this.parts.legs.forEach((leg, i) => { leg.rotation.z = walking ? Math.sin(this._legPhase + i) * 0.12 : 0; });
+      this.parts.legs.forEach((leg, i) => { leg.rotation.z = (leg.userData.baseRotZ || 0) + (walking ? Math.sin(this._legPhase + i) * 0.12 : 0); });
     }
   }
 
   updateColor(timeOfDay = 0.5) {
     const flashing = this.type === 'creeper' && this.fuse > 0 && Math.floor(this.fuse * 10) % 2 === 0;
-    let tint = this.hurtTime > 0 ? 0xff5555 : flashing ? 0xffffff : null;
-    // Simple day/night shading for mobs (no scene lights): darken at night.
-    const daylight = timeOfDay > 0.22 && timeOfDay < 0.78;
-    const brightness = daylight ? 1 : 0.5;
+    const tint = this.hurtTime > 0 ? 0xff5555 : flashing ? 0xffffff : null;
+    // Mobs follow the same day/night curve as the sky so they are never
+    // flat white in the middle of the night.
+    const daylight = daylightFactor(timeOfDay);
+    const brightness = 0.24 + 0.76 * daylight;
     this.group.traverse(object => {
       if (!object.material) return;
       const materials = Array.isArray(object.material) ? object.material : [object.material];

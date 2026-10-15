@@ -597,44 +597,58 @@ export function buildAtlas() {
   });
 
   // --- destroy stage overlay (cracks) ---
-  // Precompute a single set of crack segments with a stable seed so each
-  // successive stage adds to the same pattern instead of jumping.
-  const crackSegments = [];
-  {
-    const r = tileRand(TILES.destroy0 * 7919 + 17);
-    for (let i = 0; i < 12; i++) {
-      const cx = 8 + (r() * 6 - 3);
-      const cy = 8 + (r() * 6 - 3);
-      const dx = r() * 2 - 1;
-      const dy = r() * 2 - 1;
-      const len = 5 + r() * 9;
-      crackSegments.push({ cx, cy, dx, dy, len });
-    }
-  }
+  // The crack pattern is generated ONCE from a stable seed and then reused by
+  // every stage: stage N simply reveals more of the same pattern, so the
+  // cracks visibly grow instead of jumping to a different shape.
+  const crackPattern = buildCrackPattern();
   for (let stage = 0; stage < 10; stage++) {
-    put(TILES.destroy0 + stage, (ox, oy, rnd) => {
+    put(TILES.destroy0 + stage, (ox, oy) => {
       for (let y = 0; y < TS; y++) for (let x = 0; x < TS; x++) {
         px(ctx, ox + x, oy + y, 0, 0, 0, 0);
       }
-      const n = 3 + stage;
-      for (let i = 0; i < n; i++) {
-        const seg = crackSegments[i];
-        let x = seg.cx, y = seg.cy;
-        for (let s = 0; s < seg.len; s++) {
-          const px_ = Math.round(x), py_ = Math.round(y);
-          if (px_ >= 0 && px_ < TS && py_ >= 0 && py_ < TS) {
-            px(ctx, ox + px_, oy + py_, 20, 16, 12, 210);
-            // thicken slightly for visibility
-            if (px_ + 1 < TS) px(ctx, ox + px_ + 1, oy + py_, 20, 16, 12, 150);
-          }
-          x += seg.dx + (rnd() - 0.5) * 0.4;
-          y += seg.dy + (rnd() - 0.5) * 0.4;
+      // Stage 0 shows the first two branches, stage 9 shows all of them.
+      const shown = Math.min(crackPattern.length, 2 + stage);
+      for (let i = 0; i < shown; i++) {
+        for (const [cx, cy, thick] of crackPattern[i]) {
+          if (cx < 0 || cx >= TS || cy < 0 || cy >= TS) continue;
+          // dark core keeps the crack readable without hiding the block
+          px(ctx, ox + cx, oy + cy, 18, 15, 12, 190);
+          if (thick && cx + 1 < TS) px(ctx, ox + cx + 1, oy + cy, 18, 15, 12, 80);
         }
       }
     });
   }
 
   return canvas;
+}
+
+// One stable crack pattern shared by all ten destroy stages.
+// Each branch is a thin line of pixels radiating from the middle of the
+// tile; the returned pixel lists never change, so later stages are strict
+// supersets of earlier ones.
+export function buildCrackPattern() {
+  const branches = [];
+  const r = tileRand(0x51ac4e);
+  for (let i = 0; i < 10; i++) {
+    const angle = (i / 10) * Math.PI * 2 + (r() - 0.5) * 0.5;
+    const length = 5 + Math.floor(r() * 5); // 5..9 pixels
+    let x = 7.5 + Math.cos(angle) * (0.4 + r() * 1.8);
+    let y = 7.5 + Math.sin(angle) * (0.4 + r() * 1.8);
+    const curve = (r() - 0.5) * 0.5;
+    const stepX = Math.cos(angle);
+    const stepY = Math.sin(angle);
+    const pixels = [];
+    for (let s = 0; s < length; s++) {
+      const cx = Math.round(x);
+      const cy = Math.round(y);
+      pixels.push([cx, cy, s === 0 ? 0 : 1]);
+      // only a slight wobble keeps the crack thin instead of blobby
+      x += stepX + (r() - 0.5) * 0.35 - stepY * curve * 0.12;
+      y += stepY + (r() - 0.5) * 0.35 + stepX * curve * 0.12;
+    }
+    branches.push(pixels);
+  }
+  return branches;
 }
 
 // Item icon art (256 items use pixel art on transparent background)
@@ -1087,77 +1101,214 @@ export function buildItemIcons() {
   return canvas;
 }
 
-// Mob skin canvases (simple classic-style textures)
+// ---------------------------------------------------------------------------
+// Mob skins — classic 64x32 sheets
+// ---------------------------------------------------------------------------
+// Every model face samples one 8x8 "cell" of the sheet, so a marking drawn on
+// the head front really ends up on the front of the head (and only there).
+export const SKIN_W = 64;
+export const SKIN_H = 32;
+export const SKIN_CELL = 8;
+
+export const SKIN_CELLS = {
+  head: {
+    front: [0, 0], back: [8, 0], left: [16, 0], right: [24, 0], top: [32, 0], bottom: [40, 0],
+  },
+  body: {
+    front: [0, 8], back: [8, 8], left: [16, 8], right: [24, 8], top: [32, 8], bottom: [40, 8],
+  },
+  leg: { front: [0, 16], back: [8, 16], left: [16, 16], right: [24, 16] },
+  arm: { front: [32, 16], back: [40, 16], left: [48, 16], right: [56, 16] },
+  extra: { front: [0, 24], back: [8, 24], left: [16, 24], right: [24, 24] },
+  extra2: { front: [32, 24], back: [40, 24], left: [48, 24], right: [56, 24] },
+};
+
+function skinNoise(ctx, ox, oy, w, h, base, vary, rnd) {
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const v = (rnd() - 0.5) * 2 * vary;
+      px(ctx, ox + x, oy + y, base[0] + v, base[1] + v, base[2] + v);
+    }
+  }
+}
+
+function skinRect(ctx, ox, oy, w, h, color) {
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) px(ctx, ox + x, oy + y, color[0], color[1], color[2]);
+  }
+}
+
+// Fills every face of one skin part with a base colour.
+function skinPart(ctx, cells, base, vary, rnd) {
+  for (const key of Object.keys(cells)) {
+    const [ox, oy] = cells[key];
+    skinNoise(ctx, ox, oy, SKIN_CELL, SKIN_CELL, base, vary, rnd);
+  }
+}
+
+function skinPixel(ctx, cells, face, x, y, color) {
+  const [ox, oy] = cells[face];
+  px(ctx, ox + x, oy + y, color[0], color[1], color[2]);
+}
+
+function skinBlock(ctx, cells, face, x, y, w, h, color) {
+  for (let yy = 0; yy < h; yy++) {
+    for (let xx = 0; xx < w; xx++) skinPixel(ctx, cells, face, x + xx, y + yy, color);
+  }
+}
+
+// Mob skin canvases (classic-style 64x32 sheets)
 export function buildMobTexture(name) {
   const c = document.createElement('canvas');
-  c.width = 64; c.height = 32;
+  c.width = SKIN_W; c.height = SKIN_H;
   const ctx = c.getContext('2d');
-  const rnd = tileRand(name.length * 991 + 13);
-  const fill = (x, y, w, h, r, g, b, a = 255) => {
-    ctx.fillStyle = `rgba(${r},${g},${b},${a / 255})`;
-    ctx.fillRect(x, y, w, h);
-  };
-  const noise = (x, y, w, h, base, vary) => {
-    for (let yy = 0; yy < h; yy++) for (let xx = 0; xx < w; xx++) {
-      const v = (rnd() - 0.5) * 2 * vary;
-      fill(x + xx, y + yy, 1, 1, base[0] + v, base[1] + v, base[2] + v);
-    }
-  };
+  let seed = 7;
+  for (let i = 0; i < name.length; i++) seed = (seed * 31 + name.charCodeAt(i)) | 0;
+  const rnd = tileRand(seed);
+
+  const C = SKIN_CELLS;
+  const eye = [26, 22, 20];
+  const white = [238, 238, 238];
+
   switch (name) {
-    case 'pig':
-      noise(0, 0, 64, 32, [222, 132, 140], 12); // base pink
-      noise(8, 8, 8, 8, [222, 132, 140], 10);
-      fill(8, 8, 8, 8, 232, 160, 162); // snout area
-      fill(10, 10, 2, 2, 192, 102, 112); fill(14, 10, 2, 2, 192, 102, 112);
-      fill(8, 10, 2, 2, 32, 32, 32); fill(12, 10, 2, 2, 32, 32, 32); // eyes
+    case 'pig': {
+      const pink = [226, 140, 148];
+      skinPart(ctx, C.head, pink, 8, rnd);
+      skinPart(ctx, C.body, pink, 8, rnd);
+      // snout (3D box) + hooves
+      skinPart(ctx, C.extra, [236, 158, 164], 6, rnd);
+      skinBlock(ctx, C.extra, 'front', 2, 4, 1, 1, [148, 82, 92]);
+      skinBlock(ctx, C.extra, 'front', 5, 4, 1, 1, [148, 82, 92]);
+      // face: two eyes high up, snout shading low
+      skinBlock(ctx, C.head, 'front', 1, 2, 1, 2, eye);
+      skinBlock(ctx, C.head, 'front', 6, 2, 1, 2, eye);
+      skinBlock(ctx, C.head, 'front', 2, 5, 4, 3, [214, 124, 132]);
+      skinBlock(ctx, C.head, 'front', 3, 6, 1, 1, [150, 84, 94]);
+      skinBlock(ctx, C.head, 'front', 4, 6, 1, 1, [150, 84, 94]);
+      // legs
+      skinPart(ctx, C.leg, pink, 8, rnd);
+      for (const face of ['front', 'back', 'left', 'right']) skinBlock(ctx, C.leg, face, 0, 6, 8, 2, [188, 106, 116]);
       break;
-    case 'cow':
-      noise(0, 0, 64, 32, [122, 82, 52], 12);
-      noise(8, 8, 8, 8, [152, 112, 72], 10);
-      fill(10, 10, 2, 2, 232, 232, 232); fill(14, 10, 2, 2, 232, 232, 232);
-      // patches
-      for (let i = 0; i < 6; i++) fill((rnd() * 56) | 0, (rnd() * 24) | 0, 5, 4, 82, 52, 32);
+    }
+    case 'cow': {
+      const hide = [128, 88, 56];
+      const patch = [232, 232, 232];
+      skinPart(ctx, C.head, hide, 8, rnd);
+      skinPart(ctx, C.body, hide, 8, rnd);
+      skinPart(ctx, C.extra2, [232, 224, 196], 6, rnd); // horns
+      // face
+      skinBlock(ctx, C.head, 'front', 1, 2, 1, 1, eye);
+      skinBlock(ctx, C.head, 'front', 6, 2, 1, 1, eye);
+      skinBlock(ctx, C.head, 'front', 1, 5, 6, 3, [206, 196, 186]); // muzzle
+      skinBlock(ctx, C.head, 'front', 3, 6, 1, 1, [150, 140, 132]);
+      skinBlock(ctx, C.head, 'front', 4, 6, 1, 1, [150, 140, 132]);
+      // body patches
+      for (let i = 0; i < 4; i++) {
+        const face = ['front', 'back', 'left', 'right'][i];
+        skinBlock(ctx, C.body, face, 1 + ((rnd() * 4) | 0), 1 + ((rnd() * 4) | 0), 3, 2, patch);
+      }
+      skinPart(ctx, C.leg, hide, 8, rnd);
+      for (const face of ['front', 'back', 'left', 'right']) skinBlock(ctx, C.leg, face, 0, 6, 8, 2, [70, 48, 30]);
       break;
-    case 'sheep':
-      noise(0, 0, 64, 32, [232, 232, 232], 10);
-      noise(8, 8, 8, 8, [212, 182, 142], 8); // face
-      fill(10, 12, 2, 2, 32, 32, 32); fill(14, 12, 2, 2, 32, 32, 32);
+    }
+    case 'sheep': {
+      const wool = [238, 238, 238];
+      const face = [226, 202, 168];
+      skinPart(ctx, C.head, face, 6, rnd);
+      skinPart(ctx, C.body, wool, 10, rnd);
+      skinPart(ctx, C.extra, wool, 8, rnd);
+      // woolly top of the head
+      skinBlock(ctx, C.head, 'top', 0, 0, 8, 3, wool);
+      skinBlock(ctx, C.head, 'front', 0, 0, 8, 2, wool);
+      skinBlock(ctx, C.head, 'front', 1, 3, 1, 1, eye);
+      skinBlock(ctx, C.head, 'front', 6, 3, 1, 1, eye);
+      skinBlock(ctx, C.head, 'front', 2, 6, 4, 1, [186, 162, 130]);
+      skinPart(ctx, C.leg, face, 6, rnd);
+      for (const face of ['front', 'back', 'left', 'right']) skinBlock(ctx, C.leg, face, 0, 6, 8, 2, [72, 62, 52]);
       break;
-    case 'chicken':
-      noise(0, 0, 64, 32, [232, 232, 232], 8);
-      fill(0, 0, 64, 2, 182, 42, 42); // comb region at top-left of head
-      fill(10, 10, 2, 2, 32, 32, 32); fill(14, 10, 2, 2, 32, 32, 32);
-      fill(11, 12, 4, 3, 222, 142, 42); // beak
+    }
+    case 'chicken': {
+      const feather = white;
+      skinPart(ctx, C.head, feather, 6, rnd);
+      skinPart(ctx, C.body, feather, 8, rnd);
+      skinPart(ctx, C.extra, [214, 46, 42], 6, rnd);   // comb
+      skinPart(ctx, C.extra2, [232, 164, 40], 6, rnd); // beak
+      skinBlock(ctx, C.head, 'front', 1, 3, 1, 2, eye);
+      skinBlock(ctx, C.head, 'front', 6, 3, 1, 2, eye);
+      skinBlock(ctx, C.head, 'front', 3, 5, 2, 1, [232, 164, 40]);
+      skinPart(ctx, C.leg, [232, 164, 40], 6, rnd);
+      for (const face of ['front', 'back', 'left', 'right']) skinBlock(ctx, C.leg, face, 0, 5, 8, 3, [206, 138, 32]);
       break;
-    case 'zombie':
-      noise(0, 0, 64, 32, [62, 122, 62], 10);
-      noise(8, 8, 8, 8, [82, 152, 72], 8); // head
-      fill(9, 10, 2, 2, 12, 12, 12); fill(13, 10, 2, 2, 12, 12, 12);
-      noise(16, 16, 24, 16, [42, 72, 132], 10); // shirt
+    }
+    case 'zombie': {
+      const skin = [78, 136, 68];
+      const shirt = [66, 104, 148];
+      const pants = [48, 62, 112];
+      skinPart(ctx, C.head, skin, 8, rnd);
+      skinPart(ctx, C.body, shirt, 8, rnd);
+      skinPart(ctx, C.arm, skin, 8, rnd);
+      skinPart(ctx, C.leg, pants, 8, rnd);
+      skinBlock(ctx, C.head, 'front', 1, 2, 2, 2, [16, 20, 14]);
+      skinBlock(ctx, C.head, 'front', 5, 2, 2, 2, [16, 20, 14]);
+      skinBlock(ctx, C.head, 'front', 2, 6, 4, 1, [30, 44, 26]);
+      // torn shirt
+      skinBlock(ctx, C.body, 'front', 1, 6, 2, 2, skin);
+      skinBlock(ctx, C.body, 'front', 5, 5, 2, 3, skin);
       break;
-    case 'skeleton':
-      noise(0, 0, 64, 32, [182, 182, 182], 10);
-      noise(8, 8, 8, 8, [202, 202, 202], 8);
-      fill(9, 11, 2, 3, 22, 22, 22); fill(13, 11, 2, 3, 22, 22, 22);
-      fill(10, 15, 4, 1, 22, 22, 22);
-      // ribs
-      for (let i = 0; i < 5; i++) fill(18, 18 + i * 2, 20, 1, 122, 122, 122);
+    }
+    case 'skeleton': {
+      const bone = [206, 206, 206];
+      skinPart(ctx, C.head, bone, 8, rnd);
+      skinPart(ctx, C.body, bone, 8, rnd);
+      skinPart(ctx, C.arm, bone, 8, rnd);
+      skinPart(ctx, C.leg, bone, 8, rnd);
+      skinBlock(ctx, C.head, 'front', 1, 2, 2, 2, [26, 26, 26]);
+      skinBlock(ctx, C.head, 'front', 5, 2, 2, 2, [26, 26, 26]);
+      skinBlock(ctx, C.head, 'front', 2, 6, 4, 1, [70, 70, 70]);
+      // rib cage on the torso
+      for (let i = 0; i < 3; i++) {
+        skinBlock(ctx, C.body, 'front', 1, 1 + i * 2, 6, 1, [120, 120, 120]);
+        skinBlock(ctx, C.body, 'back', 1, 1 + i * 2, 6, 1, [120, 120, 120]);
+      }
+      skinBlock(ctx, C.body, 'front', 3, 0, 2, 8, [170, 170, 170]);
       break;
-    case 'creeper':
-      noise(0, 0, 64, 32, [82, 182, 72], 14);
-      noise(8, 8, 8, 8, [92, 192, 82], 12);
-      fill(9, 10, 2, 3, 22, 22, 22); fill(13, 10, 2, 3, 22, 22, 22);
-      fill(10, 14, 4, 3, 22, 22, 22); // mouth
-      // dark camo squares
-      for (let i = 0; i < 10; i++) fill((rnd() * 56) | 0, (rnd() * 26) | 0, 3, 3, 52, 132, 42);
+    }
+    case 'creeper': {
+      const green = [84, 176, 70];
+      skinPart(ctx, C.head, green, 10, rnd);
+      skinPart(ctx, C.body, green, 10, rnd);
+      skinPart(ctx, C.arm, green, 10, rnd);
+      skinPart(ctx, C.leg, green, 10, rnd);
+      // classic creeper face
+      skinBlock(ctx, C.head, 'front', 1, 1, 2, 3, [16, 16, 16]);
+      skinBlock(ctx, C.head, 'front', 5, 1, 2, 3, [16, 16, 16]);
+      skinBlock(ctx, C.head, 'front', 2, 4, 4, 4, [16, 16, 16]);
+      skinBlock(ctx, C.head, 'front', 3, 4, 2, 1, green);
+      skinBlock(ctx, C.head, 'front', 2, 6, 1, 1, green);
+      skinBlock(ctx, C.head, 'front', 5, 6, 1, 1, green);
+      // mottled body
+      for (let i = 0; i < 6; i++) {
+        const face = ['front', 'back', 'left', 'right'][i % 4];
+        skinBlock(ctx, C.body, face, (rnd() * 6) | 0, (rnd() * 6) | 0, 2, 2, [58, 138, 48]);
+      }
       break;
-    case 'spider':
-      noise(0, 0, 64, 32, [42, 32, 32], 10);
-      fill(9, 10, 2, 2, 182, 22, 22); fill(13, 10, 2, 2, 182, 22, 22);
-      fill(6, 12, 2, 2, 182, 22, 22); fill(16, 12, 2, 2, 182, 22, 22);
+    }
+    case 'spider': {
+      const dark = [40, 32, 32];
+      skinPart(ctx, C.head, dark, 8, rnd);
+      skinPart(ctx, C.body, dark, 10, rnd);
+      skinPart(ctx, C.leg, [30, 24, 24], 8, rnd);
+      skinBlock(ctx, C.head, 'front', 1, 2, 2, 1, [204, 32, 32]);
+      skinBlock(ctx, C.head, 'front', 5, 2, 2, 1, [204, 32, 32]);
+      skinBlock(ctx, C.head, 'front', 2, 5, 1, 1, [232, 232, 232]);
+      skinBlock(ctx, C.head, 'front', 5, 5, 1, 1, [232, 232, 232]);
       break;
+    }
     default:
-      noise(0, 0, 64, 32, [182, 182, 182], 20);
+      skinPart(ctx, C.head, [190, 190, 190], 14, rnd);
+      skinPart(ctx, C.body, [190, 190, 190], 14, rnd);
+      skinPart(ctx, C.arm, [190, 190, 190], 14, rnd);
+      skinPart(ctx, C.leg, [190, 190, 190], 14, rnd);
   }
   return c;
 }

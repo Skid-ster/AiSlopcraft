@@ -1,6 +1,16 @@
 /* AiSlopcraft — classic beta UI look */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+:root {
+  /* Everything scales from these so small screens stay readable. */
+  --slot: 44px;
+  --hotbar-slot: 50px;
+  --icon: 34px;
+  --hotbar-icon: 40px;
+  --heart: 20px;
+  --panel-pad: 18px;
+}
+
 html, body {
   width: 100%; height: 100%;
   overflow: hidden;
@@ -119,6 +129,7 @@ html, body {
 }
 .btn:hover { background: linear-gradient(#a8a8c8, #7a7aa8); }
 .btn:active { background: linear-gradient(#5c5c5c, #7a7a7a); }
+.btn:focus-visible { outline-color: #ffff55; }
 .btn-big { min-width: 400px; font-size: 22px; padding: 16px 22px; }
 
 /* ---------- HUD ---------- */
@@ -135,24 +146,38 @@ html, body {
   font-size: 26px;
   mix-blend-mode: difference;
   font-family: monospace;
+  line-height: 1;
+}
+
+/* One bottom stack: held name → hearts/air → hotbar.  Everything shares
+   the same centre line, so the HUD stays aligned at any window size. */
+.hud-bottom {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  max-width: 100vw;
 }
 
 .hotbar {
-  position: absolute;
-  bottom: 12px;
-  left: 50%;
-  transform: translateX(-50%);
   display: flex;
   gap: 2px;
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(16, 16, 16, 0.55);
   padding: 3px;
-  border: 2px solid rgba(30,30,30,0.8);
+  border: 2px solid rgba(0, 0, 0, 0.8);
+  box-shadow:
+    inset 0 0 0 2px rgba(255, 255, 255, 0.16),
+    0 2px 10px rgba(0, 0, 0, 0.45);
   pointer-events: auto;
 }
 
 .slot {
-  width: 44px;
-  height: 44px;
+  width: var(--slot);
+  height: var(--slot);
   background: rgba(139, 139, 139, 0.72);
   border: 2px solid;
   border-color: #555 #ccc #ccc #555;
@@ -162,14 +187,16 @@ html, body {
   justify-content: center;
   image-rendering: pixelated;
 }
-.hotbar-slot { width: 50px; height: 50px; }
+.hotbar-slot { width: var(--hotbar-slot); height: var(--hotbar-slot); }
 .hotbar-slot.selected {
-  outline: 3px solid #fff;
-  z-index: 2;
-  background: rgba(180, 180, 180, 0.85);
+  transform: scale(1.16);
+  border-color: #fff;
+  background: rgba(196, 196, 196, 0.9);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.95);
+  z-index: 3;
 }
-.slot canvas { image-rendering: pixelated; width: 34px; height: 34px; }
-.hotbar-slot canvas { width: 40px; height: 40px; }
+.slot canvas { image-rendering: pixelated; width: var(--icon); height: var(--icon); }
+.hotbar-slot canvas { width: var(--hotbar-icon); height: var(--hotbar-icon); }
 .slot .count {
   position: absolute;
   right: 2px; bottom: 0;
@@ -185,41 +212,41 @@ html, body {
   background: #4c4;
 }
 
-.hearts {
-  position: absolute;
-  bottom: 74px;
-  left: 50%;
-  transform: translateX(-50%);
+/* hearts + air bubbles sit on the same centred row */
+.status-row {
   display: flex;
-  gap: 2px;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: var(--heart);
+}
+.hearts {
+  display: flex;
+  align-items: center;
+  gap: 1px;
   justify-content: center;
 }
 .heart {
-  font-size: 22px;
-  line-height: 22px;
-  text-shadow: 1.5px 1.5px 0 #400;
+  width: var(--heart);
+  height: var(--heart);
+  image-rendering: pixelated;
+  filter: drop-shadow(1px 1px 0 rgba(0, 0, 0, 0.85));
 }
-.heart.full { color: #e02020; }
-.heart.half { color: #e02020; opacity: 0.55; }
-.heart.empty { color: #4a2222; }
 
 .water-bar {
-  position: absolute;
-  bottom: 100px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 2px;
+  display: none;
+  align-items: center;
+  gap: 1px;
   justify-content: center;
 }
-.bubble { font-size: 18px; color: #c8e8ff; text-shadow: 1px 1px 0 #234; }
-.bubble.empty { opacity: 0.3; }
+.bubble {
+  width: calc(var(--heart) - 2px);
+  height: calc(var(--heart) - 2px);
+  image-rendering: pixelated;
+  filter: drop-shadow(1px 1px 0 rgba(0, 0, 0, 0.85));
+}
 
 .held-name {
-  position: absolute;
-  bottom: 132px;
-  left: 50%;
-  transform: translateX(-50%);
   color: #fff;
   font-size: 17px;
   font-weight: 700;
@@ -228,6 +255,8 @@ html, body {
   opacity: 0;
   transition: opacity 0.35s;
   white-space: nowrap;
+  padding: 1px 8px;
+  background: rgba(0, 0, 0, 0.42);
 }
 
 .hint {
@@ -235,12 +264,14 @@ html, body {
   top: 12px;
   left: 50%;
   transform: translateX(-50%);
-  color: rgba(255,255,255,0.85);
+  color: rgba(255,255,255,0.9);
   font-size: 13px;
   text-shadow: 1.5px 1.5px 0 #222;
-  background: rgba(0,0,0,0.3);
+  background: rgba(0,0,0,0.45);
   padding: 5px 12px;
   border-radius: 2px;
+  text-align: center;
+  max-width: 92vw;
 }
 
 .debug {
@@ -251,9 +282,10 @@ html, body {
   font-size: 13px;
   line-height: 1.45;
   text-shadow: 1.5px 1.5px 0 #222;
-  background: rgba(0,0,0,0.38);
+  background: rgba(0,0,0,0.45);
   padding: 8px 10px;
   pointer-events: none;
+  max-width: 60vw;
 }
 
 /* ---------- panels ---------- */
@@ -264,8 +296,11 @@ html, body {
   background: #c6c6c6;
   border: 4px solid;
   border-color: #fff #555 #555 #fff;
-  padding: 18px 22px;
+  padding: var(--panel-pad) 22px;
   box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  color: #3a3a3a;
+  max-height: 94vh;
+  overflow-y: auto;
 }
 .inv-title {
   font-size: 16px;
@@ -275,12 +310,12 @@ html, body {
 }
 .inv-main {
   display: grid;
-  grid-template-columns: repeat(9, 44px);
+  grid-template-columns: repeat(9, var(--slot));
   gap: 2px;
 }
 .inv-hotbar {
   display: grid;
-  grid-template-columns: repeat(9, 44px);
+  grid-template-columns: repeat(9, var(--slot));
   gap: 2px;
   margin-top: 10px;
 }
@@ -299,7 +334,8 @@ html, body {
   color: #555;
 }
 .craft-out {
-  width: 52px; height: 52px;
+  width: calc(var(--slot) + 8px);
+  height: calc(var(--slot) + 8px);
   background: rgba(120, 120, 120, 0.85);
 }
 .cursor-item {
@@ -329,7 +365,10 @@ html, body {
   gap: 16px;
   margin: 8px 0;
 }
-.furnace-flame { font-size: 26px; width: 36px; text-align: center; }
+.furnace-flame {
+  width: 24px; height: 24px;
+  image-rendering: pixelated;
+}
 .furnace-progress {
   width: 100px; height: 16px;
   background: #8b8b8b;
@@ -363,6 +402,7 @@ html, body {
   font-size: 13px;
   margin-top: 14px;
   text-shadow: 1px 1px 0 #222;
+  text-align: center;
 }
 .death-screen {
   background: rgba(120, 0, 0, 0.42);
@@ -400,13 +440,67 @@ html, body {
 }
 .options-panel input[type=range] {
   width: 100%;
+  accent-color: #6a6a6a;
+}
+
+/* ---------- responsive ---------- */
+@media (max-width: 900px) {
+  :root {
+    --slot: 38px;
+    --hotbar-slot: 42px;
+    --icon: 28px;
+    --hotbar-icon: 34px;
+    --heart: 17px;
+    --panel-pad: 14px;
+  }
+  .title-main { font-size: 56px; }
+  .btn { min-width: 300px; }
 }
 
 @media (max-width: 720px) {
+  :root {
+    --slot: 32px;
+    --hotbar-slot: 36px;
+    --icon: 24px;
+    --hotbar-icon: 28px;
+    --heart: 15px;
+    --panel-pad: 12px;
+  }
   .title-main { font-size: 42px; }
-  .btn { min-width: 260px; }
-  .hotbar-slot { width: 42px; height: 42px; }
-  .slot canvas { width: 28px; height: 28px; }
-  .heart { font-size: 18px; }
-  .bubble { font-size: 15px; }
+  .title-sub { font-size: 14px; }
+  .splash { font-size: 14px; right: -34px; }
+  .btn { min-width: 260px; font-size: 16px; }
+  .btn-big { min-width: 300px; font-size: 19px; }
+  .slot .count { font-size: 13px; }
+  .held-name { font-size: 15px; }
+  .hint { font-size: 11px; }
+  .options-panel, .furnace-panel { min-width: 0; }
+  .inv-title { font-size: 14px; }
+}
+
+@media (max-width: 520px) {
+  :root {
+    --slot: 28px;
+    --hotbar-slot: 30px;
+    --icon: 20px;
+    --hotbar-icon: 24px;
+    --heart: 13px;
+  }
+  .title-main { font-size: 32px; }
+  .death-title { font-size: 36px; }
+  .pause-inner h2 { font-size: 24px; }
+}
+
+@media (max-height: 560px) {
+  :root {
+    --slot: 34px;
+    --hotbar-slot: 38px;
+    --icon: 26px;
+    --hotbar-icon: 30px;
+    --heart: 16px;
+    --panel-pad: 10px;
+  }
+  .title-main { font-size: 40px; }
+  .title-logo { margin-bottom: 12px; }
+  .panel { max-height: 96vh; }
 }

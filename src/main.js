@@ -12,7 +12,7 @@ import {
 import { Player } from './entities/player.js';
 import { advanceEating } from './entities/eating.js';
 import { MobManager, findSafeGround, rollMobDrops } from './entities/mobs.js';
-import { UI } from './ui/ui.js';
+import { UI, drawFlame } from './ui/ui.js';
 import { Audio } from './audio.js';
 import { Sky } from './sky.js';
 import { createFurnaceState, tickFurnace, interactWithFurnaceSlot } from './ui/furnace.js';
@@ -173,37 +173,40 @@ const firstPersonArm = new FirstPersonArm(camera, atlasTex, game.itemIconsCanvas
 // A. Target selection wireframe
 const selectionWireframe = new THREE.LineSegments(
   new THREE.EdgesGeometry(new THREE.BoxGeometry(1.002, 1.002, 1.002)),
-  new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 2, transparent: true, opacity: 0.45 })
+  new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 2, transparent: true, opacity: 0.55 })
 );
 selectionWireframe.visible = false;
+selectionWireframe.renderOrder = 3;
 scene.add(selectionWireframe);
 
 // B. Block crack overlay mesh (cracks 0-9)
-const crackGeometry = new THREE.BoxGeometry(1.003, 1.003, 1.003);
-const crackMaterial = new THREE.MeshBasicMaterial({
-  map: atlasTex,
-  transparent: true,
-  depthWrite: false,
-  polygonOffset: true,
-  polygonOffsetFactor: -1,
-  polygonOffsetUnits: -1,
-});
+// The overlay is a slightly inflated copy of the mined block, drawn with the
+// same lighting shader as the terrain so the cracks darken at night and pick
+// up torch light instead of glowing on their own.
+const crackGeometry = new THREE.BoxGeometry(1.004, 1.004, 1.004);
+const crackMaterial = makeLightMaterial({ transparent: true, depthWrite: false });
+crackMaterial.polygonOffset = true;
+crackMaterial.polygonOffsetFactor = -1;
+crackMaterial.polygonOffsetUnits = -1;
+// the lighting shader reads a per-vertex colour: rgb = sky light, a = block light
+crackGeometry.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(crackGeometry.getAttribute('position').count * 4).fill(1), 4));
 const crackOverlayMesh = new THREE.Mesh(crackGeometry, crackMaterial);
 crackOverlayMesh.visible = false;
+crackOverlayMesh.renderOrder = 2;
 scene.add(crackOverlayMesh);
 
-let currentCrackTile = -1;
 // Preserve the original BoxGeometry UVs (0/1) so repeated stage changes remap
 // from a stable source instead of from already-remapped coordinates.
 const crackBaseUVs = crackGeometry.getAttribute('uv').array.slice();
+let currentCrackTile = -1;
 function updateCrackOverlayUV(stage) {
-  const tile = TILES.destroy0 + stage;
+  const tile = TILES.destroy0 + Math.max(0, Math.min(9, stage | 0));
   if (tile === currentCrackTile) return;
   currentCrackTile = tile;
 
   const tx = tile % 16, ty = Math.floor(tile / 16);
   const s = 1 / 16;
-  const e = 0.0002;
+  const e = 0.0004;
   const u0 = tx * s + e, v0 = 1 - (ty + 1) * s + e;
   const u1 = (tx + 1) * s - e, v1 = 1 - ty * s - e;
 
@@ -218,6 +221,37 @@ function updateCrackOverlayUV(stage) {
     );
   }
   uvAttr.needsUpdate = true;
+}
+
+// Tints the crack overlay with the light of the block that is being mined.
+function updateCrackOverlayLight(x, y, z) {
+  const packed = world.getLight(x, y, z);
+  const sky = ((packed >> 4) & 15) / 15;
+  const block = (packed & 15) / 15;
+  const attr = crackGeometry.getAttribute('color');
+  for (let i = 0; i < attr.count; i++) attr.setXYZW(i, sky, sky, sky, block);
+  attr.needsUpdate = true;
+}
+
+// Shows the crack overlay for a given block and stage (0-9).
+function showCrackOverlay(x, y, z, stage) {
+  const id = world.getBlock(x, y, z);
+  const render = getBlock(id).render;
+  // only cube-shaped blocks get the overlay — flowers and torches would
+  // show a full box of cracks
+  if (render === 'cross' || render === 'flat' || render === 'torch' || render === 'liquid') {
+    crackOverlayMesh.visible = false;
+    return;
+  }
+  updateCrackOverlayUV(stage);
+  updateCrackOverlayLight(x, y, z);
+  crackOverlayMesh.position.set(x + 0.5, y + 0.5, z + 0.5);
+  crackOverlayMesh.visible = true;
+}
+
+function hideCrackOverlay() {
+  crackOverlayMesh.visible = false;
+  currentCrackTile = -1; // force a remap the next time the overlay is shown
 }
 
 // ---- chunk streaming ----
@@ -630,7 +664,7 @@ function buildFurnaceUI() {
         <div class="inv-title">Furnace</div>
         <div class="furnace-row">
           <div class="slot" id="f-in"></div>
-          <div class="furnace-flame" id="f-flame">🔥</div>
+          <div class="furnace-flame" id="f-flame"></div>
           <div class="slot" id="f-out"></div>
         </div>
         <div class="furnace-row">
@@ -692,7 +726,11 @@ function refreshFurnace() {
   ui.renderSlot(panel.querySelector('#f-in'), furnace.input);
   ui.renderSlot(panel.querySelector('#f-out'), furnace.output);
   ui.renderSlot(panel.querySelector('#f-fuel'), furnace.fuel);
-  panel.querySelector('#f-flame').style.opacity = furnace.burn > 0 ? 1 : 0.25;
+  const flame = panel.querySelector('#f-flame');
+  if (flame && flame._burn !== (furnace.burn > 0)) {
+    flame._burn = furnace.burn > 0;
+    drawFlame(flame, flame._burn);
+  }
   panel.querySelector('#f-prog-fill').style.width = `${Math.min(100, Math.max(0, furnace.cook / 6 * 100))}%`;
   panel.querySelectorAll('[data-inv]').forEach(slot => ui.renderSlot(slot, player.inventory[+slot.dataset.inv]));
 }
@@ -803,7 +841,7 @@ function frame() {
       // eating with right click hold handled in tryPlaceBlock; also allow F key? no.
     }
 
-    // A. Target selection wireframe
+    // A. Target selection wireframe — refreshed every frame from the raycast
     const hit = player.raycast(world, 5);
     if (hit && player.pointerLocked && ui.mode === 'game') {
       selectionWireframe.position.set(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5);
@@ -814,12 +852,10 @@ function frame() {
 
     // B. Block break cracking stages (0-9)
     if (player.mining.active && player.mining.total > 0 && player.pointerLocked && ui.mode === 'game') {
-      const stage = Math.min(9, Math.floor((player.mining.progress / player.mining.total) * 10));
-      updateCrackOverlayUV(stage);
-      crackOverlayMesh.position.set(player.mining.x + 0.5, player.mining.y + 0.5, player.mining.z + 0.5);
-      crackOverlayMesh.visible = true;
+      const stage = Math.max(0, Math.min(9, Math.floor((player.mining.progress / player.mining.total) * 10)));
+      showCrackOverlay(player.mining.x, player.mining.y, player.mining.z, stage);
     } else {
-      crackOverlayMesh.visible = false;
+      hideCrackOverlay();
     }
 
     // E. First-person arm animation & held item update
@@ -836,6 +872,8 @@ function frame() {
     processChunkQueue();
     rebuildDirtyChunks();
 
+    // fog follows the render distance so the world fades out before chunks pop
+    sky.setRenderDistance(game.renderDistance);
     const dayFactor = sky.update(dt, camera.position);
     applyDayLight(dayFactor);
     const head = world.getBlock(Math.floor(player.pos.x), Math.floor(player.pos.y + 1.62), Math.floor(player.pos.z));
