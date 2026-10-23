@@ -349,6 +349,10 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
     g.setAttribute('position', new THREE.Float32BufferAttribute(buf.pos, 3));
     g.setAttribute('uv', new THREE.Float32BufferAttribute(buf.uv, 2));
     g.setAttribute('color', new THREE.Float32BufferAttribute(buf.col, 4));
+    // The lighting shader consumes this per-vertex pair as sky light / block light.
+    // Keep it attached to every solid, cutout, and water mesh; otherwise WebGL's
+    // default disabled-attribute value leaves every face effectively unlit.
+    g.setAttribute('aLight', new THREE.Float32BufferAttribute(buf.light, 2));
     g.setIndex(buf.idx);
     g.computeBoundingSphere();
     const mesh = new THREE.Mesh(g, material);
