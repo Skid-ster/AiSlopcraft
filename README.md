@@ -16,7 +16,7 @@ Production build: `npm run build` (output in `dist/`). Add `?seed=your-seed` to 
 ## Game systems
 
 - **World:** 128-block height, sea level 63, seeded rolling terrain, caves, ores, beaches, deserts, snowy areas, forests, trees, and plants.
-- **Rendering:** pixel-art atlas, face-culled chunks, directional block faces, biome tint, per-block sky and torch light, day/night sky and clouds, distance fog, animated water/lava, block targeting and mining cracks.
+- **Rendering:** pixel-art atlas, face-culled chunks, directional sunlight, per-block sky and torch light, baked contact occlusion, day/night sky gradient and clouds, atmospheric fog, animated water/lava, and Shader Lite water fresnel/specular glints. Shader presets can be changed live in Options. Shader Lite is a native Three.js/WebGL implementation inspired by Minecraft shaderpacks (directional sun, voxel contact AO, and fresnel water highlights); it is not an OptiFine/Iris shaderpack port and does not claim full dynamic shadow-map support.
 - **Survival:** voxel movement and collision, jumping, sneak movement, swimming, fall/drowning/lava damage, hearts, armor, food healing, item drops, pickup, durability, and inventory.
 - **Building:** block placement, tools and weapon durability, doors, ladders, beds, cake, buckets, TNT, gravity blocks, and fluid/lava reactions.
 - **Crafting:** 2×2 inventory recipes and 3×3 crafting-table recipes; furnace input, fuel, progress, and output slots.

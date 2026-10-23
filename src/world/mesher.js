@@ -87,9 +87,9 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
     chunk.meshes = null;
   }
 
-  const solid = { pos: [], uv: [], col: [], light: [], idx: [] };
-  const cutout = { pos: [], uv: [], col: [], light: [], idx: [] };
-  const water = { pos: [], uv: [], col: [], light: [], idx: [] };
+  const solid = { pos: [], uv: [], col: [], light: [], normal: [], idx: [] };
+  const cutout = { pos: [], uv: [], col: [], light: [], normal: [], idx: [] };
+  const water = { pos: [], uv: [], col: [], light: [], normal: [], idx: [] };
   const wx0 = chunk.cx * CH, wz0 = chunk.cz * CH;
 
   const biomeCache = new Array(CH * CH);
@@ -112,20 +112,44 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
     return world.getLight(wx0 + x, y, wz0 + z);
   };
 
-  const pushQuad = (buf, corners, tile, shade, skyL, blkL, tint, alpha = 1, uvRect = null) => {
+  // Corner occlusion adds gentle contact shadows where terrain blocks meet,
+  // giving the world depth without realtime shadow maps or extra draw calls.
+  const faceOcclusion = (x, y, z, face) => {
+    const tangentAxes = [0, 1, 2].filter(axis => face.dir[axis] === 0);
+    return face.corners.map(corner => {
+      const signs = tangentAxes.map(axis => corner[axis] === 1 ? 1 : -1);
+      const base = [x + face.dir[0], y + face.dir[1], z + face.dir[2]];
+      const a = [...base], b = [...base], diagonal = [...base];
+      a[tangentAxes[0]] += signs[0];
+      b[tangentAxes[1]] += signs[1];
+      diagonal[tangentAxes[0]] += signs[0];
+      diagonal[tangentAxes[1]] += signs[1];
+      const occupied = point => getBlock(getB(point[0], point[1], point[2])).solid;
+      const sideA = occupied(a), sideB = occupied(b), cornerBlock = occupied(diagonal);
+      if (sideA && sideB) return 0.68;
+      return 1 - (Number(sideA) + Number(sideB) + Number(cornerBlock)) * 0.10;
+    });
+  };
+
+  const pushQuad = (buf, corners, tile, shade, skyL, blkL, tint, alpha = 1, uvRect = null, vertexShade = null) => {
     const [u0, v0, u1, v1] = uvRect
       ? tileUV(tile, uvRect[0], uvRect[1], uvRect[2], uvRect[3])
       : tileUV(tile);
     const uvs = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
     const base = buf.pos.length / 3;
-    const skyB = ((skyL >> 0) & 15) / 15;
-    const blkB = ((blkL >> 0) & 15) / 15;
+    const e1 = corners[1].map((value, axis) => value - corners[0][axis]);
+    const e2 = corners[2].map((value, axis) => value - corners[0][axis]);
+    const cross = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+    const normalLength = Math.hypot(cross[0], cross[1], cross[2]) || 1;
+    const normal = cross.map(value => value / normalLength);
     for (let i = 0; i < 4; i++) {
       const c = corners[i];
       buf.pos.push(c[0], c[1], c[2]);
       buf.uv.push(uvs[i][0], uvs[i][1]);
-      buf.col.push(shade * tint[0], shade * tint[1], shade * tint[2], alpha);
+      const vertexLight = vertexShade?.[i] ?? 1;
+      buf.col.push(shade * tint[0] * vertexLight, shade * tint[1] * vertexLight, shade * tint[2] * vertexLight, alpha);
       buf.light.push(skyL, blkL);
+      buf.normal.push(normal[0], normal[1], normal[2]);
     }
     buf.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
   };
@@ -333,10 +357,14 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
             for (let i = 0; i < 4; i++) {
               buf.col.push(face.shade, face.shade, face.shade, 0.82);
               buf.light.push(skyL, blkL);
+              buf.normal.push(face.dir[0], face.dir[1], face.dir[2]);
             }
             buf.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
           } else {
-            pushQuad(buf, corners, tile, isLava ? 1.0 : face.shade, skyL, blkL, faceTint, 1);
+            const ao = !isLava && (bd.render === 'cube' || bd.render === 'cutout')
+              ? faceOcclusion(x, y, z, face)
+              : null;
+            pushQuad(buf, corners, tile, isLava ? 1.0 : face.shade, skyL, blkL, faceTint, 1, null, ao);
           }
         }
       }
@@ -353,6 +381,7 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
     // Keep it attached to every solid, cutout, and water mesh; otherwise WebGL's
     // default disabled-attribute value leaves every face effectively unlit.
     g.setAttribute('aLight', new THREE.Float32BufferAttribute(buf.light, 2));
+    g.setAttribute('aNormal', new THREE.Float32BufferAttribute(buf.normal, 3));
     g.setIndex(buf.idx);
     g.computeBoundingSphere();
     const mesh = new THREE.Mesh(g, material);

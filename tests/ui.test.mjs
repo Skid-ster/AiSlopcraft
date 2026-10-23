@@ -82,11 +82,14 @@ try {
   btn('btn-options').click();
   check('Options button opens options screen', !!btn('options-screen'));
   check('options sliders present', !!btn('opt-render') && !!btn('opt-volume') && !!btn('opt-sens-in'));
-  check('shader style choices are available', ['classic', 'vibrant', 'cinematic'].every(value =>
+  check('shader style choices are available', ['classic', 'vibrant', 'cinematic', 'shader'].every(value =>
     [...btn('opt-shader').options].some(option => option.value === value)));
   btn('opt-shader').value = 'cinematic';
   btn('opt-shader').dispatchEvent(new dom.window.Event('change'));
   check('shader selection applies live to the game renderer', game.shaderStyle === 'cinematic');
+  btn('opt-shader').value = 'shader';
+  btn('opt-shader').dispatchEvent(new dom.window.Event('change'));
+  check('Shader Lite preset applies immediately', game.shaderStyle === 'shader');
   btn('opt-render').value = '8';
   btn('opt-render').dispatchEvent(new dom.window.Event('input'));
   check('render distance slider applies', game.renderDistance === 8);

@@ -47,12 +47,19 @@ const fakeTex = new THREE.Texture();
 const built = buildChunkMesh(world, c0, fakeTex, fakeTex, 6);
 check('mesh has geometry', built.solid.pos.length > 0);
 check('mesh carries per-vertex sky/block light attributes', built.solid.light.length === (built.solid.pos.length / 3) * 2);
+check('mesh carries a surface normal for directional shader lighting', built.solid.normal.length === (built.solid.pos.length / 3) * 3);
 check('transparent water has dedicated standalone-texture UVs', built.water.uv.length === (built.water.pos.length / 3) * 2);
 const mesh = built.makeMesh(built.solid, new THREE.MeshBasicMaterial());
 check('makeMesh returns mesh', !!mesh);
 check('render mesh exposes aligned aLight shader attribute',
   mesh?.geometry.getAttribute('aLight')?.count === mesh?.geometry.getAttribute('position')?.count &&
   mesh?.geometry.getAttribute('aLight')?.itemSize === 2);
+check('render mesh exposes aligned aNormal shader attribute',
+  mesh?.geometry.getAttribute('aNormal')?.count === mesh?.geometry.getAttribute('position')?.count &&
+  mesh?.geometry.getAttribute('aNormal')?.itemSize === 3);
+check('mesh normals are finite unit vectors',
+  mesh?.geometry.getAttribute('aNormal')?.array.every(Number.isFinite) &&
+  Math.abs(Math.hypot(...mesh.geometry.getAttribute('aNormal').array.slice(0, 3)) - 1) < 1e-5);
 check('mesh shader light data matches the calculated per-vertex lighting',
   mesh?.geometry.getAttribute('aLight')?.array.length === built.solid.light.length &&
   mesh?.geometry.getAttribute('aLight')?.array[0] === built.solid.light[0]);

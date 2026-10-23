@@ -20,6 +20,21 @@ export class Sky {
     this.camera = camera;
     this.time = 0.30; // start mid-morning (0.25 = dawn, 0.50 = noon)
     this.dayFactor = 1;
+    this.sunDirection = new THREE.Vector3(1, 0, 0);
+
+    // A camera-following, vertex-coloured sky dome replaces the flat color-only
+    // backdrop with a gentle horizon-to-zenith gradient, while retaining the
+    // crisp, low-poly pixel-art look.
+    this.skyDomeGeometry = new THREE.SphereGeometry(480, 32, 16);
+    this.skyDomeGeometry.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(this.skyDomeGeometry.getAttribute('position').count * 3), 3));
+    this.skyDome = new THREE.Mesh(this.skyDomeGeometry, new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+    }));
+    this.skyDome.renderOrder = -20;
+    scene.add(this.skyDome);
 
     // sun & moon
     const sunGeo = new THREE.PlaneGeometry(32, 32);
@@ -155,6 +170,7 @@ export class Sky {
 
     const sunAngle = (this.time - 0.25) * Math.PI * 2;
     const sunDir = new THREE.Vector3(Math.cos(sunAngle), Math.sin(sunAngle), 0.18).normalize();
+    this.sunDirection.copy(sunDir);
 
     const elev = sunDir.y;
     this.dayFactor = Math.max(0, Math.min(1, (elev + 0.12) / 0.32));
@@ -194,6 +210,26 @@ export class Sky {
     }
     this.cloudMat.color.copy(cloud);
     this.scene.background = sky;
+    this.skyDome.position.copy(center);
+    const horizon = sky.clone().lerp(
+      this.dayFactor > 0.32 ? new THREE.Color(0xdceaff) : new THREE.Color(0x4c5277),
+      this.dayFactor > 0.32 ? 0.34 : 0.42,
+    );
+    const zenith = sky.clone().multiplyScalar(0.56);
+    const nadir = sky.clone().multiplyScalar(0.68);
+    const domePosition = this.skyDomeGeometry.getAttribute('position');
+    const domeColor = this.skyDomeGeometry.getAttribute('color');
+    for (let i = 0; i < domePosition.count; i++) {
+      const h = domePosition.getY(i) / 480;
+      const mix = h >= 0 ? Math.pow(h, 0.7) : -h;
+      const end = h >= 0 ? zenith : nadir;
+      domeColor.setXYZ(i,
+        horizon.r + (end.r - horizon.r) * mix,
+        horizon.g + (end.g - horizon.g) * mix,
+        horizon.b + (end.b - horizon.b) * mix,
+      );
+    }
+    domeColor.needsUpdate = true;
     if (this.scene.fog) {
       const far = Math.max(52, renderDistance * 16 - 4);
       this.scene.fog.color.copy(fog);

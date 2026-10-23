@@ -101,10 +101,15 @@ export class FirstPersonArm {
 
   buildArmMesh() {
     const arm = new THREE.Group();
-    const hand = makeShadedBox(arm, 0.18, 0.38, 0.18, 0, -0.32, 0, 0xd8a57c);
+    // Keep the skin and sleeve as two clean, adjoining sections. The previous
+    // dimensions overlapped by 7 cm, so whichever side faced the camera could
+    // show a shirt-colored patch over the hand (or a skin patch on the sleeve).
     const sleeve = makeShadedBox(arm, 0.19, 0.22, 0.19, 0, -0.09, 0, 0x00a8a8);
+    const cuff = makeShadedBox(arm, 0.192, 0.025, 0.192, 0, -0.1875, 0, 0x008f91);
+    const hand = makeShadedBox(arm, 0.17, 0.33, 0.17, 0, -0.365, 0, 0xd8a57c);
     hand.name = 'hand';
     sleeve.name = 'sleeve';
+    cuff.name = 'cuff';
     return arm;
   }
 
@@ -348,9 +353,12 @@ export class FirstPersonArm {
     if (!this.root.visible) return;
     const prevAutoClear = renderer.autoClear;
     renderer.autoClear = false;
-    renderer.clearDepth();
-    renderer.render(this.scene, this.camera);
-    renderer.autoClear = prevAutoClear;
+    try {
+      renderer.clearDepth();
+      renderer.render(this.scene, this.camera);
+    } finally {
+      renderer.autoClear = prevAutoClear;
+    }
   }
 }
 

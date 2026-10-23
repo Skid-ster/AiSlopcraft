@@ -71,15 +71,21 @@ waterTex.colorSpace = THREE.NoColorSpace;
 const lightVert = `
   attribute vec4 color;
   attribute vec2 aLight;
+  attribute vec3 aNormal;
   varying vec4 vColor;
   varying vec2 vUv;
   varying vec2 vLight;
+  varying vec3 vWorldNormal;
+  varying vec3 vWorldPosition;
   varying float vFogDist;
   void main() {
     vColor = color;
     vUv = uv;
     vLight = aLight;
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vec4 world = modelMatrix * vec4(position, 1.0);
+    vWorldPosition = world.xyz;
+    vWorldNormal = normalize(mat3(modelMatrix) * aNormal);
+    vec4 mv = viewMatrix * world;
     vFogDist = length(mv.xyz);
     gl_Position = projectionMatrix * mv;
   }
@@ -92,23 +98,36 @@ const lightFrag = `
   uniform float uOpacity;
   uniform float uCutout;
   uniform float uShaderStyle;
+  uniform vec3 uSunDirection;
+  uniform float uSunIntensity;
+  uniform float uTime;
+  uniform vec3 uCameraPosition;
+  uniform float uWater;
   uniform vec3 uFogColor;
   uniform float uFogNear;
   uniform float uFogFar;
   varying vec4 vColor;
   varying vec2 vUv;
   varying vec2 vLight;
+  varying vec3 vWorldNormal;
+  varying vec3 vWorldPosition;
   varying float vFogDist;
   void main() {
     vec4 tex = texture2D(map, vUv);
     if (uCutout > 0.5 && tex.a < 0.45) discard;
-    float sky = pow(clamp(vLight.x / 15.0, 0.0, 1.0), 1.35) * uSky;
-    float block = pow(clamp(vLight.y / 15.0, 0.0, 1.0), 1.25);
-    vec3 skyLight = uSkyTint * sky;
+    float sky = pow(clamp(vLight.x / 15.0, 0.0, 1.0), 1.2) * uSky;
+    float block = pow(clamp(vLight.y / 15.0, 0.0, 1.0), 1.15);
+    vec3 normal = normalize(vWorldNormal);
+    if (!gl_FrontFacing) normal = -normal;
+    float sunFace = max(dot(normal, normalize(uSunDirection)), 0.0);
+    float sunDiffuse = uSunIntensity * sunFace;
+    // Minecraft-style hemisphere fill plus directional sunlight. Sky visibility
+    // gates the sun so caves stay dark; emitted block light remains warm.
+    vec3 skyLight = uSkyTint * sky * (0.48 + 0.62 * sunDiffuse);
     vec3 torchLight = uBlockTint * block;
-    vec3 light = max(skyLight, torchLight) + min(skyLight, torchLight) * 0.2;
-    light = max(light, vec3(0.055, 0.055, 0.065));
-    vec3 rgb = tex.rgb * vColor.rgb * min(light, vec3(1.25));
+    vec3 light = max(skyLight, torchLight) + min(skyLight, torchLight) * 0.22;
+    light = max(light, vec3(0.045, 0.05, 0.065));
+    vec3 rgb = tex.rgb * vColor.rgb * min(light, vec3(1.28));
     float luminance = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
     if (uShaderStyle < 0.5) {
       // Classic: preserve the original softly lit pixel-art palette.
@@ -116,13 +135,25 @@ const lightFrag = `
       // Vibrant: richer colors and a touch more definition, without losing pixels.
       rgb = mix(vec3(luminance), rgb, 1.24);
       rgb = (rgb - 0.5) * 1.07 + 0.5;
-    } else {
+    } else if (uShaderStyle < 2.5) {
       // Cinematic: gentle cool shadows, warm highlights, and restrained contrast.
       rgb = (rgb - 0.5) * 1.10 + 0.5;
       float shadow = 1.0 - smoothstep(0.12, 0.62, luminance);
       float highlight = smoothstep(0.42, 0.95, luminance);
       rgb *= mix(vec3(1.0), vec3(0.90, 0.98, 1.10), shadow * 0.34);
       rgb *= mix(vec3(1.0), vec3(1.08, 1.02, 0.91), highlight * 0.26);
+    } else {
+      // Shader Lite: filmic contrast and physically motivated water reflections.
+      rgb = max(vec3(0.0), (rgb - 0.42) * 1.08 + 0.42);
+      if (uWater > 0.5) {
+        vec3 viewDir = normalize(uCameraPosition - vWorldPosition);
+        float fresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 3.0);
+        vec3 halfDir = normalize(normalize(uSunDirection) + viewDir);
+        float specular = pow(max(dot(normal, halfDir), 0.0), 48.0) * uSunIntensity;
+        float ripple = 0.5 + 0.5 * sin(vWorldPosition.x * 0.62 + vWorldPosition.z * 0.47 + uTime * 1.7);
+        rgb = mix(rgb, vec3(0.20, 0.48, 0.72), 0.10 + fresnel * 0.28 + ripple * 0.05);
+        rgb += vec3(0.55, 0.72, 0.92) * specular * 0.55;
+      }
     }
     float fog = smoothstep(uFogNear, uFogFar, vFogDist);
     gl_FragColor = vec4(mix(rgb, uFogColor, fog), tex.a * vColor.a * uOpacity);
@@ -141,6 +172,11 @@ function makeLightMaterial(opts = {}) {
       uOpacity: { value: opts.opacity ?? 1.0 },
       uCutout: { value: opts.cutout ? 1.0 : 0.0 },
       uShaderStyle: { value: 0.0 },
+      uSunDirection: { value: new THREE.Vector3(0.35, 0.82, 0.44).normalize() },
+      uSunIntensity: { value: 1.0 },
+      uTime: { value: 0.0 },
+      uCameraPosition: { value: new THREE.Vector3() },
+      uWater: { value: opts.water ? 1.0 : 0.0 },
       uFogColor: { value: new THREE.Color(0xc0d8ff) },
       uFogNear: { value: 55 },
       uFogFar: { value: 185 },
@@ -155,7 +191,7 @@ function makeLightMaterial(opts = {}) {
 const solidMat = makeLightMaterial();
 const cutoutMat = makeLightMaterial({ cutout: true, doubleSide: true });
 const waterMat = makeLightMaterial({
-  transparent: true, opacity: 0.82, doubleSide: true, depthWrite: false,
+  transparent: true, opacity: 0.82, doubleSide: true, depthWrite: false, water: true,
 });
 waterMat.uniforms.map.value = waterTex;
 
@@ -187,9 +223,9 @@ const game = {
   itemIconsCanvas: buildItemIcons(),
   renderDistance: Math.max(2, Math.min(12, Number(savedGame?.settings?.renderDistance) || 6)),
   keepInventory: savedGame?.settings?.keepInventory !== false,
-  shaderStyle: ['classic', 'vibrant', 'cinematic'].includes(savedGame?.settings?.shaderStyle) ? savedGame.settings.shaderStyle : 'classic',
+  shaderStyle: ['classic', 'vibrant', 'cinematic', 'shader'].includes(savedGame?.settings?.shaderStyle) ? savedGame.settings.shaderStyle : 'shader',
   setShaderStyle(style) {
-    const id = ({ classic: 0, vibrant: 1, cinematic: 2 })[style];
+    const id = ({ classic: 0, vibrant: 1, cinematic: 2, shader: 3 })[style];
     if (id === undefined) return;
     this.shaderStyle = style;
     for (const material of [solidMat, cutoutMat, waterMat]) material.uniforms.uShaderStyle.value = id;
@@ -868,10 +904,15 @@ function updateTNT(dt) {
 // ---- lighting modulation (day/night) ----
 // Shader uniform: sky-lit faces dim at night, torch-lit faces stay warm-bright.
 function applyDayLight(dayFactor) {
-  const s = 0.16 + 0.84 * dayFactor;
-  solidMat.uniforms.uSky.value = s;
-  cutoutMat.uniforms.uSky.value = s;
-  waterMat.uniforms.uSky.value = s;
+  const skyFactor = 0.16 + 0.84 * dayFactor;
+  const sunIntensity = dayFactor * (game.shaderStyle === 'shader' ? 1.15 : 1.0);
+  for (const material of [solidMat, cutoutMat, waterMat]) {
+    material.uniforms.uSky.value = skyFactor;
+    material.uniforms.uSunIntensity.value = sunIntensity;
+    material.uniforms.uSunDirection.value.copy(sky.sunDirection);
+    material.uniforms.uTime.value = game.time;
+    material.uniforms.uCameraPosition.value.copy(camera.position);
+  }
 }
 
 // ---- main loop ----
@@ -965,7 +1006,6 @@ function frame() {
     rebuildDirtyChunks();
 
     const dayFactor = sky.update(dt, camera.position);
-    applyDayLight(dayFactor);
     const head = world.getBlock(Math.floor(player.pos.x), Math.floor(player.pos.y + 1.62), Math.floor(player.pos.z));
     const underwater = head === WATER;
     if (scene.fog) {
@@ -1032,6 +1072,9 @@ function frame() {
     }
   }
 
+  // Keep day/night lighting and shader camera data in sync on both the title
+  // backdrop and active gameplay frames.
+  applyDayLight(sky.dayFactor);
   syncFogUniforms([solidMat, cutoutMat, waterMat], scene.fog);
   renderer.render(scene, camera);
   if (game.started && ui.mode !== 'title') firstPersonArm.render(renderer);

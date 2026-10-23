@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0 --port 4173",
-    "test": "node tests/world.test.mjs && node tests/ui.test.mjs && node tests/interaction.test.mjs && node tests/recipes.test.mjs && node tests/furnace.test.mjs && node tests/mobs.test.mjs && node tests/rendering.test.mjs"
+    "test": "node tests/world.test.mjs && node tests/ui.test.mjs && node tests/interaction.test.mjs && node tests/recipes.test.mjs && node tests/furnace.test.mjs && node tests/mobs.test.mjs && node tests/rendering.test.mjs && node tests/arm.test.mjs"
   },
   "dependencies": {
     "three": "^0.160.1"
