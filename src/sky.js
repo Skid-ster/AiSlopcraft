@@ -20,6 +20,7 @@ export class Sky {
     this.camera = camera;
     this.time = 0.30; // start mid-morning (0.25 = dawn, 0.50 = noon)
     this.dayFactor = 1;
+    this.sunDirection = new THREE.Vector3(1, 0, 0);
 
     // A camera-following, vertex-coloured sky dome replaces the flat color-only
     // backdrop with a gentle horizon-to-zenith gradient, while retaining the
@@ -169,6 +170,7 @@ export class Sky {
 
     const sunAngle = (this.time - 0.25) * Math.PI * 2;
     const sunDir = new THREE.Vector3(Math.cos(sunAngle), Math.sin(sunAngle), 0.18).normalize();
+    this.sunDirection.copy(sunDir);
 
     const elev = sunDir.y;
     this.dayFactor = Math.max(0, Math.min(1, (elev + 0.12) / 0.32));

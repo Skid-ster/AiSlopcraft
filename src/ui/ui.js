@@ -94,6 +94,12 @@ export class UI {
     const bobbing = this.game.player.viewBobbing !== false;
     const keepInv = this.game.keepInventory !== false;
     const shaderStyle = this.game.shaderStyle || 'classic';
+    const shaderDescriptions = {
+      classic: 'Classic pixel lighting, true to the original look.',
+      vibrant: 'Richer colors and a little extra contrast.',
+      cinematic: 'Cool shadows with a gentle, warm highlight grade.',
+      shader: 'Directional sun, contact shading, animated water glints, and atmospheric fog.',
+    };
     div.innerHTML = `
       <div class="panel options-panel">
         <header class="options-heading">
@@ -104,11 +110,12 @@ export class UI {
         <section class="settings-section">
           <div class="settings-section-title"><span class="settings-icon">✦</span><div><b>Graphics</b><small>Shape the look of your world</small></div></div>
           <label class="setting-card shader-setting" for="opt-shader">
-            <span class="setting-copy"><b>Shader style</b><small id="opt-shader-desc">Classic pixel lighting, true to the original look.</small></span>
+            <span class="setting-copy"><b>Shader style</b><small id="opt-shader-desc">${shaderDescriptions[shaderStyle] || shaderDescriptions.classic}</small></span>
             <select id="opt-shader" aria-label="Shader style">
               <option value="classic" ${shaderStyle === 'classic' ? 'selected' : ''}>Classic</option>
               <option value="vibrant" ${shaderStyle === 'vibrant' ? 'selected' : ''}>Vibrant</option>
               <option value="cinematic" ${shaderStyle === 'cinematic' ? 'selected' : ''}>Cinematic</option>
+              <option value="shader" ${shaderStyle === 'shader' ? 'selected' : ''}>Shader Lite</option>
             </select>
           </label>
           <div class="setting-card range-setting">
@@ -139,11 +146,6 @@ export class UI {
       </div>
     `;
     this.root.appendChild(div);
-    const shaderDescriptions = {
-      classic: 'Classic pixel lighting, true to the original look.',
-      vibrant: 'Richer colors and a little extra contrast.',
-      cinematic: 'Cool shadows with a gentle, warm highlight grade.',
-    };
     div.querySelector('#opt-shader').addEventListener('change', e => {
       this.game.audio.click();
       this.game.setShaderStyle?.(e.target.value);
