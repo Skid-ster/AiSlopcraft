@@ -143,7 +143,22 @@ waterMat.uniforms.map.value = waterTex;
 
 // ---- game state ----
 const SEED = new URLSearchParams(location.search).get('seed') || 'Beta 1.7.3';
+const SAVE_KEY = `aislopcraft:world:${SEED}`;
+function readSave() {
+  try { return JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); } catch { return null; }
+}
+const savedGame = readSave();
 const world = new World(SEED, scene);
+if (Array.isArray(savedGame?.edits)) {
+  for (const entry of savedGame.edits) {
+    if (!Array.isArray(entry) || entry.length < 4) continue;
+    const [key, id, meta = 0] = entry;
+    if (typeof key === 'string' && Number.isFinite(+id)) {
+      world.edits.set(key, id);
+      if (meta) world.metaEdits.set(key, meta);
+    }
+  }
+}
 const player = new Player(world, camera, canvas);
 const audio = new Audio();
 const sky = new Sky(scene, camera);
@@ -152,7 +167,8 @@ const game = {
   world, player, audio, sky, mobs,
   atlasCanvas,
   itemIconsCanvas: buildItemIcons(),
-  renderDistance: 6,
+  renderDistance: Math.max(2, Math.min(12, Number(savedGame?.settings?.renderDistance) || 6)),
+  keepInventory: savedGame?.settings?.keepInventory !== false,
   started: false,
   time: 0,
   seed: SEED,
@@ -176,11 +192,44 @@ const game = {
     processChunkQueue();
     ui.setMode('game');
   },
+  saveSettings() {
+    try {
+      const previous = readSave() || {};
+      previous.settings = { ...(previous.settings || {}), renderDistance: this.renderDistance, keepInventory: this.keepInventory, sensitivity: player.sensitivity, viewBobbing: player.viewBobbing, volume: audio.volume };
+      localStorage.setItem(SAVE_KEY, JSON.stringify(previous));
+    } catch (error) { console.warn('Could not save settings', error); }
+  },
+  saveAndQuit() {
+    this.saveGame();
+    this.started = false;
+    ui.setMode('title');
+  },
+  saveGame() {
+    const payload = { version: 1, seed: SEED, edits: [...world.edits].map(([key, id]) => [key, id, world.metaEdits.get(key) || 0]),
+      settings: { renderDistance: this.renderDistance, keepInventory: this.keepInventory, sensitivity: player.sensitivity, viewBobbing: player.viewBobbing, volume: audio.volume },
+      player: { pos: player.pos.toArray(), yaw: player.yaw, pitch: player.pitch, health: player.health, inventory: player.inventory, armor: player.armor, hotbarIndex: player.hotbarIndex, stats: player.stats } };
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify(payload)); return true; }
+    catch (error) { console.warn('Could not save world', error); ui?.notify('Save failed — browser storage may be full'); return false; }
+  },
+  resetWorld() {
+    try { localStorage.removeItem(SAVE_KEY); } catch {}
+    location.reload();
+  },
   start() {
     if (this.started) return;
     this.started = true;
     const spawn = this.prepareSpawn();
     player.respawn(spawn.y, spawn.x, spawn.z);
+    const saved = readSave()?.player;
+    if (saved && Array.isArray(saved.pos) && saved.pos.length === 3 && saved.pos.every(Number.isFinite)) {
+      player.pos.fromArray(saved.pos); player.yaw = Number(saved.yaw) || 0; player.pitch = Number(saved.pitch) || 0;
+      player.health = Math.max(1, Math.min(player.maxHealth, Number(saved.health) || player.maxHealth));
+      if (Array.isArray(saved.inventory) && saved.inventory.length === 36) player.inventory = saved.inventory;
+      if (Array.isArray(saved.armor) && saved.armor.length === 4) player.armor = saved.armor;
+      player.hotbarIndex = Math.max(0, Math.min(8, Number(saved.hotbarIndex) || 0));
+      if (saved.stats && typeof saved.stats === 'object') Object.assign(player.stats, saved.stats);
+      camera.position.set(player.pos.x, player.pos.y + 1.62, player.pos.z);
+    }
     updateChunks(true);
     processChunkQueue();
     mobs.spawnInitial(player);
@@ -188,6 +237,16 @@ const game = {
 };
 const ui = new UI(game);
 game.ui = ui;
+if (savedGame?.settings) {
+  player.sensitivity = Number(savedGame.settings.sensitivity) || player.sensitivity;
+  player.viewBobbing = savedGame.settings.viewBobbing !== false;
+  if (Number.isFinite(savedGame.settings.volume)) audio.setVolume(savedGame.settings.volume);
+}
+let saveClock = 0;
+window.addEventListener('beforeunload', () => { if (game.started) game.saveGame(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && game.started && ui.mode === 'game') { game.saveGame(); ui.setMode('pause'); }
+});
 
 // ---- particles, first-person arm, target wireframe & crack overlay ----
 const particles = new ParticleManager(scene, atlasCanvas);
@@ -800,6 +859,10 @@ function frame() {
   lastT = now;
   if (dt > 0.1) dt = 0.1;
   game.time += dt;
+  if (game.started && ui.mode !== 'title') {
+    saveClock += dt;
+    if (saveClock >= 15) { game.saveGame(); saveClock = 0; }
+  }
 
   fpsCount++; fpsTimer += dt;
   if (fpsTimer >= 1) { fps = fpsCount; fpsCount = 0; fpsTimer = 0; }

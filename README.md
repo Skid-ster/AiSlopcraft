@@ -22,7 +22,7 @@ Production build: `npm run build` (output in `dist/`). Add `?seed=your-seed` to 
 - **Crafting:** 2×2 inventory recipes and 3×3 crafting-table recipes; furnace input, fuel, progress, and output slots.
 - **Farming:** hoe tilling, water-assisted farmland, crop growth, seeds, harvesting, bone meal, and growing saplings.
 - **Creatures:** wandering farm animals, hostile night mobs, zombies and skeleton sunlight damage, creeper fuses, spider movement, mob drops, melee combat, and skeleton arrows.
-- **Interface:** animated title screen, hotbar, health/armor/air indicators, inventory and crafting, furnace, pause/death screens, options, item tooltips, and F3 debug view.
+- **Interface:** animated title screen, hotbar, health/armor/air indicators, inventory and crafting, furnace, pause/death screens, options, item tooltips, and F3 debug view. World edits, player inventory, position, health, and settings autosave in browser storage; each seed has its own save. Switching seeds in the URL starts a separate world.
 
 ## Controls
 

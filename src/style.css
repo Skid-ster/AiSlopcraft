@@ -554,3 +554,32 @@ html, body {
   .bubble { font-size: 15px; }
   .hint { font-size: 11px; white-space: normal; text-align: center; width: 92%; }
 }
+
+/* Finishing touches: keyboard focus, compact screens, and reduced-motion support. */
+#ui button:focus-visible, #ui input:focus-visible, #ui .slot:focus-visible {
+  outline: 3px solid #ffe66b;
+  outline-offset: 3px;
+}
+.btn { transition: filter 100ms ease, transform 100ms ease; }
+.btn:hover { filter: brightness(1.08); }
+.btn:active { transform: translateY(1px); }
+.title-main { line-height: 1.05; }
+
+@media (max-width: 640px) {
+  .title-main { font-size: clamp(42px, 12vw, 68px); }
+  .title-sub { font-size: 15px; }
+  .splash { right: -24px; bottom: -24px; font-size: 14px; }
+  .btn, .btn-big { min-width: min(86vw, 400px); }
+  .title-foot { right: 12px; left: 12px; text-align: center; font-size: 10px; }
+  .hotbar { bottom: max(8px, env(safe-area-inset-bottom)); gap: 1px; padding: 2px; }
+  .hotbar-slot { width: clamp(32px, 10vw, 50px); height: clamp(36px, 10vw, 50px); }
+  .hotbar-slot canvas { width: 82%; height: 82%; }
+  .status-bars { width: min(94vw, 468px); bottom: 64px; }
+  .heart { font-size: clamp(15px, 4vw, 22px); }
+  .inv-panel, .options-panel, .furnace-panel { max-width: 96vw; max-height: 92vh; overflow: auto; }
+  .hint { width: 90vw; text-align: center; font-size: 11px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}

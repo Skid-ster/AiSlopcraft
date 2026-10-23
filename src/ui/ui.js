@@ -115,6 +115,7 @@ export class UI {
       this.game.renderDistance = +e.target.value;
       div.querySelector('#opt-rd').textContent = e.target.value;
       this.game.onRenderDistanceChange?.();
+      this.game.saveSettings?.();
     });
     div.querySelector('#opt-volume').addEventListener('input', e => {
       this.game.audio.setVolume(+e.target.value / 100);
