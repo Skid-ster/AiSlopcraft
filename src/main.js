@@ -7,7 +7,8 @@ import { buildAtlas, buildItemIcons } from './world/textures.js';
 import {
   AIR, WATER, LAVA, TORCH, CRAFTING_TABLE, FURNACE, SAND, GRAVEL, LEAVES, GRASS, DIRT,
   LOG, GLASS, getBlock, breakTime, canHarvest, ITEMS, itemName, isBlock, STONE, COBBLE,
-  TILES, SAPLING, TALL_GRASS, PLANKS, TNT
+  TILES, SAPLING, TALL_GRASS, PLANKS, TNT, WOOD_DOOR, IRON_DOOR,
+  BED_BLOCK, CAKE_BLOCK, placeableBlockForItem
 } from './world/blocks.js';
 import { Player } from './entities/player.js';
 import { advanceEating } from './entities/eating.js';
@@ -68,28 +69,62 @@ waterTex.colorSpace = THREE.NoColorSpace;
 // ---- lighting shader: sky light dims at night, torch light stays warm ----
 const lightVert = `
   attribute vec4 color;
+  attribute vec2 aLight;
   varying vec4 vColor;
   varying vec2 vUv;
+  varying vec2 vLight;
+  varying float vFogDist;
   void main() {
     vColor = color;
     vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vLight = aLight;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vFogDist = length(mv.xyz);
+    gl_Position = projectionMatrix * mv;
   }
 `;
 const lightFrag = `
   uniform sampler2D map;
   uniform float uSky;
+  uniform vec3 uSkyTint;
   uniform vec3 uBlockTint;
   uniform float uOpacity;
   uniform float uCutout;
+  uniform float uShaderStyle;
+  uniform vec3 uFogColor;
+  uniform float uFogNear;
+  uniform float uFogFar;
   varying vec4 vColor;
   varying vec2 vUv;
+  varying vec2 vLight;
+  varying float vFogDist;
   void main() {
     vec4 tex = texture2D(map, vUv);
     if (uCutout > 0.5 && tex.a < 0.45) discard;
-    vec3 light = vColor.rgb * uSky + vec3(vColor.a) * uBlockTint;
-    light = min(light, vec3(1.35));
-    gl_FragColor = vec4(tex.rgb * light, tex.a * uOpacity);
+    float sky = pow(clamp(vLight.x / 15.0, 0.0, 1.0), 1.35) * uSky;
+    float block = pow(clamp(vLight.y / 15.0, 0.0, 1.0), 1.25);
+    vec3 skyLight = uSkyTint * sky;
+    vec3 torchLight = uBlockTint * block;
+    vec3 light = max(skyLight, torchLight) + min(skyLight, torchLight) * 0.2;
+    light = max(light, vec3(0.055, 0.055, 0.065));
+    vec3 rgb = tex.rgb * vColor.rgb * min(light, vec3(1.25));
+    float luminance = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+    if (uShaderStyle < 0.5) {
+      // Classic: preserve the original softly lit pixel-art palette.
+    } else if (uShaderStyle < 1.5) {
+      // Vibrant: richer colors and a touch more definition, without losing pixels.
+      rgb = mix(vec3(luminance), rgb, 1.24);
+      rgb = (rgb - 0.5) * 1.07 + 0.5;
+    } else {
+      // Cinematic: gentle cool shadows, warm highlights, and restrained contrast.
+      rgb = (rgb - 0.5) * 1.10 + 0.5;
+      float shadow = 1.0 - smoothstep(0.12, 0.62, luminance);
+      float highlight = smoothstep(0.42, 0.95, luminance);
+      rgb *= mix(vec3(1.0), vec3(0.90, 0.98, 1.10), shadow * 0.34);
+      rgb *= mix(vec3(1.0), vec3(1.08, 1.02, 0.91), highlight * 0.26);
+    }
+    float fog = smoothstep(uFogNear, uFogFar, vFogDist);
+    gl_FragColor = vec4(mix(rgb, uFogColor, fog), tex.a * vColor.a * uOpacity);
   }
 `;
 
@@ -100,9 +135,14 @@ function makeLightMaterial(opts = {}) {
     uniforms: {
       map: { value: atlasTex },
       uSky: { value: 1.0 },
-      uBlockTint: { value: new THREE.Color(1.0, 0.82, 0.62) },
+      uSkyTint: { value: new THREE.Color(1, 1, 1) },
+      uBlockTint: { value: new THREE.Color(1.08, 0.93, 0.72) },
       uOpacity: { value: opts.opacity ?? 1.0 },
       uCutout: { value: opts.cutout ? 1.0 : 0.0 },
+      uShaderStyle: { value: 0.0 },
+      uFogColor: { value: new THREE.Color(0xc0d8ff) },
+      uFogNear: { value: 55 },
+      uFogFar: { value: 185 },
     },
     transparent: !!opts.transparent,
     alphaTest: 0,
@@ -120,7 +160,22 @@ waterMat.uniforms.map.value = waterTex;
 
 // ---- game state ----
 const SEED = new URLSearchParams(location.search).get('seed') || 'Beta 1.7.3';
+const SAVE_KEY = `aislopcraft:world:${SEED}`;
+function readSave() {
+  try { return JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); } catch { return null; }
+}
+const savedGame = readSave();
 const world = new World(SEED, scene);
+if (Array.isArray(savedGame?.edits)) {
+  for (const entry of savedGame.edits) {
+    if (!Array.isArray(entry) || entry.length < 4) continue;
+    const [key, id, meta = 0] = entry;
+    if (typeof key === 'string' && Number.isFinite(+id)) {
+      world.edits.set(key, id);
+      if (meta) world.metaEdits.set(key, meta);
+    }
+  }
+}
 const player = new Player(world, camera, canvas);
 const audio = new Audio();
 const sky = new Sky(scene, camera);
@@ -129,7 +184,15 @@ const game = {
   world, player, audio, sky, mobs,
   atlasCanvas,
   itemIconsCanvas: buildItemIcons(),
-  renderDistance: 6,
+  renderDistance: Math.max(2, Math.min(12, Number(savedGame?.settings?.renderDistance) || 6)),
+  keepInventory: savedGame?.settings?.keepInventory !== false,
+  shaderStyle: ['classic', 'vibrant', 'cinematic'].includes(savedGame?.settings?.shaderStyle) ? savedGame.settings.shaderStyle : 'classic',
+  setShaderStyle(style) {
+    const id = ({ classic: 0, vibrant: 1, cinematic: 2 })[style];
+    if (id === undefined) return;
+    this.shaderStyle = style;
+    for (const material of [solidMat, cutoutMat, waterMat]) material.uniforms.uShaderStyle.value = id;
+  },
   started: false,
   time: 0,
   seed: SEED,
@@ -153,11 +216,44 @@ const game = {
     processChunkQueue();
     ui.setMode('game');
   },
+  saveSettings() {
+    try {
+      const previous = readSave() || {};
+      previous.settings = { ...(previous.settings || {}), renderDistance: this.renderDistance, keepInventory: this.keepInventory, sensitivity: player.sensitivity, viewBobbing: player.viewBobbing, volume: audio.volume, shaderStyle: this.shaderStyle };
+      localStorage.setItem(SAVE_KEY, JSON.stringify(previous));
+    } catch (error) { console.warn('Could not save settings', error); }
+  },
+  saveAndQuit() {
+    this.saveGame();
+    this.started = false;
+    ui.setMode('title');
+  },
+  saveGame() {
+    const payload = { version: 1, seed: SEED, edits: [...world.edits].map(([key, id]) => [key, id, world.metaEdits.get(key) || 0]),
+      settings: { renderDistance: this.renderDistance, keepInventory: this.keepInventory, sensitivity: player.sensitivity, viewBobbing: player.viewBobbing, volume: audio.volume, shaderStyle: this.shaderStyle },
+      player: { pos: player.pos.toArray(), yaw: player.yaw, pitch: player.pitch, health: player.health, inventory: player.inventory, armor: player.armor, hotbarIndex: player.hotbarIndex, stats: player.stats } };
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify(payload)); return true; }
+    catch (error) { console.warn('Could not save world', error); ui?.notify('Save failed — browser storage may be full'); return false; }
+  },
+  resetWorld() {
+    try { localStorage.removeItem(SAVE_KEY); } catch {}
+    location.reload();
+  },
   start() {
     if (this.started) return;
     this.started = true;
     const spawn = this.prepareSpawn();
     player.respawn(spawn.y, spawn.x, spawn.z);
+    const saved = readSave()?.player;
+    if (saved && Array.isArray(saved.pos) && saved.pos.length === 3 && saved.pos.every(Number.isFinite)) {
+      player.pos.fromArray(saved.pos); player.yaw = Number(saved.yaw) || 0; player.pitch = Number(saved.pitch) || 0;
+      player.health = Math.max(1, Math.min(player.maxHealth, Number(saved.health) || player.maxHealth));
+      if (Array.isArray(saved.inventory) && saved.inventory.length === 36) player.inventory = saved.inventory;
+      if (Array.isArray(saved.armor) && saved.armor.length === 4) player.armor = saved.armor;
+      player.hotbarIndex = Math.max(0, Math.min(8, Number(saved.hotbarIndex) || 0));
+      if (saved.stats && typeof saved.stats === 'object') Object.assign(player.stats, saved.stats);
+      camera.position.set(player.pos.x, player.pos.y + 1.62, player.pos.z);
+    }
     updateChunks(true);
     processChunkQueue();
     mobs.spawnInitial(player);
@@ -165,6 +261,17 @@ const game = {
 };
 const ui = new UI(game);
 game.ui = ui;
+game.setShaderStyle(game.shaderStyle);
+if (savedGame?.settings) {
+  player.sensitivity = Number(savedGame.settings.sensitivity) || player.sensitivity;
+  player.viewBobbing = savedGame.settings.viewBobbing !== false;
+  if (Number.isFinite(savedGame.settings.volume)) audio.setVolume(savedGame.settings.volume);
+}
+let saveClock = 0;
+window.addEventListener('beforeunload', () => { if (game.started) game.saveGame(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && game.started && ui.mode === 'game') { game.saveGame(); ui.setMode('pause'); }
+});
 
 // ---- particles, first-person arm, target wireframe & crack overlay ----
 const particles = new ParticleManager(scene, atlasCanvas);
@@ -474,7 +581,8 @@ function tryPlaceBlock() {
 
   eating = null;
   const hit = player.raycast(world, 5);
-  if (!hit || !isBlock(held.id)) return;
+  const placeId = placeableBlockForItem(held.id);
+  if (!hit || !placeId) return;
 
   // Replaceable blocks: if hit is TALL_GRASS, SAPLING, WATER, or LAVA, place directly at hit
   const hitBlockId = world.getBlock(hit.x, hit.y, hit.z);
@@ -492,9 +600,18 @@ function tryPlaceBlock() {
   const existing = world.getBlock(px, py, pz);
   if (existing !== AIR && !getBlock(existing).liquid && !isReplaceable) return;
 
-  world.setBlock(px, py, pz, held.id);
+  // Orient interactable blocks toward the player; item forms map to their block IDs.
+  let meta = 0;
+  if (placeId === WOOD_DOOR || placeId === IRON_DOOR) {
+    const fx = -Math.sin(player.yaw), fz = -Math.cos(player.yaw);
+    meta = Math.abs(fz) >= Math.abs(fx) ? (fz > 0 ? 1 : 0) : (fx > 0 ? 3 : 2);
+  } else if (placeId === FURNACE || placeId === CRAFTING_TABLE) {
+    const fx = -Math.sin(player.yaw), fz = -Math.cos(player.yaw);
+    meta = Math.abs(fz) >= Math.abs(fx) ? (fz > 0 ? 1 : 0) : (fx > 0 ? 3 : 2);
+  }
+  world.setBlock(px, py, pz, placeId, meta);
   player.consumeHeld();
-  audio.place(held.id);
+  audio.place(placeId);
   player.stats.blocksPlaced++;
   firstPersonArm.triggerPlaceSwing();
   ui.refresh();
@@ -715,6 +832,12 @@ document.addEventListener('mousedown', (e) => {
         openFurnace(hit.x, hit.y, hit.z);
         return;
       }
+      if (id === WOOD_DOOR) {
+        const meta = world.getMeta(hit.x, hit.y, hit.z);
+        world.setMeta(hit.x, hit.y, hit.z, meta ^ 4);
+        audio.door((meta & 4) === 0);
+        return;
+      }
       // flint & steel ignites TNT (beta behavior)
       const held = player.heldStack;
       if (id === TNT && held && held.id === 259) {
@@ -761,6 +884,10 @@ function frame() {
   lastT = now;
   if (dt > 0.1) dt = 0.1;
   game.time += dt;
+  if (game.started && ui.mode !== 'title') {
+    saveClock += dt;
+    if (saveClock >= 15) { game.saveGame(); saveClock = 0; }
+  }
 
   fpsCount++; fpsTimer += dt;
   if (fpsTimer >= 1) { fps = fpsCount; fpsCount = 0; fpsTimer = 0; }
@@ -840,10 +967,16 @@ function frame() {
     applyDayLight(dayFactor);
     const head = world.getBlock(Math.floor(player.pos.x), Math.floor(player.pos.y + 1.62), Math.floor(player.pos.z));
     const underwater = head === WATER;
-    if (underwater && scene.fog) {
-      scene.fog.color.set(0x174a9b);
-      scene.fog.near = 0.1;
-      scene.fog.far = 30;
+    if (scene.fog) {
+      if (underwater) {
+        scene.fog.color.set(0x174a9b);
+        scene.fog.near = 0.1;
+        scene.fog.far = 30;
+      } else {
+        // Sky.update sets the proper Beta day/night fog each frame; never leave stale water fog behind.
+        scene.fog.near = 55;
+        scene.fog.far = Math.max(70, game.renderDistance * 16 - 4);
+      }
     }
     // water texture scroll (beta animated water)
     waterTex.offset.y = (game.time * 0.012) % 1;
@@ -898,7 +1031,9 @@ function frame() {
     }
   }
 
+  applyFogUniforms();
   renderer.render(scene, camera);
+  if (game.started && ui.mode !== 'title') firstPersonArm.render(renderer);
 }
 
 frame();

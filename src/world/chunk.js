@@ -1,10 +1,5 @@
 // Chunk storage: 16x16x128 (beta world height limit is 128!)
-import {
-  AIR, STONE, GRASS, DIRT, SAND, WATER, LAVA, BEDROCK, GRAVEL, SANDSTONE,
-  LOG, LEAVES, SNOW, ICE, CACTUS, SUGARCANE, TALL_GRASS, FLOWER_RED, FLOWER_YELLOW,
-  PUMPKIN, CLAY, COAL_ORE, IRON_ORE, GOLD_ORE, DIAMOND_ORE, REDSTONE_ORE, LAPIS_ORE,
-  MUSHROOM_BROWN, MUSHROOM_RED, getBlock
-} from './blocks.js';
+import { AIR, getBlock } from './blocks.js';
 
 export const CH = 16;
 export const WORLD_H = 128;
@@ -14,6 +9,7 @@ export class Chunk {
   constructor(cx, cz) {
     this.cx = cx; this.cz = cz;
     this.blocks = new Uint8Array(CH * WORLD_H * CH);
+    this.meta = new Uint8Array(CH * WORLD_H * CH);
     this.skyLight = new Uint8Array(CH * WORLD_H * CH);
     this.blockLight = new Uint8Array(CH * WORLD_H * CH);
     this.dirty = true;
@@ -26,14 +22,25 @@ export class Chunk {
     if (y < 0 || y >= WORLD_H) return AIR;
     return this.blocks[this.idx(x, y, z)];
   }
-  set(x, y, z, id) {
+  set(x, y, z, id, meta = 0) {
     if (y < 0 || y >= WORLD_H) return;
-    this.blocks[this.idx(x, y, z)] = id;
+    const i = this.idx(x, y, z);
+    this.blocks[i] = id;
+    this.meta[i] = meta;
+    this.dirty = true;
+  }
+  getMeta(x, y, z) {
+    if (y < 0 || y >= WORLD_H) return 0;
+    return this.meta[this.idx(x, y, z)];
+  }
+  setMeta(x, y, z, meta) {
+    if (y < 0 || y >= WORLD_H) return;
+    this.meta[this.idx(x, y, z)] = meta;
     this.dirty = true;
   }
   getLight(x, y, z) {
     if (y < 0) return 0;
-    if (y >= WORLD_H) return 15;
+    if (y >= WORLD_H) return 0xf0;
     const i = this.idx(x, y, z);
     return (this.skyLight[i] << 4) | this.blockLight[i];
   }
