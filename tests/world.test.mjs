@@ -50,6 +50,12 @@ check('mesh carries per-vertex sky/block light attributes', built.solid.light.le
 check('transparent water has dedicated standalone-texture UVs', built.water.uv.length === (built.water.pos.length / 3) * 2);
 const mesh = built.makeMesh(built.solid, new THREE.MeshBasicMaterial());
 check('makeMesh returns mesh', !!mesh);
+check('render mesh exposes aligned aLight shader attribute',
+  mesh?.geometry.getAttribute('aLight')?.count === mesh?.geometry.getAttribute('position')?.count &&
+  mesh?.geometry.getAttribute('aLight')?.itemSize === 2);
+check('mesh shader light data matches the calculated per-vertex lighting',
+  mesh?.geometry.getAttribute('aLight')?.array.length === built.solid.light.length &&
+  mesh?.geometry.getAttribute('aLight')?.array[0] === built.solid.light[0]);
 
 // mining rules (beta values)
 check('stone by hand ≈ 7.9s', Math.abs(breakTime(STONE, null) - 7.9) < 1.2);
