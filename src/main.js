@@ -19,6 +19,7 @@ import { Sky } from './sky.js';
 import { createFurnaceState, tickFurnace, interactWithFurnaceSlot } from './ui/furnace.js';
 import { ParticleManager } from './particles.js';
 import { FirstPersonArm } from './arm.js';
+import { syncFogUniforms } from './rendering.js';
 
 const canvas = document.getElementById('game-canvas');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
@@ -1031,7 +1032,7 @@ function frame() {
     }
   }
 
-  applyFogUniforms();
+  syncFogUniforms([solidMat, cutoutMat, waterMat], scene.fog);
   renderer.render(scene, camera);
   if (game.started && ui.mode !== 'title') firstPersonArm.render(renderer);
 }
