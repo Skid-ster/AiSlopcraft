@@ -90,6 +90,7 @@ const lightFrag = `
   uniform vec3 uBlockTint;
   uniform float uOpacity;
   uniform float uCutout;
+  uniform float uShaderStyle;
   uniform vec3 uFogColor;
   uniform float uFogNear;
   uniform float uFogFar;
@@ -107,6 +108,21 @@ const lightFrag = `
     vec3 light = max(skyLight, torchLight) + min(skyLight, torchLight) * 0.2;
     light = max(light, vec3(0.055, 0.055, 0.065));
     vec3 rgb = tex.rgb * vColor.rgb * min(light, vec3(1.25));
+    float luminance = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+    if (uShaderStyle < 0.5) {
+      // Classic: preserve the original softly lit pixel-art palette.
+    } else if (uShaderStyle < 1.5) {
+      // Vibrant: richer colors and a touch more definition, without losing pixels.
+      rgb = mix(vec3(luminance), rgb, 1.24);
+      rgb = (rgb - 0.5) * 1.07 + 0.5;
+    } else {
+      // Cinematic: gentle cool shadows, warm highlights, and restrained contrast.
+      rgb = (rgb - 0.5) * 1.10 + 0.5;
+      float shadow = 1.0 - smoothstep(0.12, 0.62, luminance);
+      float highlight = smoothstep(0.42, 0.95, luminance);
+      rgb *= mix(vec3(1.0), vec3(0.90, 0.98, 1.10), shadow * 0.34);
+      rgb *= mix(vec3(1.0), vec3(1.08, 1.02, 0.91), highlight * 0.26);
+    }
     float fog = smoothstep(uFogNear, uFogFar, vFogDist);
     gl_FragColor = vec4(mix(rgb, uFogColor, fog), tex.a * vColor.a * uOpacity);
   }
@@ -123,6 +139,7 @@ function makeLightMaterial(opts = {}) {
       uBlockTint: { value: new THREE.Color(1.08, 0.93, 0.72) },
       uOpacity: { value: opts.opacity ?? 1.0 },
       uCutout: { value: opts.cutout ? 1.0 : 0.0 },
+      uShaderStyle: { value: 0.0 },
       uFogColor: { value: new THREE.Color(0xc0d8ff) },
       uFogNear: { value: 55 },
       uFogFar: { value: 185 },
@@ -169,6 +186,13 @@ const game = {
   itemIconsCanvas: buildItemIcons(),
   renderDistance: Math.max(2, Math.min(12, Number(savedGame?.settings?.renderDistance) || 6)),
   keepInventory: savedGame?.settings?.keepInventory !== false,
+  shaderStyle: ['classic', 'vibrant', 'cinematic'].includes(savedGame?.settings?.shaderStyle) ? savedGame.settings.shaderStyle : 'classic',
+  setShaderStyle(style) {
+    const id = ({ classic: 0, vibrant: 1, cinematic: 2 })[style];
+    if (id === undefined) return;
+    this.shaderStyle = style;
+    for (const material of [solidMat, cutoutMat, waterMat]) material.uniforms.uShaderStyle.value = id;
+  },
   started: false,
   time: 0,
   seed: SEED,
@@ -195,7 +219,7 @@ const game = {
   saveSettings() {
     try {
       const previous = readSave() || {};
-      previous.settings = { ...(previous.settings || {}), renderDistance: this.renderDistance, keepInventory: this.keepInventory, sensitivity: player.sensitivity, viewBobbing: player.viewBobbing, volume: audio.volume };
+      previous.settings = { ...(previous.settings || {}), renderDistance: this.renderDistance, keepInventory: this.keepInventory, sensitivity: player.sensitivity, viewBobbing: player.viewBobbing, volume: audio.volume, shaderStyle: this.shaderStyle };
       localStorage.setItem(SAVE_KEY, JSON.stringify(previous));
     } catch (error) { console.warn('Could not save settings', error); }
   },
@@ -206,7 +230,7 @@ const game = {
   },
   saveGame() {
     const payload = { version: 1, seed: SEED, edits: [...world.edits].map(([key, id]) => [key, id, world.metaEdits.get(key) || 0]),
-      settings: { renderDistance: this.renderDistance, keepInventory: this.keepInventory, sensitivity: player.sensitivity, viewBobbing: player.viewBobbing, volume: audio.volume },
+      settings: { renderDistance: this.renderDistance, keepInventory: this.keepInventory, sensitivity: player.sensitivity, viewBobbing: player.viewBobbing, volume: audio.volume, shaderStyle: this.shaderStyle },
       player: { pos: player.pos.toArray(), yaw: player.yaw, pitch: player.pitch, health: player.health, inventory: player.inventory, armor: player.armor, hotbarIndex: player.hotbarIndex, stats: player.stats } };
     try { localStorage.setItem(SAVE_KEY, JSON.stringify(payload)); return true; }
     catch (error) { console.warn('Could not save world', error); ui?.notify('Save failed — browser storage may be full'); return false; }
@@ -237,6 +261,7 @@ const game = {
 };
 const ui = new UI(game);
 game.ui = ui;
+game.setShaderStyle(game.shaderStyle);
 if (savedGame?.settings) {
   player.sensitivity = Number(savedGame.settings.sensitivity) || player.sensitivity;
   player.viewBobbing = savedGame.settings.viewBobbing !== false;

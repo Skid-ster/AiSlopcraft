@@ -93,24 +93,63 @@ export class UI {
     div.id = 'options-screen';
     const bobbing = this.game.player.viewBobbing !== false;
     const keepInv = this.game.keepInventory !== false;
+    const shaderStyle = this.game.shaderStyle || 'classic';
     div.innerHTML = `
       <div class="panel options-panel">
-        <h2>Options</h2>
-        <label>Render Distance: <span id="opt-rd">${this.game.renderDistance}</span> chunks
-          <input type="range" min="2" max="12" value="${this.game.renderDistance}" id="opt-render"></label>
-        <label>Sound Volume: <span id="opt-vol">${Math.round(this.game.audio.volume * 100)}</span>%
-          <input type="range" min="0" max="100" value="${Math.round(this.game.audio.volume * 100)}" id="opt-volume"></label>
-        <label>Mouse Sensitivity: <span id="opt-sens">${Math.round(this.game.player.sensitivity * 10000)}</span>
-          <input type="range" min="5" max="80" value="${Math.round(this.game.player.sensitivity * 10000)}" id="opt-sens-in"></label>
-        <div class="options-toggles">
-          <button class="btn btn-half" id="opt-bob">View Bobbing: ${bobbing ? 'ON' : 'OFF'}</button>
-          <button class="btn btn-half" id="opt-keepinv">Keep Inventory: ${keepInv ? 'ON' : 'OFF'}</button>
-        </div>
-        ${this.game.resetWorld ? '<button class="btn btn-danger" id="opt-reset">Reset Saved World</button>' : ''}
-        <button class="btn" id="opt-done">Done</button>
+        <header class="options-heading">
+          <div class="options-eyebrow">WORLD CONFIGURATION</div>
+          <h2>Settings</h2>
+          <p>Make your world feel just right.</p>
+        </header>
+        <section class="settings-section">
+          <div class="settings-section-title"><span class="settings-icon">✦</span><div><b>Graphics</b><small>Shape the look of your world</small></div></div>
+          <label class="setting-card shader-setting" for="opt-shader">
+            <span class="setting-copy"><b>Shader style</b><small id="opt-shader-desc">Classic pixel lighting, true to the original look.</small></span>
+            <select id="opt-shader" aria-label="Shader style">
+              <option value="classic" ${shaderStyle === 'classic' ? 'selected' : ''}>Classic</option>
+              <option value="vibrant" ${shaderStyle === 'vibrant' ? 'selected' : ''}>Vibrant</option>
+              <option value="cinematic" ${shaderStyle === 'cinematic' ? 'selected' : ''}>Cinematic</option>
+            </select>
+          </label>
+          <div class="setting-card range-setting">
+            <label for="opt-render"><span class="setting-copy"><b>Render distance</b><small>How far the landscape is drawn</small></span><span class="setting-value"><strong id="opt-rd">${this.game.renderDistance}</strong><small>chunks</small></span></label>
+            <input type="range" min="2" max="12" value="${this.game.renderDistance}" id="opt-render" aria-label="Render distance">
+            <div class="range-ends"><span>Near · faster</span><span>Far · richer view</span></div>
+          </div>
+        </section>
+        <section class="settings-section">
+          <div class="settings-section-title"><span class="settings-icon">♫</span><div><b>Audio & controls</b><small>Fine-tune your adventure</small></div></div>
+          <div class="setting-card range-setting">
+            <label for="opt-volume"><span class="setting-copy"><b>Sound volume</b><small>Game sounds and ambience</small></span><span class="setting-value"><strong id="opt-vol">${Math.round(this.game.audio.volume * 100)}</strong><small>%</small></span></label>
+            <input type="range" min="0" max="100" value="${Math.round(this.game.audio.volume * 100)}" id="opt-volume" aria-label="Sound volume">
+          </div>
+          <div class="setting-card range-setting">
+            <label for="opt-sens-in"><span class="setting-copy"><b>Mouse sensitivity</b><small>How quickly the camera turns</small></span><span class="setting-value"><strong id="opt-sens">${Math.round(this.game.player.sensitivity * 10000)}</strong><small>%</small></span></label>
+            <input type="range" min="5" max="80" value="${Math.round(this.game.player.sensitivity * 10000)}" id="opt-sens-in" aria-label="Mouse sensitivity">
+          </div>
+          <div class="options-toggles">
+            <button class="toggle-card" id="opt-bob"><span><b>View bobbing</b><small>Subtle movement while walking</small></span><i>${bobbing ? 'ON' : 'OFF'}</i></button>
+            <button class="toggle-card" id="opt-keepinv"><span><b>Keep inventory</b><small>Keep items when you fall</small></span><i>${keepInv ? 'ON' : 'OFF'}</i></button>
+          </div>
+        </section>
+        <footer class="options-footer">
+          ${this.game.resetWorld ? '<button class="btn btn-danger" id="opt-reset">Reset saved world</button>' : ''}
+          <button class="btn options-done" id="opt-done">Done <span>↵</span></button>
+        </footer>
       </div>
     `;
     this.root.appendChild(div);
+    const shaderDescriptions = {
+      classic: 'Classic pixel lighting, true to the original look.',
+      vibrant: 'Richer colors and a little extra contrast.',
+      cinematic: 'Cool shadows with a gentle, warm highlight grade.',
+    };
+    div.querySelector('#opt-shader').addEventListener('change', e => {
+      this.game.audio.click();
+      this.game.setShaderStyle?.(e.target.value);
+      div.querySelector('#opt-shader-desc').textContent = shaderDescriptions[e.target.value] || shaderDescriptions.classic;
+      this.game.saveSettings?.();
+    });
     div.querySelector('#opt-render').addEventListener('input', e => {
       this.game.renderDistance = +e.target.value;
       div.querySelector('#opt-rd').textContent = e.target.value;
@@ -130,13 +169,13 @@ export class UI {
     div.querySelector('#opt-bob').addEventListener('click', e => {
       this.game.audio.click();
       this.game.player.viewBobbing = !(this.game.player.viewBobbing !== false);
-      e.target.textContent = `View Bobbing: ${this.game.player.viewBobbing ? 'ON' : 'OFF'}`;
+      e.target.querySelector('i').textContent = this.game.player.viewBobbing ? 'ON' : 'OFF';
       this.game.saveSettings?.();
     });
     div.querySelector('#opt-keepinv').addEventListener('click', e => {
       this.game.audio.click();
       this.game.keepInventory = !(this.game.keepInventory !== false);
-      e.target.textContent = `Keep Inventory: ${this.game.keepInventory ? 'ON' : 'OFF'}`;
+      e.target.querySelector('i').textContent = this.game.keepInventory ? 'ON' : 'OFF';
       this.game.saveSettings?.();
     });
     const resetBtn = div.querySelector('#opt-reset');

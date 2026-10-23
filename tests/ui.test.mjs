@@ -54,6 +54,8 @@ const player = {
 };
 const game = {
   renderDistance: 6,
+  shaderStyle: 'classic',
+  setShaderStyle(style) { this.shaderStyle = style; },
   audio: {
     volume: 0.5,
     init: () => calls.push(['audio.init']),
@@ -80,6 +82,11 @@ try {
   btn('btn-options').click();
   check('Options button opens options screen', !!btn('options-screen'));
   check('options sliders present', !!btn('opt-render') && !!btn('opt-volume') && !!btn('opt-sens-in'));
+  check('shader style choices are available', ['classic', 'vibrant', 'cinematic'].every(value =>
+    [...btn('opt-shader').options].some(option => option.value === value)));
+  btn('opt-shader').value = 'cinematic';
+  btn('opt-shader').dispatchEvent(new dom.window.Event('change'));
+  check('shader selection applies live to the game renderer', game.shaderStyle === 'cinematic');
   btn('opt-render').value = '8';
   btn('opt-render').dispatchEvent(new dom.window.Event('input'));
   check('render distance slider applies', game.renderDistance === 8);
