@@ -2,7 +2,11 @@
 // (per-face shading + per-vertex light level + biome tint).
 import * as THREE from 'three';
 import { CH, WORLD_H } from './chunk.js';
-import { getBlock, AIR, WATER, LAVA, TILES, LEAVES, GLASS, ICE, CACTUS, TORCH, RAIL, LADDER, SNOW, COBWEB, SAPLING, TALL_GRASS, FLOWER_RED, FLOWER_YELLOW, MUSHROOM_BROWN, MUSHROOM_RED, SUGARCANE } from './blocks.js';
+import {
+  getBlock, AIR, WATER, LAVA, TILES, LEAVES, ICE, CACTUS, TORCH, REDSTONE_TORCH,
+  LADDER, SNOW, CROPS, FARMLAND, CHEST, CAKE_BLOCK, WOOD_DOOR, IRON_DOOR,
+  FURNACE, FURNACE_LIT, PUMPKIN, JACK_O_LANTERN,
+} from './blocks.js';
 
 // Face shade factors (classic Minecraft)
 const FACE_SHADE = [1.0, 0.5, 0.8, 0.8, 0.6, 0.6];
@@ -11,57 +15,68 @@ const FACE_SHADE = [1.0, 0.5, 0.8, 0.8, 0.6, 0.6];
 const FACES = [
   { // +Y (top)
     dir: [0, 1, 0], shade: 1.0, tile: 0,
-    corners: [[0, 1, 1, 0, 1], [1, 1, 1, 1, 1], [1, 1, 0, 1, 0], [0, 1, 0, 0, 0]],
+    corners: [[0, 1, 1], [1, 1, 1], [1, 1, 0], [0, 1, 0]],
   },
   { // -Y (bottom)
     dir: [0, -1, 0], shade: 0.5, tile: 1,
-    corners: [[0, 0, 0, 0, 0], [1, 0, 0, 1, 0], [1, 0, 1, 1, 1], [0, 0, 1, 0, 1]],
+    corners: [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]],
   },
   { // +Z (south)
     dir: [0, 0, 1], shade: 0.8, tile: 2,
-    corners: [[0, 0, 1, 0, 0], [1, 0, 1, 1, 0], [1, 1, 1, 1, 1], [0, 1, 1, 0, 1]],
+    corners: [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]],
   },
   { // -Z (north)
     dir: [0, 0, -1], shade: 0.8, tile: 3,
-    corners: [[1, 0, 0, 0, 0], [0, 0, 0, 1, 0], [0, 1, 0, 1, 1], [1, 1, 0, 0, 1]],
+    corners: [[1, 0, 0], [0, 0, 0], [0, 1, 0], [1, 1, 0]],
   },
   { // +X (east)
     dir: [1, 0, 0], shade: 0.6, tile: 4,
-    corners: [[1, 0, 1, 0, 0], [1, 0, 0, 1, 0], [1, 1, 0, 1, 1], [1, 1, 1, 0, 1]],
+    corners: [[1, 0, 1], [1, 0, 0], [1, 1, 0], [1, 1, 1]],
   },
   { // -X (west)
     dir: [-1, 0, 0], shade: 0.6, tile: 5,
-    corners: [[0, 0, 0, 0, 0], [0, 0, 1, 1, 0], [0, 1, 1, 1, 1], [0, 1, 0, 0, 1]],
+    corners: [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]],
   },
 ];
 
 const ATLAS_COLS = 16;
 
-function tileUV(tile) {
+function tileUV(tile, uMin = 0, vMin = 0, uMax = 1, vMax = 1) {
   const tx = tile % ATLAS_COLS, ty = Math.floor(tile / ATLAS_COLS);
   const s = 1 / ATLAS_COLS;
-  // small inset to avoid bleeding
-  const e = 0.0002;
-  return [tx * s + e, 1 - (ty + 1) * s + e, (tx + 1) * s - e, 1 - ty * s - e];
+  const e = 0.00025;
+  return [
+    (tx + uMin) * s + e,
+    1 - (ty + 1 - vMin) * s + e,
+    (tx + uMax) * s - e,
+    1 - (ty + 1 - vMax) * s - e,
+  ];
 }
 
-// Beta-ish biome grass/foliage colors from temperature/humidity
+// Biome grass/foliage tint multipliers centered around 1.0 so vibrant Beta greens
+// vary naturally across warm/dry, lush/wet, and cold biomes without darkening dirt.
 export function grassColor(temp, hum) {
   const t = Math.max(0, Math.min(1, temp));
   const h = Math.max(0, Math.min(1, hum));
-  // interpolate through the classic grass colormap diagonal
-  const r = 120 + (t - 0.5) * 60 - (h - 0.5) * 20;
-  const g = 168 + (h - 0.5) * 30 - (t - 0.5) * 40;
-  const b = 64 + (t - 0.5) * 16 + (h - 0.5) * 24;
-  return [Math.max(0, Math.min(255, r)) / 255, Math.max(0, Math.min(255, g)) / 255, Math.max(0, Math.min(255, b)) / 255];
+  const r = 1.0 + (t - 0.5) * 0.34 - (h - 0.5) * 0.16;
+  const g = 1.02 + (h - 0.5) * 0.24 - (t - 0.5) * 0.14;
+  const b = 0.96 + (h - 0.5) * 0.16 - (t - 0.5) * 0.20;
+  return [
+    Math.max(0.72, Math.min(1.24, r)),
+    Math.max(0.78, Math.min(1.18, g)),
+    Math.max(0.68, Math.min(1.16, b)),
+  ];
 }
 
 export function foliageColor(temp, hum) {
   const c = grassColor(temp, hum);
-  return [c[0] * 0.82, c[1] * 0.9, c[2] * 0.75];
+  return [c[0] * 0.94, c[1] * 0.98, c[2] * 0.92];
 }
 
-function isCrossRender(bd) { return bd.cross; }
+const WHITE_TINT = [1, 1, 1];
+
+// Map metadata facing (0: -Z, 1: +Z, 2: -X, 3: +X) to face index (2:+Z, 3:-Z, 4:+X, 5:-X)
+const META_FRONT_FACE = [3, 2, 5, 4];
 
 export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderDistance) {
   if (chunk.meshes) {
@@ -72,12 +87,11 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
     chunk.meshes = null;
   }
 
-  const solid = { pos: [], uv: [], col: [], idx: [] };
-  const cutout = { pos: [], uv: [], col: [], idx: [] };
-  const water = { pos: [], uv: [], col: [], idx: [] };
+  const solid = { pos: [], uv: [], col: [], light: [], idx: [] };
+  const cutout = { pos: [], uv: [], col: [], light: [], idx: [] };
+  const water = { pos: [], uv: [], col: [], light: [], idx: [] };
   const wx0 = chunk.cx * CH, wz0 = chunk.cz * CH;
 
-  // biome info is a pure function of (x,z) — cache one per column (256/chunk)
   const biomeCache = new Array(CH * CH);
   for (let z = 0; z < CH; z++) {
     for (let x = 0; x < CH; x++) {
@@ -98,21 +112,37 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
     return world.getLight(wx0 + x, y, wz0 + z);
   };
 
-  const pushQuad = (buf, corners, tile, shade, skyL, blkL, tint, alpha = 1) => {
-    const [u0, v0, u1, v1] = tileUV(tile);
+  const pushQuad = (buf, corners, tile, shade, skyL, blkL, tint, alpha = 1, uvRect = null) => {
+    const [u0, v0, u1, v1] = uvRect
+      ? tileUV(tile, uvRect[0], uvRect[1], uvRect[2], uvRect[3])
+      : tileUV(tile);
     const uvs = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
     const base = buf.pos.length / 3;
-    // rgb = sky light * shade * tint (dimmed by day/night uniform in shader)
-    // a   = block light * shade (always warm-bright in shader)
     const skyB = ((skyL >> 0) & 15) / 15;
     const blkB = ((blkL >> 0) & 15) / 15;
     for (let i = 0; i < 4; i++) {
       const c = corners[i];
       buf.pos.push(c[0], c[1], c[2]);
       buf.uv.push(uvs[i][0], uvs[i][1]);
-      buf.col.push(shade * skyB * tint[0], shade * skyB * tint[1], shade * skyB * tint[2], shade * blkB * alpha);
+      buf.col.push(shade * tint[0], shade * tint[1], shade * tint[2], alpha);
+      buf.light.push(skyL, blkL);
     }
     buf.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  };
+
+  const pushBox = (buf, x0, y0, z0, x1, y1, z1, tiles, skyL, blkL, tint = WHITE_TINT, uvRects = null) => {
+    const boxFaces = [
+      { shade: 1.0, tile: tiles[0], corners: [[x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0]] },
+      { shade: 0.5, tile: tiles[1], corners: [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]] },
+      { shade: 0.8, tile: tiles[2], corners: [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]] },
+      { shade: 0.8, tile: tiles[3], corners: [[x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0]] },
+      { shade: 0.6, tile: tiles[4], corners: [[x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1]] },
+      { shade: 0.6, tile: tiles[5], corners: [[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]] },
+    ];
+    for (let f = 0; f < 6; f++) {
+      const bf = boxFaces[f];
+      pushQuad(buf, bf.corners, bf.tile, bf.shade, skyL, blkL, tint, 1, uvRects ? uvRects[f] : null);
+    }
   };
 
   for (let y = 0; y < WORLD_H; y++) {
@@ -122,31 +152,125 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
         if (id === AIR) continue;
         const bd = getBlock(id);
         if (!bd.tiles) continue;
+        const meta = chunk.getMeta(x, y, z);
 
         const biome = biomeAt(x, z);
-        let tint = [1, 1, 1];
-        if (bd.tint === 'grass') tint = grassColor(biome.temp, biome.hum);
-        else if (bd.tint === 'foliage') tint = foliageColor(biome.temp, biome.hum);
+        let biomeTint = WHITE_TINT;
+        if (bd.tint === 'grass') biomeTint = grassColor(biome.temp, biome.hum);
+        else if (bd.tint === 'foliage') biomeTint = foliageColor(biome.temp, biome.hum);
 
-        // pick buffer
+        const isLava = id === LAVA || id === 10;
         let buf = solid;
-        if (bd.render === 'cutout') buf = cutout;
-        else if (bd.render === 'liquid') buf = water;
-        else if (bd.render === 'cross' || bd.render === 'flat' || bd.render === 'torch') buf = cutout;
+        if (bd.render === 'liquid') buf = isLava ? solid : water;
+        else if (bd.render !== 'cube') buf = cutout;
 
         if (bd.render === 'cross') {
-          // two diagonal quads
           const light = getL(x, y, z);
           const skyL = light >> 4, blkL = light & 15;
+          const tile = id === CROPS ? (TILES.crops0 + Math.min(7, meta & 7)) : bd.tiles[2];
           const cornersSets = [
-            [[x + 0.1, y, z + 0.1, 0, 0], [x + 0.9, y, z + 0.9, 1, 0], [x + 0.9, y + 1, z + 0.9, 1, 1], [x + 0.1, y + 1, z + 0.1, 0, 1]],
-            [[x + 0.9, y, z + 0.1, 0, 0], [x + 0.1, y, z + 0.9, 1, 0], [x + 0.1, y + 1, z + 0.9, 1, 1], [x + 0.9, y + 1, z + 0.1, 0, 1]],
+            [[x + 0.1, y, z + 0.1], [x + 0.9, y, z + 0.9], [x + 0.9, y + 1, z + 0.9], [x + 0.1, y + 1, z + 0.1]],
+            [[x + 0.9, y, z + 0.1], [x + 0.1, y, z + 0.9], [x + 0.1, y + 1, z + 0.9], [x + 0.9, y + 1, z + 0.1]],
           ];
           for (const corners of cornersSets) {
-            pushQuad(buf, corners.map(c => [c[0], c[1], c[2]]), bd.tiles[2], 1.0, skyL, blkL, tint);
+            pushQuad(buf, corners, tile, 0.95, skyL, blkL, biomeTint);
           }
           continue;
         }
+
+        if (bd.render === 'torch') {
+          const light = getL(x, y, z);
+          const skyL = light >> 4, blkL = Math.max(light & 15, id === TORCH ? 14 : 7);
+          const w = 1 / 16;
+          const cx = x + 0.5, cz = z + 0.5;
+          const h = 0.625;
+          const torchTile = TILES.torch;
+          const sideRect = [7 / 16, 0, 9 / 16, 10 / 16];
+          const topRect = [7 / 16, 10 / 16, 9 / 16, 12 / 16];
+          pushBox(
+            buf,
+            cx - w, y, cz - w,
+            cx + w, y + h, cz + w,
+            [torchTile, torchTile, torchTile, torchTile, torchTile, torchTile],
+            skyL, blkL,
+            id === REDSTONE_TORCH ? [1.15, 0.45, 0.45] : WHITE_TINT,
+            [topRect, sideRect, sideRect, sideRect, sideRect, sideRect],
+          );
+          continue;
+        }
+
+        if (bd.render === 'slab') {
+          const light = getL(x, y, z);
+          const skyL = light >> 4, blkL = light & 15;
+          if (id === CAKE_BLOCK) {
+            const eaten = Math.min(5, meta & 7);
+            const x0 = x + 0.0625 + eaten * 0.125;
+            pushBox(buf, x0, y, z + 0.0625, x + 0.9375, y + 0.5, z + 0.9375, bd.tiles, skyL, blkL);
+          } else {
+            // Bed slab
+            pushBox(buf, x, y, z, x + 1, y + 0.5625, z + 1, bd.tiles, skyL, blkL);
+          }
+          continue;
+        }
+
+        if (bd.render === 'door') {
+          const light = getL(x, y, z);
+          const skyL = light >> 4, blkL = light & 15;
+          const facing = meta & 3;
+          const isOpen = (meta & 4) !== 0;
+          // Closed door sits along its facing edge; open door swings 90 degrees
+          const orient = isOpen ? ((facing + 2) & 3) : facing;
+          const t = 0.1875;
+          let x0 = x, z0 = z, x1 = x + 1, z1 = z + 1;
+          if (orient === 0) z1 = z + t;
+          else if (orient === 1) z0 = z + 1 - t;
+          else if (orient === 2) x1 = x + t;
+          else x0 = x + 1 - t;
+          pushBox(buf, x0, y, z0, x1, y + 1, z1, bd.tiles, skyL, blkL);
+          continue;
+        }
+
+        if (id === LADDER) {
+          const light = getL(x, y, z);
+          const skyL = light >> 4, blkL = light & 15;
+          const o = 0.04;
+          let attached = false;
+          // Attach ladder flush against solid neighbor walls
+          if (getBlock(getB(x, y, z - 1)).solid) {
+            pushQuad(buf, [[x, y, z + o], [x + 1, y, z + o], [x + 1, y + 1, z + o], [x, y + 1, z + o]], TILES.ladder, 0.85, skyL, blkL, WHITE_TINT);
+            attached = true;
+          }
+          if (getBlock(getB(x, y, z + 1)).solid) {
+            pushQuad(buf, [[x + 1, y, z + 1 - o], [x, y, z + 1 - o], [x, y + 1, z + 1 - o], [x + 1, y + 1, z + 1 - o]], TILES.ladder, 0.85, skyL, blkL, WHITE_TINT);
+            attached = true;
+          }
+          if (getBlock(getB(x - 1, y, z)).solid) {
+            pushQuad(buf, [[x + o, y, z + 1], [x + o, y, z], [x + o, y + 1, z], [x + o, y + 1, z + 1]], TILES.ladder, 0.85, skyL, blkL, WHITE_TINT);
+            attached = true;
+          }
+          if (getBlock(getB(x + 1, y, z)).solid || !attached) {
+            pushQuad(buf, [[x + 1 - o, y, z], [x + 1 - o, y, z + 1], [x + 1 - o, y + 1, z + 1], [x + 1 - o, y + 1, z]], TILES.ladder, 0.85, skyL, blkL, WHITE_TINT);
+          }
+          continue;
+        }
+
+        if (id === CHEST) {
+          const light = getL(x, y + 1, z) || getL(x, y, z);
+          const skyL = light >> 4, blkL = light & 15;
+          const frontFace = META_FRONT_FACE[meta & 3];
+          const chestTiles = [
+            TILES.chest_top, TILES.chest_top,
+            frontFace === 2 ? TILES.chest_front : TILES.chest_side,
+            frontFace === 3 ? TILES.chest_front : TILES.chest_side,
+            frontFace === 4 ? TILES.chest_front : TILES.chest_side,
+            frontFace === 5 ? TILES.chest_front : TILES.chest_side,
+          ];
+          pushBox(buf, x + 0.0625, y, z + 0.0625, x + 0.9375, y + 0.875, z + 0.9375, chestTiles, skyL, blkL);
+          continue;
+        }
+
+        const isDirectional = id === FURNACE || id === FURNACE_LIT || id === PUMPKIN || id === JACK_O_LANTERN;
+        const frontFaceIdx = isDirectional ? META_FRONT_FACE[meta & 3] : 3;
 
         for (let f = 0; f < 6; f++) {
           const face = FACES[f];
@@ -154,53 +278,65 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
           const nb = getB(nx, ny, nz);
           const nbd = getBlock(nb);
 
-          // visibility rules
           let visible = false;
           if (bd.render === 'liquid') {
-            visible = nb !== id && !nbd.opaque && !(nb === ICE);
+            visible = nb !== id && !nbd.opaque && nb !== ICE;
             if (f === 0 && nb === AIR) visible = true;
-          } else if (bd.render === 'torch') {
-            continue; // billboard drawn below
           } else if (bd.render === 'flat') {
-            // snow/rail: top face only; ladder: side faces only
-            if (id === LADDER) visible = (f >= 2);
-            else visible = (f === 0);
+            visible = (f === 0);
             if (id === SNOW && getB(x, y + 1, z) !== AIR) visible = false;
+          } else if (id === CACTUS && f >= 2) {
+            visible = true; // Cactus sides are inset by 1/16, always visible!
           } else {
             visible = !nbd.opaque && nb !== id;
             if (bd.render === 'cutout' && nb === LEAVES) visible = true;
           }
           if (!visible) continue;
 
-          const light = getL(nx, ny, nz);
-          const skyL = light >> 4, blkL = light & 15;
-          const tile = bd.tiles[face.tile];
-          const corners = face.corners.map(c => [x + c[0], y + c[1], z + c[2], c[3], c[4]]);
+          const light = (bd.render === 'flat') ? getL(x, y, z) : getL(nx, ny, nz);
+          const skyL = light >> 4;
+          const blkL = isLava ? 15 : (light & 15);
 
-          // water surface slightly lower
-          const yTop = (bd.render === 'liquid' && getB(x, y + 1, z) !== id) ? 0.88 : 1.0;
-          const corners2 = corners.map(c => {
-            const yy = c[1];
-            if (yy === y + 1 && yTop < 1) return [c[0], y + yTop, c[2], c[3], c[4]];
-            return c;
+          let tile = bd.tiles[face.tile];
+          if (isDirectional && f >= 2) {
+            tile = (f === frontFaceIdx) ? bd.tiles[3] : bd.tiles[2];
+          } else if (id === FARMLAND && f === 0 && meta > 0) {
+            tile = TILES.farmland_wet;
+          }
+
+          // Only tint top face of GRASS; tint all faces of foliage blocks (LEAVES)
+          const faceTint = (bd.tint === 'grass') ? (f === 0 ? biomeTint : WHITE_TINT) : biomeTint;
+
+          let yTop = 1.0;
+          if (bd.render === 'liquid' && getB(x, y + 1, z) !== id) yTop = 0.88;
+          else if (id === SNOW) yTop = 0.125;
+          else if (bd.render === 'flat') yTop = 0.04;
+          else if (id === FARMLAND) yTop = 0.9375;
+
+          const inset = (id === CACTUS && f >= 2) ? (1 / 16) : 0;
+          const corners = face.corners.map(c => {
+            let cx = x + c[0];
+            let cy = y + (c[1] === 1 && yTop < 1 ? yTop : c[1]);
+            let cz = z + c[2];
+            if (inset > 0) {
+              cx -= face.dir[0] * inset;
+              cz -= face.dir[2] * inset;
+            }
+            return [cx, cy, cz];
           });
-          pushQuad(buf, corners2, tile, face.shade, skyL, blkL, tint, bd.render === 'liquid' ? 0.82 : 1);
-        }
 
-        // torch: draw small billboard
-        if (bd.render === 'torch') {
-          const light = getL(x, y, z);
-          const skyL = light >> 4, blkL = light & 15;
-          const cx = x + 0.5, cz = z + 0.5;
-          const w = 0.14;
-          const sets = [
-            [[cx - w, y, cz - w], [cx + w, y, cz - w], [cx + w, y + 0.65, cz - w], [cx - w, y + 0.65, cz - w]],
-            [[cx + w, y, cz + w], [cx - w, y, cz + w], [cx - w, y + 0.65, cz + w], [cx + w, y + 0.65, cz + w]],
-            [[cx - w, y, cz + w], [cx - w, y, cz - w], [cx - w, y + 0.65, cz - w], [cx - w, y + 0.65, cz + w]],
-            [[cx + w, y, cz - w], [cx + w, y, cz + w], [cx + w, y + 0.65, cz + w], [cx + w, y + 0.65, cz - w]],
-          ];
-          for (const corners of sets) {
-            pushQuad(buf, corners, TILES.torch, 1.0, skyL, blkL, [1, 1, 1]);
+          if (bd.render === 'liquid' && !isLava) {
+            // Water uses standalone 16x16 animated waterTex: map full [0..1] UVs!
+            const base = buf.pos.length / 3;
+            for (const c of corners) buf.pos.push(c[0], c[1], c[2]);
+            buf.uv.push(0.002, 0.002, 0.998, 0.002, 0.998, 0.998, 0.002, 0.998);
+            for (let i = 0; i < 4; i++) {
+              buf.col.push(face.shade, face.shade, face.shade, 0.82);
+              buf.light.push(skyL, blkL);
+            }
+            buf.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+          } else {
+            pushQuad(buf, corners, tile, isLava ? 1.0 : face.shade, skyL, blkL, faceTint, 1);
           }
         }
       }

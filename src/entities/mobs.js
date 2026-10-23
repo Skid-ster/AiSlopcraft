@@ -18,6 +18,7 @@ export const MOB_DEFS = {
 export function rollMobDrops(mobOrType, random = Math.random) {
   const def = typeof mobOrType === 'string' ? MOB_DEFS[mobOrType] : mobOrType?.def;
   if (!def?.drops) return [];
+  if (typeof mobOrType === 'object' && mobOrType?.type === 'sheep' && mobOrType.sheared) return [];
   return def.drops.map(([id, minimum = 0, extra = 0]) => ({
     id,
     count: minimum + Math.floor(random() * (extra + 1)),
@@ -186,6 +187,11 @@ export function findSafeGround(world, x, z, width = 0.6, height = 1.8) {
   return null;
 }
 
+function isSolidForMob(world, x, y, z) {
+  if (typeof world.isSolidAt === 'function') return world.isSolidAt(x, y, z);
+  return getBlock(world.getBlock(x, y, z)).solid;
+}
+
 function canOccupy(world, mob, x, y, z) {
   const half = mob.def.w / 2;
   const minX = Math.floor(x - half + 0.001), maxX = Math.floor(x + half - 0.001);
@@ -194,7 +200,7 @@ function canOccupy(world, mob, x, y, z) {
   for (let by = minY; by <= maxY; by++) {
     for (let bz = minZ; bz <= maxZ; bz++) {
       for (let bx = minX; bx <= maxX; bx++) {
-        if (getBlock(world.getBlock(bx, by, bz)).solid) return false;
+        if (isSolidForMob(world, bx, by, bz)) return false;
       }
     }
   }
@@ -206,7 +212,7 @@ function hasSupport(world, mob, x, y, z) {
   const by = Math.floor(y - 0.03);
   for (let bz = Math.floor(z - half + 0.001); bz <= Math.floor(z + half - 0.001); bz++) {
     for (let bx = Math.floor(x - half + 0.001); bx <= Math.floor(x + half - 0.001); bx++) {
-      if (getBlock(world.getBlock(bx, by, bz)).solid) return true;
+      if (isSolidForMob(world, bx, by, bz)) return true;
     }
   }
   return false;
@@ -268,12 +274,18 @@ export class Mob {
     this.burning = false;
     this.burnTick = 0;
     this.burnParticleTimer = 0;
+    this.lavaTick = 0;
+    this.panicTimer = 0;
+    this.sheared = false;
+    this.woolTimer = 0;
+    this.fallStart = null;
     this.killed = false;
     this.dead = false;
 
     this.texture = new THREE.CanvasTexture(buildMobTexture(type));
     this.texture.magFilter = THREE.NearestFilter;
     this.texture.minFilter = THREE.NearestFilter;
+    this.texture.colorSpace = THREE.NoColorSpace;
     const model = buildMobModel(type, this.texture);
     this.group = model.group;
     this.parts = model.parts;
@@ -433,14 +445,14 @@ export class Mob {
 
     if (moveLen > 0) {
       if (!facingTarget) this.yaw = Math.atan2(moveX, moveZ);
-      const chaseBoost = this.state === 'chase' ? (this.type === 'spider' ? 1.35 : 1.22) : 1;
+      const chaseBoost = this.state === 'chase' ? (this.type === 'spider' ? 1.35 : 1.22) : (this.panicTimer > 0 ? 1.45 : 1);
       const accel = this.def.speed * 7 * chaseBoost;
       this.vel.x += moveX * accel * dt;
       this.vel.z += moveZ * accel * dt;
     }
 
     const horizontalSpeed = Math.hypot(this.vel.x, this.vel.z);
-    const maxSpeed = this.def.speed * (this.state === 'chase' ? (this.type === 'spider' ? 1.65 : 1.35) : 0.8);
+    const maxSpeed = this.def.speed * (this.state === 'chase' ? (this.type === 'spider' ? 1.65 : 1.35) : (this.panicTimer > 0 ? 1.5 : 0.8));
     if (horizontalSpeed > maxSpeed) {
       this.vel.x *= maxSpeed / horizontalSpeed;
       this.vel.z *= maxSpeed / horizontalSpeed;
@@ -453,6 +465,9 @@ export class Mob {
       this.vel.y += 3 * dt;
     } else if (this.climbing) {
       this.vel.y = Math.max(this.vel.y, 3.2);
+    } else if (this.type === 'chicken' && this.vel.y < -2.4) {
+      // Beta chickens flap their wings and glide down slowly!
+      this.vel.y = Math.max(-2.4, this.vel.y - 6 * dt);
     } else {
       this.vel.y -= 26 * dt;
     }
@@ -464,11 +479,54 @@ export class Mob {
     this.moveAxis(world, 2, this.vel.z * dt);
     this.onGround = hasSupport(world, this, this.pos.x, this.pos.y, this.pos.z);
 
+    // Fall & lava damage on mobs
+    if (this.onGround) {
+      if (this.fallStart != null && this.type !== 'chicken' && !inWater) {
+        const dist = this.fallStart - this.pos.y;
+        if (dist > 3.5) {
+          this.damage(Math.floor(dist - 3), audio);
+          if (this.dead) return;
+        }
+      }
+      this.fallStart = null;
+    } else if (this.vel.y < -0.5 && this.fallStart == null && !inWater) {
+      this.fallStart = this.pos.y;
+    }
+    if (inWater) this.fallStart = null;
+
+    if (inLava) {
+      this.lavaTick -= dt;
+      if (this.lavaTick <= 0) {
+        this.lavaTick = 0.5;
+        this.damage(4, audio);
+        if (this.dead) return;
+      }
+    } else {
+      this.lavaTick = 0;
+    }
+
+    if (this.sheared) {
+      this.woolTimer -= dt;
+      if (this.woolTimer <= 0) this.setSheared(false);
+    }
+    if (this.panicTimer > 0) this.panicTimer = Math.max(0, this.panicTimer - dt);
+
     this.group.position.copy(this.pos);
     // The models face local -Z; movement heading points along +Z at yaw zero.
     this.group.rotation.y = this.yaw + Math.PI;
     this.animate(dt);
     this.updateColor(timeOfDay);
+  }
+
+  setSheared(sheared) {
+    this.sheared = !!sheared;
+    if (this.sheared) this.woolTimer = 50;
+    const body = this.group.getObjectByName('body');
+    if (body) {
+      body.scale.set(this.sheared ? 0.8 : 1, this.sheared ? 0.8 : 1, this.sheared ? 0.92 : 1);
+      body.userData.baseColor = this.sheared ? 0xd8be9e : 0xe8e8e8;
+      if (body.material?.userData) body.material.userData.baseColor = this.sheared ? 0xd8be9e : 0xe8e8e8;
+    }
   }
 
   animate(dt) {
@@ -515,7 +573,7 @@ export class Mob {
     for (let by = Math.floor(minY); by <= Math.floor(maxY); by++) {
       for (let bz = Math.floor(minZ); bz <= Math.floor(maxZ); bz++) {
         for (let bx = Math.floor(minX); bx <= Math.floor(maxX); bx++) {
-          if (!getBlock(world.getBlock(bx, by, bz)).solid) continue;
+          if (!isSolidForMob(world, bx, by, bz)) continue;
           if (!(maxX > bx && minX < bx + 1 && maxY > by && minY < by + 1 && maxZ > bz && minZ < bz + 1)) continue;
           if (axis === 1) {
             this.pos.y = amount > 0 ? by - this.def.h - 0.001 : by + 1.001;
@@ -539,6 +597,12 @@ export class Mob {
     this.hp = Math.max(0, this.hp - amount);
     this.hurtTime = options.silentHurt ? 0.2 : 0.35;
     if (options.knockback) this.vel.add(options.knockback);
+    if (!this.def.hostile) {
+      this.panicTimer = 3.0;
+      this.moveToward = true;
+      this.wanderTimer = 0.6;
+      this.yaw = Math.random() * Math.PI * 2;
+    }
     if (!options.silentHurt && audio) audio.mobHurt();
     if (this.hp <= 0) {
       this.dead = true;
@@ -663,7 +727,7 @@ export class MobManager {
     }
 
     if (!nearest) return null;
-    const blockHit = typeof player.raycast === 'function' ? player.raycast(this.world, maxDistance) : null;
+    const blockHit = typeof player.raycast === 'function' ? player.raycast(this.world, maxDistance, { solidOnly: true }) : null;
     if (blockHit && blockHit.dist <= nearestDistance) return null;
     return nearest;
   }

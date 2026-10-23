@@ -7,7 +7,8 @@ import { buildAtlas, buildItemIcons } from './world/textures.js';
 import {
   AIR, WATER, LAVA, TORCH, CRAFTING_TABLE, FURNACE, SAND, GRAVEL, LEAVES, GRASS, DIRT,
   LOG, GLASS, getBlock, breakTime, canHarvest, ITEMS, itemName, isBlock, STONE, COBBLE,
-  TILES, SAPLING, TALL_GRASS, PLANKS, TNT
+  TILES, SAPLING, TALL_GRASS, PLANKS, TNT, WOOD_DOOR, IRON_DOOR,
+  BED_BLOCK, CAKE_BLOCK, placeableBlockForItem
 } from './world/blocks.js';
 import { Player } from './entities/player.js';
 import { advanceEating } from './entities/eating.js';
@@ -68,28 +69,46 @@ waterTex.colorSpace = THREE.NoColorSpace;
 // ---- lighting shader: sky light dims at night, torch light stays warm ----
 const lightVert = `
   attribute vec4 color;
+  attribute vec2 aLight;
   varying vec4 vColor;
   varying vec2 vUv;
+  varying vec2 vLight;
+  varying float vFogDist;
   void main() {
     vColor = color;
     vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vLight = aLight;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vFogDist = length(mv.xyz);
+    gl_Position = projectionMatrix * mv;
   }
 `;
 const lightFrag = `
   uniform sampler2D map;
   uniform float uSky;
+  uniform vec3 uSkyTint;
   uniform vec3 uBlockTint;
   uniform float uOpacity;
   uniform float uCutout;
+  uniform vec3 uFogColor;
+  uniform float uFogNear;
+  uniform float uFogFar;
   varying vec4 vColor;
   varying vec2 vUv;
+  varying vec2 vLight;
+  varying float vFogDist;
   void main() {
     vec4 tex = texture2D(map, vUv);
     if (uCutout > 0.5 && tex.a < 0.45) discard;
-    vec3 light = vColor.rgb * uSky + vec3(vColor.a) * uBlockTint;
-    light = min(light, vec3(1.35));
-    gl_FragColor = vec4(tex.rgb * light, tex.a * uOpacity);
+    float sky = pow(clamp(vLight.x / 15.0, 0.0, 1.0), 1.35) * uSky;
+    float block = pow(clamp(vLight.y / 15.0, 0.0, 1.0), 1.25);
+    vec3 skyLight = uSkyTint * sky;
+    vec3 torchLight = uBlockTint * block;
+    vec3 light = max(skyLight, torchLight) + min(skyLight, torchLight) * 0.2;
+    light = max(light, vec3(0.055, 0.055, 0.065));
+    vec3 rgb = tex.rgb * vColor.rgb * min(light, vec3(1.25));
+    float fog = smoothstep(uFogNear, uFogFar, vFogDist);
+    gl_FragColor = vec4(mix(rgb, uFogColor, fog), tex.a * vColor.a * uOpacity);
   }
 `;
 
@@ -100,9 +119,13 @@ function makeLightMaterial(opts = {}) {
     uniforms: {
       map: { value: atlasTex },
       uSky: { value: 1.0 },
-      uBlockTint: { value: new THREE.Color(1.0, 0.82, 0.62) },
+      uSkyTint: { value: new THREE.Color(1, 1, 1) },
+      uBlockTint: { value: new THREE.Color(1.08, 0.93, 0.72) },
       uOpacity: { value: opts.opacity ?? 1.0 },
       uCutout: { value: opts.cutout ? 1.0 : 0.0 },
+      uFogColor: { value: new THREE.Color(0xc0d8ff) },
+      uFogNear: { value: 55 },
+      uFogFar: { value: 185 },
     },
     transparent: !!opts.transparent,
     alphaTest: 0,
@@ -474,7 +497,8 @@ function tryPlaceBlock() {
 
   eating = null;
   const hit = player.raycast(world, 5);
-  if (!hit || !isBlock(held.id)) return;
+  const placeId = placeableBlockForItem(held.id);
+  if (!hit || !placeId) return;
 
   // Replaceable blocks: if hit is TALL_GRASS, SAPLING, WATER, or LAVA, place directly at hit
   const hitBlockId = world.getBlock(hit.x, hit.y, hit.z);
@@ -492,9 +516,18 @@ function tryPlaceBlock() {
   const existing = world.getBlock(px, py, pz);
   if (existing !== AIR && !getBlock(existing).liquid && !isReplaceable) return;
 
-  world.setBlock(px, py, pz, held.id);
+  // Orient interactable blocks toward the player; item forms map to their block IDs.
+  let meta = 0;
+  if (placeId === WOOD_DOOR || placeId === IRON_DOOR) {
+    const fx = -Math.sin(player.yaw), fz = -Math.cos(player.yaw);
+    meta = Math.abs(fz) >= Math.abs(fx) ? (fz > 0 ? 1 : 0) : (fx > 0 ? 3 : 2);
+  } else if (placeId === FURNACE || placeId === CRAFTING_TABLE) {
+    const fx = -Math.sin(player.yaw), fz = -Math.cos(player.yaw);
+    meta = Math.abs(fz) >= Math.abs(fx) ? (fz > 0 ? 1 : 0) : (fx > 0 ? 3 : 2);
+  }
+  world.setBlock(px, py, pz, placeId, meta);
   player.consumeHeld();
-  audio.place(held.id);
+  audio.place(placeId);
   player.stats.blocksPlaced++;
   firstPersonArm.triggerPlaceSwing();
   ui.refresh();
@@ -715,6 +748,12 @@ document.addEventListener('mousedown', (e) => {
         openFurnace(hit.x, hit.y, hit.z);
         return;
       }
+      if (id === WOOD_DOOR) {
+        const meta = world.getMeta(hit.x, hit.y, hit.z);
+        world.setMeta(hit.x, hit.y, hit.z, meta ^ 4);
+        audio.door((meta & 4) === 0);
+        return;
+      }
       // flint & steel ignites TNT (beta behavior)
       const held = player.heldStack;
       if (id === TNT && held && held.id === 259) {
@@ -840,10 +879,16 @@ function frame() {
     applyDayLight(dayFactor);
     const head = world.getBlock(Math.floor(player.pos.x), Math.floor(player.pos.y + 1.62), Math.floor(player.pos.z));
     const underwater = head === WATER;
-    if (underwater && scene.fog) {
-      scene.fog.color.set(0x174a9b);
-      scene.fog.near = 0.1;
-      scene.fog.far = 30;
+    if (scene.fog) {
+      if (underwater) {
+        scene.fog.color.set(0x174a9b);
+        scene.fog.near = 0.1;
+        scene.fog.far = 30;
+      } else {
+        // Sky.update sets the proper Beta day/night fog each frame; never leave stale water fog behind.
+        scene.fog.near = 55;
+        scene.fog.far = Math.max(70, game.renderDistance * 16 - 4);
+      }
     }
     // water texture scroll (beta animated water)
     waterTex.offset.y = (game.time * 0.012) % 1;
@@ -898,7 +943,9 @@ function frame() {
     }
   }
 
+  applyFogUniforms();
   renderer.render(scene, camera);
+  if (game.started && ui.mode !== 'title') firstPersonArm.render(renderer);
 }
 
 frame();

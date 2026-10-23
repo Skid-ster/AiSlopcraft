@@ -46,6 +46,8 @@ check('torch light 12 two away', c0.blockLight[idx(7, y, 5)] === 12);
 const fakeTex = new THREE.Texture();
 const built = buildChunkMesh(world, c0, fakeTex, fakeTex, 6);
 check('mesh has geometry', built.solid.pos.length > 0);
+check('mesh carries per-vertex sky/block light attributes', built.solid.light.length === (built.solid.pos.length / 3) * 2);
+check('transparent water has dedicated standalone-texture UVs', built.water.uv.length === (built.water.pos.length / 3) * 2);
 const mesh = built.makeMesh(built.solid, new THREE.MeshBasicMaterial());
 check('makeMesh returns mesh', !!mesh);
 

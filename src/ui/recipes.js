@@ -1,5 +1,8 @@
 // Minecraft Beta-era shaped/shapeless recipes and furnace results.
-import { PLANKS, LOG, COBBLE, STONE, TORCH, CRAFTING_TABLE, FURNACE } from '../world/blocks.js';
+import {
+  PLANKS, LOG, COBBLE, STONE, TORCH, CRAFTING_TABLE, FURNACE,
+  PUMPKIN, JACK_O_LANTERN, STONE_BRICK, WOOL_BASE, FLOWER_YELLOW, FLOWER_RED, CACTUS,
+} from '../world/blocks.js';
 
 const STICK = 280, COAL = 263, IRON = 265, GOLD = 266, DIAMOND = 264, LEATHER = 334;
 const WOOD = { sword: 268, shovel: 269, pick: 270, axe: 271, hoe: 290 };
@@ -11,10 +14,12 @@ const STRING = 287, FEATHER = 288, GUNPOWDER = 289, WHEAT = 296;
 const BOWL = 281, STEW = 282, BREAD = 297, PAPER = 339, BOOK = 340, SUGAR = 353;
 const FLINT = 318, BRICK_ITEM = 336, CLAY_BALL = 337, REEDS = 338;
 const TNT_BLOCK = 46, SAND = 12, SNOWBALL = 332, SNOW_BLOCK = 80;
-const WOOL = 150, BED = 355, SIGN = 323, LADDER = 65, RAIL = 66;
+const WOOL = WOOL_BASE, BED = 355, SIGN = 323, LADDER = 65, RAIL = 66;
 const MINECART = 328, BOAT = 333, BUCKET = 325, WOOD_DOOR = 64, IRON_DOOR = 71;
 const CHEST = 54, BOOKSHELF = 47, JUKEBOX = 84, GLOWSTONE = 89;
 const GLOWSTONE_DUST = 348, CAKE = 354, FLINT_STEEL = 259, EGG = 344;
+const APPLE = 260, GOLDEN_APPLE = 322, BONE = 352, BONE_MEAL = 368;
+const REDSTONE = 331, COMPASS = 345, FISHING_ROD = 346, COOKIE = 357, LAPIS = 351;
 
 function toolPatterns(material, results) {
   return [
@@ -47,9 +52,12 @@ export const SHAPED = [
   ...toolPatterns(DIAMOND, DIAMOND_TOOL),
 
   { pattern: [[STRING, STICK, 0], [STRING, 0, STICK], [STRING, STICK, 0]], out: [261, 1] },
+  { pattern: [[0, 0, STICK], [0, STICK, STRING], [STICK, 0, STRING]], out: [FISHING_ROD, 1] },
   { pattern: [[FLINT], [STICK], [FEATHER]], out: [262, 4] },
   { pattern: [[WHEAT, WHEAT, WHEAT]], out: [BREAD, 1] },
+  { pattern: [[WHEAT, SUGAR, WHEAT]], out: [COOKIE, 8] },
   { pattern: [[REEDS, REEDS, REEDS]], out: [PAPER, 3] },
+  { pattern: [[PAPER, PAPER, PAPER]], out: [BOOK, 1] },
   { pattern: [[PAPER, PAPER, PAPER], [0, LEATHER, 0]], out: [340, 1] },
   { pattern: [[PLANKS, 0, PLANKS], [0, PLANKS, 0]], out: [BOWL, 4] },
   ...armorPatterns(334, [298, 299, 300, 301]),
@@ -58,27 +66,33 @@ export const SHAPED = [
   ...armorPatterns(266, [314, 315, 316, 317]),
 
   { pattern: [[SAND, SAND], [SAND, SAND]], out: [24, 1] },
+  { pattern: [[STONE, STONE], [STONE, STONE]], out: [STONE_BRICK, 4] },
+  { pattern: [[STRING, STRING], [STRING, STRING]], out: [WOOL, 1] },
   { pattern: [[CLAY_BALL, CLAY_BALL], [CLAY_BALL, CLAY_BALL]], out: [82, 1] },
   { pattern: [[BRICK_ITEM, BRICK_ITEM], [BRICK_ITEM, BRICK_ITEM]], out: [45, 1] },
   { pattern: [[SNOWBALL, SNOWBALL], [SNOWBALL, SNOWBALL]], out: [SNOW_BLOCK, 1] },
   { pattern: [[IRON, IRON, IRON], [IRON, IRON, IRON], [IRON, IRON, IRON]], out: [42, 1] },
   { pattern: [[GOLD, GOLD, GOLD], [GOLD, GOLD, GOLD], [GOLD, GOLD, GOLD]], out: [41, 1] },
   { pattern: [[DIAMOND, DIAMOND, DIAMOND], [DIAMOND, DIAMOND, DIAMOND], [DIAMOND, DIAMOND, DIAMOND]], out: [57, 1] },
+  { pattern: [[GOLD, GOLD, GOLD], [GOLD, APPLE, GOLD], [GOLD, GOLD, GOLD]], out: [GOLDEN_APPLE, 1] },
+  { pattern: [[0, IRON, 0], [IRON, REDSTONE, IRON], [0, IRON, 0]], out: [COMPASS, 1] },
+  { pattern: [[REDSTONE], [STICK]], out: [76, 1] },
+  { pattern: [[PUMPKIN], [TORCH]], out: [JACK_O_LANTERN, 1] },
   { pattern: [[PLANKS, PLANKS, PLANKS], [PLANKS, 0, PLANKS], [PLANKS, PLANKS, PLANKS]], out: [CHEST, 1] },
+  { pattern: [[PLANKS, PLANKS, PLANKS], [BOOK, BOOK, BOOK], [PLANKS, PLANKS, PLANKS]], out: [BOOKSHELF, 1] },
   { pattern: [[PLANKS, PLANKS, PLANKS], [0, BOOK, 0], [PLANKS, PLANKS, PLANKS]], out: [BOOKSHELF, 1] },
   { pattern: [[PLANKS, PLANKS, PLANKS], [PLANKS, DIAMOND, PLANKS], [PLANKS, PLANKS, PLANKS]], out: [JUKEBOX, 1] },
   { pattern: [[GLOWSTONE_DUST, GLOWSTONE_DUST], [GLOWSTONE_DUST, GLOWSTONE_DUST]], out: [GLOWSTONE, 1] },
-  { pattern: [[PLANKS, PLANKS, PLANKS], [PLANKS, PLANKS, PLANKS], [0, STICK, 0]], out: [SIGN, 3] },
-  { pattern: [[STICK, 0, STICK], [STICK, STICK, STICK], [STICK, 0, STICK]], out: [LADDER, 3] },
+  { pattern: [[PLANKS, PLANKS, PLANKS], [PLANKS, PLANKS, PLANKS], [0, STICK, 0]], out: [SIGN, 1] },
+  { pattern: [[STICK, 0, STICK], [STICK, STICK, STICK], [STICK, 0, STICK]], out: [LADDER, 2] },
   { pattern: [[WOOL, WOOL, WOOL], [PLANKS, PLANKS, PLANKS]], out: [BED, 1] },
   { pattern: [[IRON, 0, IRON], [0, IRON, 0]], out: [BUCKET, 1] },
   { pattern: [[IRON, 0, IRON], [IRON, IRON, IRON]], out: [MINECART, 1] },
   { pattern: [[PLANKS, 0, PLANKS], [PLANKS, PLANKS, PLANKS]], out: [BOAT, 1] },
-  { pattern: [[IRON, IRON], [IRON, IRON], [IRON, IRON]], out: [IRON_DOOR, 3] },
-  { pattern: [[PLANKS, PLANKS], [PLANKS, PLANKS], [PLANKS, PLANKS]], out: [WOOD_DOOR, 3] },
+  { pattern: [[IRON, IRON], [IRON, IRON], [IRON, IRON]], out: [IRON_DOOR, 1] },
+  { pattern: [[PLANKS, PLANKS], [PLANKS, PLANKS], [PLANKS, PLANKS]], out: [WOOD_DOOR, 1] },
   { pattern: [[IRON, 0, IRON], [IRON, STICK, IRON], [IRON, STICK, IRON]], out: [RAIL, 16] },
   { pattern: [[SAND, GUNPOWDER, SAND], [GUNPOWDER, SAND, GUNPOWDER], [SAND, GUNPOWDER, SAND]], out: [TNT_BLOCK, 1] },
-  { pattern: [[334, 0, 334], [334, 334, 334], [334, 334, 334]], out: [299, 1] },
   { pattern: [[IRON, 0], [0, IRON]], out: [359, 1] },
   { pattern: [[IRON, 0], [0, FLINT]], out: [FLINT_STEEL, 1] },
   { pattern: [[335, 335, 335], [SUGAR, EGG, SUGAR], [WHEAT, WHEAT, WHEAT]], out: [CAKE, 1] },
@@ -89,6 +103,16 @@ export const SHAPELESS = [
   { in: [REEDS], out: [SUGAR, 1] },
   { in: [REEDS, REEDS, REEDS], out: [PAPER, 3] },
   { in: [39, 40, BOWL], out: [STEW, 1] },
+  { in: [BONE], out: [BONE_MEAL, 3] },
+  { in: [42], out: [IRON, 9] },
+  { in: [41], out: [GOLD, 9] },
+  { in: [57], out: [DIAMOND, 9] },
+  { in: [IRON, FLINT], out: [FLINT_STEEL, 1] },
+  { in: [WOOL, FLOWER_RED], out: [WOOL_BASE + 14, 1] },    // Red Wool
+  { in: [WOOL, FLOWER_YELLOW], out: [WOOL_BASE + 2, 1] },  // Yellow Wool
+  { in: [WOOL, LAPIS], out: [WOOL_BASE + 7, 1] },          // Blue Wool
+  { in: [WOOL, COAL], out: [WOOL_BASE + 15, 1] },          // Black Wool
+  { in: [WOOL, BONE_MEAL], out: [WOOL_BASE, 1] },          // White Wool
 ];
 
 export const SMELTING = Object.freeze({
@@ -96,11 +120,15 @@ export const SMELTING = Object.freeze({
   [COBBLE]: STONE,
   15: 265,
   14: 266,
+  16: COAL,
+  56: DIAMOND,
+  73: REDSTONE,
+  21: LAPIS,
   [LOG]: COAL,
   319: 320,
   349: 350,
   [CLAY_BALL]: BRICK_ITEM,
-  81: 351,
+  [CACTUS]: WOOL_BASE + 4,
 });
 
 function normalizePattern(pattern) {

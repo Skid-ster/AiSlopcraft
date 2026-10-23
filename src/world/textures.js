@@ -54,10 +54,10 @@ export function buildAtlas() {
 
   // --- terrain ---
   put(TILES.grass_top, (ox, oy, rnd) => {
-    noiseFill(ctx, ox, oy, [124, 168, 72], 18, rnd);
+    noiseFill(ctx, ox, oy, [126, 192, 68], 16, rnd);
     for (let i = 0; i < 14; i++) {
       const x = (rnd() * TS) | 0, y = (rnd() * TS) | 0;
-      px(ctx, ox + x, oy + y, 98, 148, 52, 220);
+      px(ctx, ox + x, oy + y, 102, 166, 50, 235);
     }
   });
   put(TILES.grass_side, (ox, oy, rnd) => {
@@ -66,8 +66,8 @@ export function buildAtlas() {
     for (let x = 0; x < TS; x++) {
       const h = 2 + ((rnd() * 3) | 0);
       for (let y = 0; y < h; y++) {
-        const v = (rnd() - 0.5) * 24;
-        px(ctx, ox + x, oy + y, 118 + v, 162 + v, 66 + v);
+        const v = (rnd() - 0.5) * 20;
+        px(ctx, ox + x, oy + y, 122 + v, 186 + v, 64 + v);
       }
     }
   });
@@ -177,8 +177,8 @@ export function buildAtlas() {
       const r = rnd();
       if (r < 0.22) { px(ctx, ox + x, oy + y, 0, 0, 0, 0); } // holes for fancy leaves
       else {
-        const v = (rnd() - 0.5) * 30;
-        px(ctx, ox + x, oy + y, 52 + v, 110 + v, 34 + v);
+        const v = (rnd() - 0.5) * 28;
+        px(ctx, ox + x, oy + y, 76 + v, 152 + v, 46 + v);
       }
     }
   });
@@ -504,12 +504,12 @@ export function buildAtlas() {
   });
   put(TILES.tall_grass, (ox, oy, rnd) => {
     for (let x = 0; x < TS; x++) for (let y = 0; y < TS; y++) px(ctx, ox + x, oy + y, 0, 0, 0, 0);
-    for (let i = 0; i < 7; i++) {
-      const x0 = 3 + (rnd() * 10) | 0;
-      const h = 6 + (rnd() * 8) | 0;
+    for (let i = 0; i < 9; i++) {
+      const x0 = 2 + (rnd() * 12) | 0;
+      const h = 7 + (rnd() * 8) | 0;
       for (let y = 0; y < h; y++) {
         const x = x0 + ((y / h) * (rnd() > 0.5 ? 1 : -1)) | 0;
-        px(ctx, ox + Math.max(0, Math.min(15, x)), oy + 15 - y, 78 + rnd() * 40, 122 + rnd() * 40, 40);
+        px(ctx, ox + Math.max(0, Math.min(15, x)), oy + 15 - y, 96 + rnd() * 44, 158 + rnd() * 44, 50);
       }
     }
   });
@@ -633,6 +633,140 @@ export function buildAtlas() {
       }
     });
   }
+
+  // --- extended Beta blocks (chest, doors, crops, bed, farmland_wet, jack_o_lantern, cake) ---
+  put(TILES.chest_top, (ox, oy, rnd) => {
+    noiseFill(ctx, ox, oy, [168, 122, 54], 10, rnd);
+    for (let i = 0; i < TS; i++) {
+      px(ctx, ox + i, oy, 82, 56, 24); px(ctx, ox + i, oy + 15, 82, 56, 24);
+      px(ctx, ox, oy + i, 82, 56, 24); px(ctx, ox + 15, oy + i, 82, 56, 24);
+    }
+  });
+  put(TILES.chest_side, (ox, oy, rnd) => {
+    noiseFill(ctx, ox, oy, [164, 118, 52], 10, rnd);
+    for (let i = 0; i < TS; i++) {
+      px(ctx, ox + i, oy, 82, 56, 24); px(ctx, ox + i, oy + 15, 82, 56, 24);
+      px(ctx, ox, oy + i, 82, 56, 24); px(ctx, ox + 15, oy + i, 82, 56, 24);
+      px(ctx, ox + i, oy + 5, 58, 38, 16);
+    }
+  });
+  put(TILES.chest_front, (ox, oy, rnd) => {
+    noiseFill(ctx, ox, oy, [164, 118, 52], 10, rnd);
+    for (let i = 0; i < TS; i++) {
+      px(ctx, ox + i, oy, 82, 56, 24); px(ctx, ox + i, oy + 15, 82, 56, 24);
+      px(ctx, ox, oy + i, 82, 56, 24); px(ctx, ox + 15, oy + i, 82, 56, 24);
+      px(ctx, ox + i, oy + 5, 48, 32, 14);
+    }
+    for (let y = 4; y < 8; y++) for (let x = 7; x < 9; x++) px(ctx, ox + x, oy + y, 214, 214, 222);
+    px(ctx, ox + 7, oy + 7, 150, 150, 160); px(ctx, ox + 8, oy + 7, 150, 150, 160);
+  });
+  put(TILES.door_wood, (ox, oy, rnd) => {
+    noiseFill(ctx, ox, oy, [152, 118, 68], 10, rnd);
+    for (let i = 0; i < TS; i++) {
+      px(ctx, ox + i, oy, 108, 80, 44); px(ctx, ox + i, oy + 15, 108, 80, 44);
+      px(ctx, ox, oy + i, 108, 80, 44); px(ctx, ox + 15, oy + i, 108, 80, 44);
+    }
+    for (let y = 2; y < 7; y++) for (let x = 3; x < 7; x++) px(ctx, ox + x, oy + y, 0, 0, 0, 0);
+    for (let y = 2; y < 7; y++) for (let x = 9; x < 13; x++) px(ctx, ox + x, oy + y, 0, 0, 0, 0);
+    px(ctx, ox + 12, oy + 9, 68, 54, 34); px(ctx, ox + 13, oy + 9, 68, 54, 34);
+  });
+  put(TILES.door_iron, (ox, oy, rnd) => {
+    noiseFill(ctx, ox, oy, [196, 196, 202], 10, rnd);
+    for (let i = 0; i < TS; i++) {
+      px(ctx, ox + i, oy, 138, 138, 144); px(ctx, ox + i, oy + 15, 138, 138, 144);
+      px(ctx, ox, oy + i, 138, 138, 144); px(ctx, ox + 15, oy + i, 138, 138, 144);
+    }
+    for (let y = 2; y < 7; y++) for (let x = 3; x < 7; x++) px(ctx, ox + x, oy + y, 0, 0, 0, 0);
+    for (let y = 2; y < 7; y++) for (let x = 9; x < 13; x++) px(ctx, ox + x, oy + y, 0, 0, 0, 0);
+  });
+  for (let stage = 0; stage < 8; stage++) {
+    put(TILES.crops0 + stage, (ox, oy, rnd) => {
+      for (let y = 0; y < TS; y++) for (let x = 0; x < TS; x++) px(ctx, ox + x, oy + y, 0, 0, 0, 0);
+      const h = 3 + stage * 1.7;
+      const golden = stage >= 7;
+      for (const sx of [2, 5, 8, 11, 13]) {
+        const sh = Math.min(15, Math.max(2, Math.round(h + (rnd() - 0.5) * 2)));
+        for (let y = 0; y < sh; y++) {
+          const tip = y >= sh - 2;
+          const r = golden ? (tip ? 228 : 186) : 76 + stage * 12;
+          const g = golden ? (tip ? 198 : 162) : 148 + stage * 4;
+          const b = golden ? 52 : 42;
+          px(ctx, ox + sx, oy + 15 - y, r, g, b);
+          if (tip && stage >= 4 && sx + 1 < TS) px(ctx, ox + sx + 1, oy + 15 - y, r, g, b);
+        }
+      }
+    });
+  }
+  put(TILES.bed_top, (ox, oy, rnd) => {
+    noiseFill(ctx, ox, oy, [172, 42, 38], 8, rnd);
+    for (let y = 0; y < 5; y++) for (let x = 1; x < 15; x++) px(ctx, ox + x, oy + y, 236, 236, 238);
+    for (let x = 0; x < TS; x++) px(ctx, ox + x, oy + 5, 132, 28, 26);
+  });
+  put(TILES.bed_side, (ox, oy, rnd) => {
+    for (let y = 0; y < TS; y++) for (let x = 0; x < TS; x++) px(ctx, ox + x, oy + y, 0, 0, 0, 0);
+    for (let y = 6; y < 11; y++) for (let x = 0; x < TS; x++) {
+      if (x < 4) px(ctx, ox + x, oy + y, 232, 232, 236);
+      else px(ctx, ox + x, oy + y, 172, 42, 38);
+    }
+    for (let y = 11; y < 14; y++) for (let x = 0; x < TS; x++) px(ctx, ox + x, oy + y, 148, 116, 68);
+    for (let y = 14; y < 16; y++) {
+      px(ctx, ox + 1, oy + y, 116, 88, 48); px(ctx, ox + 2, oy + y, 116, 88, 48);
+      px(ctx, ox + 13, oy + y, 116, 88, 48); px(ctx, ox + 14, oy + y, 116, 88, 48);
+    }
+  });
+  put(TILES.bed_end, (ox, oy) => {
+    for (let y = 0; y < TS; y++) for (let x = 0; x < TS; x++) px(ctx, ox + x, oy + y, 0, 0, 0, 0);
+    for (let y = 6; y < 11; y++) for (let x = 0; x < TS; x++) px(ctx, ox + x, oy + y, 172, 42, 38);
+    for (let y = 11; y < 14; y++) for (let x = 0; x < TS; x++) px(ctx, ox + x, oy + y, 148, 116, 68);
+    for (let y = 14; y < 16; y++) {
+      px(ctx, ox + 1, oy + y, 116, 88, 48); px(ctx, ox + 2, oy + y, 116, 88, 48);
+      px(ctx, ox + 13, oy + y, 116, 88, 48); px(ctx, ox + 14, oy + y, 116, 88, 48);
+    }
+  });
+  put(TILES.farmland_wet, (ox, oy, rnd) => {
+    for (let y = 0; y < TS; y++) for (let x = 0; x < TS; x++) {
+      const v = (rnd() - 0.5) * 10;
+      px(ctx, ox + x, oy + y, 64 + v, 38 + v, 20 + v);
+    }
+    for (let x = 0; x < TS; x++) {
+      px(ctx, ox + x, oy + 3, 42, 24, 12); px(ctx, ox + x, oy + 8, 42, 24, 12); px(ctx, ox + x, oy + 13, 42, 24, 12);
+    }
+  });
+  put(TILES.jack_o_lantern, (ox, oy, rnd) => {
+    for (let x = 0; x < TS; x++) {
+      const ridge = x % 4 === 0;
+      for (let y = 0; y < TS; y++) {
+        const v = (rnd() - 0.5) * 14;
+        if (ridge) px(ctx, ox + x, oy + y, 168 + v, 88 + v, 18 + v);
+        else px(ctx, ox + x, oy + y, 204 + v, 118 + v, 28 + v);
+      }
+    }
+    const eye = (x0, y0) => {
+      for (let y = 0; y < 3; y++) for (let x = 0; x < 3; x++) {
+        if (!(x === 2 && y === 0) && !(x === 0 && y === 2)) px(ctx, ox + x0 + x, oy + y0 + y, 255, 232, 110);
+      }
+    };
+    eye(3, 4); eye(10, 4);
+    for (let y = 9; y < 12; y++) for (let x = 4; x < 12; x++) {
+      const mouth = y === 9 ? (x >= 5 && x <= 10) : y === 10 ? (x === 4 || x === 11 || (x >= 5 && x <= 10)) : (x === 5 || x === 10);
+      if (mouth) px(ctx, ox + x, oy + y, 255, 224, 92);
+    }
+  });
+  put(TILES.cake_top, (ox, oy, rnd) => {
+    noiseFill(ctx, ox, oy, [242, 238, 234], 6, rnd);
+    for (const [cx, cy] of [[4, 4], [11, 4], [7, 8], [4, 11], [11, 11]]) {
+      px(ctx, ox + cx, oy + cy, 212, 34, 34); px(ctx, ox + cx + 1, oy + cy, 212, 34, 34);
+    }
+  });
+  put(TILES.cake_side, (ox, oy, rnd) => {
+    for (let y = 0; y < 8; y++) for (let x = 0; x < TS; x++) px(ctx, ox + x, oy + y, 0, 0, 0, 0);
+    for (let y = 8; y < 11; y++) for (let x = 0; x < TS; x++) px(ctx, ox + x, oy + y, 240, 236, 232);
+    for (let y = 11; y < 16; y++) for (let x = 0; x < TS; x++) {
+      const v = (rnd() - 0.5) * 10;
+      px(ctx, ox + x, oy + y, 198 + v, 138 + v, 72 + v);
+    }
+  });
+  put(TILES.cake_bottom, (ox, oy, rnd) => noiseFill(ctx, ox, oy, [184, 124, 62], 8, rnd));
 
   return canvas;
 }
@@ -881,12 +1015,12 @@ export function buildItemIcons() {
     rect(ox, oy, 3, 11, 10, 1, 82, 132, 32);
     rect(ox, oy, 5, 6, 6, 5, 222, 72, 72);
   });
-  // ink sac / dye
+  // lapis lazuli
   draw(34, (ox, oy) => {
-    rect(ox, oy, 5, 5, 6, 6, 32, 32, 42);
-    rect(ox, oy, 4, 6, 8, 4, 32, 32, 42);
-    rect(ox, oy, 7, 6, 2, 2, 62, 62, 72);
-    rect(ox, oy, 7, 3, 2, 2, 82, 82, 92);
+    rect(ox, oy, 5, 4, 6, 8, 42, 74, 198);
+    rect(ox, oy, 4, 6, 8, 5, 42, 74, 198);
+    rect(ox, oy, 6, 5, 3, 3, 92, 134, 242);
+    rect(ox, oy, 5, 11, 6, 1, 28, 48, 148);
   });
   // redstone dust
   draw(35, (ox, oy) => {
@@ -1084,6 +1218,50 @@ export function buildItemIcons() {
     }
   });
   // reeds item name sugar canes
+  // boat (92)
+  draw(92, (ox, oy) => {
+    rect(ox, oy, 2, 7, 12, 5, 148, 112, 62);
+    rect(ox, oy, 3, 6, 10, 2, 116, 86, 46);
+    rect(ox, oy, 3, 12, 10, 1, 108, 78, 42);
+    rect(ox, oy, 1, 6, 2, 4, 148, 112, 62); rect(ox, oy, 13, 6, 2, 4, 148, 112, 62);
+  });
+  // milk bucket (93)
+  draw(93, (ox, oy) => {
+    rect(ox, oy, 4, 5, 8, 2, 190, 190, 190);
+    rect(ox, oy, 4, 7, 8, 5, 246, 246, 250);
+    rect(ox, oy, 5, 12, 6, 1, 120, 120, 120);
+    rect(ox, oy, 3, 5, 1, 7, 120, 120, 120); rect(ox, oy, 12, 5, 1, 7, 120, 120, 120);
+  });
+  // painting (94)
+  draw(94, (ox, oy) => {
+    rect(ox, oy, 2, 3, 12, 10, 118, 86, 46);
+    rect(ox, oy, 3, 4, 10, 8, 92, 148, 212);
+    rect(ox, oy, 3, 9, 10, 3, 86, 156, 62);
+    rect(ox, oy, 10, 5, 2, 2, 250, 224, 92);
+  });
+  // iron door item (95)
+  draw(95, (ox, oy) => {
+    rect(ox, oy, 4, 1, 8, 14, 196, 196, 202);
+    rect(ox, oy, 5, 2, 2, 4, 52, 52, 58); rect(ox, oy, 9, 2, 2, 4, 52, 52, 58);
+    rect(ox, oy, 5, 8, 6, 5, 168, 168, 174);
+  });
+  // wood door item (96)
+  draw(96, (ox, oy) => {
+    rect(ox, oy, 4, 1, 8, 14, 152, 118, 68);
+    rect(ox, oy, 5, 2, 2, 4, 52, 38, 22); rect(ox, oy, 9, 2, 2, 4, 52, 38, 22);
+    rect(ox, oy, 5, 8, 6, 5, 126, 94, 52);
+  });
+  // bone meal (97)
+  draw(97, (ox, oy, rnd) => {
+    for (let i = 0; i < 16; i++) rect(ox, oy, 4 + (rnd() * 8 | 0), 5 + (rnd() * 7 | 0), 2, 2, 238, 238, 232);
+    rect(ox, oy, 6, 6, 4, 4, 250, 250, 246);
+  });
+  // redstone repeater (98)
+  draw(98, (ox, oy) => {
+    rect(ox, oy, 2, 9, 12, 4, 142, 142, 142);
+    rect(ox, oy, 5, 6, 2, 3, 222, 36, 36); rect(ox, oy, 9, 6, 2, 3, 222, 36, 36);
+    rect(ox, oy, 4, 10, 8, 1, 182, 32, 32);
+  });
   return canvas;
 }
 

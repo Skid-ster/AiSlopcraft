@@ -1,12 +1,83 @@
 // Player physics + controls. Beta 1.7.3 feel: no sprint, 4.317 b/s walk,
-// 1.25-block jump, fall damage, sneak, swimming.
+// 1.25-block jump, fall damage, sneak edge-guard, ladders, cobwebs, ice, swimming, armor.
 import * as THREE from 'three';
-import { getBlock, AIR, WATER, LAVA, isBlock, ITEMS, breakTime, canHarvest, GRASS, STONE, COBBLE, DIRT, SAND, GRAVEL, LEAVES, LOG, SNOW } from '../world/blocks.js';
-import { CH, WORLD_H } from '../world/chunk.js';
+import {
+  getBlock, AIR, WATER, WATER_FLOW, LAVA, LAVA_FLOW, ITEMS,
+  LADDER, COBWEB, CACTUS, ICE, SLOW_SAND, WOOD_DOOR, IRON_DOOR, CAKE_BLOCK,
+} from '../world/blocks.js';
 
 const W = 0.6;          // player width
 const H = 1.8;          // player height
 const EYE = 1.62;       // eye height
+
+function isLiquidWater(id) { return id === WATER || id === WATER_FLOW; }
+function isLiquidLava(id) { return id === LAVA || id === LAVA_FLOW; }
+
+function rayBoxIntersect(ox, oy, oz, dx, dy, dz, minX, minY, minZ, maxX, maxY, maxZ, maxDist) {
+  let tMin = 0;
+  let tMax = maxDist;
+  let hitAxis = -1;
+  let hitSign = 0;
+
+  const axes = [
+    [ox, dx, minX, maxX, 0],
+    [oy, dy, minY, maxY, 1],
+    [oz, dz, minZ, maxZ, 2],
+  ];
+
+  for (const [o, d, bMin, bMax, axis] of axes) {
+    if (Math.abs(d) < 1e-9) {
+      if (o < bMin || o > bMax) return null;
+    } else {
+      const inv = 1 / d;
+      let t1 = (bMin - o) * inv;
+      let t2 = (bMax - o) * inv;
+      let sign = -Math.sign(d);
+      if (t1 > t2) {
+        const tmp = t1; t1 = t2; t2 = tmp;
+        sign = Math.sign(d);
+      }
+      if (t1 > tMin) {
+        tMin = t1;
+        hitAxis = axis;
+        hitSign = sign;
+      }
+      if (t2 < tMax) tMax = t2;
+      if (tMin > tMax) return null;
+    }
+  }
+
+  const face = [0, 0, 0];
+  if (hitAxis >= 0) face[hitAxis] = hitSign;
+  return { dist: tMin, face };
+}
+
+export function blockSelectionBounds(world, x, y, z, id) {
+  const bd = getBlock(id);
+  if (id === WOOD_DOOR || id === IRON_DOOR) {
+    const meta = world.getMeta ? world.getMeta(x, y, z) : 0;
+    const facing = meta & 3;
+    const isOpen = (meta & 4) !== 0;
+    const orient = isOpen ? ((facing + 2) & 3) : facing;
+    const t = 0.1875;
+    if (orient === 0) return [0, 0, 0, 1, 1, t];
+    if (orient === 1) return [0, 0, 1 - t, 1, 1, 1];
+    if (orient === 2) return [0, 0, 0, t, 1, 1];
+    return [1 - t, 0, 0, 1, 1, 1];
+  }
+  if (id === CAKE_BLOCK) {
+    const eaten = Math.min(5, (world.getMeta ? world.getMeta(x, y, z) : 0) & 7);
+    return [0.0625 + eaten * 0.125, 0, 0.0625, 0.9375, 0.5, 0.9375];
+  }
+  if (id === LADDER) {
+    if (getBlock(world.getBlock(x, y, z - 1)).solid) return [0, 0, 0, 1, 1, 0.15];
+    if (getBlock(world.getBlock(x, y, z + 1)).solid) return [0, 0, 0.85, 1, 1, 1];
+    if (getBlock(world.getBlock(x - 1, y, z)).solid) return [0, 0, 0, 0.15, 1, 1];
+    if (getBlock(world.getBlock(x + 1, y, z)).solid) return [0.85, 0, 0, 1, 1, 1];
+    return [0.85, 0, 0, 1, 1, 1];
+  }
+  return bd.bounds || null;
+}
 
 export class Player {
   constructor(world, camera, canvas) {
@@ -18,6 +89,8 @@ export class Player {
     this.onGround = false;
     this.inWater = false;
     this.inLava = false;
+    this.onLadder = false;
+    this.inCobweb = false;
     this.sneaking = false;
     this.health = 20;
     this.maxHealth = 20;
@@ -27,16 +100,17 @@ export class Player {
     this.breath = 0;
     this.air = 300;
     this.gameMode = 'survival';
+    this.viewBobbing = true;
+    this._bobPhase = 0;
+    this._bobStrength = 0;
 
-    // inventory: 36 slots + hotbar index. slot = {id, count, damage}
+    // inventory: 36 slots + 4 armor slots (0:head, 1:chest, 2:legs, 3:feet)
     this.inventory = new Array(36).fill(null);
+    this.armor = new Array(4).fill(null);
     this.hotbarIndex = 0;
     this.cursorStack = null; // for inventory drag
     this.mining = { active: false, x: 0, y: 0, z: 0, progress: 0, total: 0 };
     this.stats = { distance: 0, jumps: 0, blocksPlaced: 0, blocksMined: 0 };
-
-    // start items: pickaxe + some torches + planks so testing is fun? Accurate survival starts empty.
-    // Keep it authentic: empty inventory.
 
     this.keys = {};
     this.pointerLocked = false;
@@ -45,7 +119,7 @@ export class Player {
     this.sensitivity = 0.0022;
 
     canvas.addEventListener('click', () => {
-      if (!this.pointerLocked && !window.uiPause) canvas.requestPointerLock();
+      if (!this.pointerLocked && !window.uiPause) canvas.requestPointerLock?.();
     });
     document.addEventListener('pointerlockchange', () => {
       this.pointerLocked = document.pointerLockElement === canvas;
@@ -96,6 +170,20 @@ export class Player {
 
   get heldStack() { return this.inventory[this.hotbarIndex]; }
 
+  get armorPoints() {
+    let total = 0;
+    for (const piece of this.armor) {
+      if (!piece) continue;
+      const def = ITEMS[piece.id];
+      if (!def?.defense) continue;
+      // Beta 1.7.3: armor protection scales slightly with remaining durability
+      const maxDur = def.durability || 100;
+      const ratio = Math.max(0.2, 1 - (piece.damage || 0) / maxDur);
+      total += def.defense * ratio;
+    }
+    return Math.min(20, Math.round(total));
+  }
+
   respawn(spawnY, spawnX = 8.5, spawnZ = 8.5) {
     this.pos.set(spawnX, spawnY, spawnZ);
     this.vel.set(0, 0, 0);
@@ -109,8 +197,11 @@ export class Player {
     this.hurtTime = 0;
     this.inWater = false;
     this.inLava = false;
+    this.onLadder = false;
+    this.inCobweb = false;
     this._drownAcc = 0;
     this._lavaAcc = 0;
+    this._cactusAcc = 0;
     this.leftDown = false;
     this.rightDown = false;
     this.mouseDX = 0;
@@ -122,7 +213,12 @@ export class Player {
     this.camera.lookAt(spawnX, spawnY + EYE, spawnZ - 1);
   }
 
-  update(dt, world, audio, onPlace, onBreak) {
+  _solidBlockAt(world, x, y, z) {
+    if (typeof world.isSolidAt === 'function') return world.isSolidAt(x, y, z);
+    return getBlock(world.getBlock(x, y, z)).solid;
+  }
+
+  update(dt, world, audio) {
     if (this.dead) return;
     dt = Math.min(dt, 0.05);
 
@@ -138,52 +234,76 @@ export class Player {
     const strafe = (this.keys['KeyD'] ? 1 : 0) - (this.keys['KeyA'] ? 1 : 0);
     this.sneaking = !!(this.keys['ShiftLeft'] || this.keys['ShiftRight']);
 
-    // check fluids at feet / body
-    const feet = world.getBlock(Math.floor(this.pos.x), Math.floor(this.pos.y + 0.2), Math.floor(this.pos.z));
-    const mid = world.getBlock(Math.floor(this.pos.x), Math.floor(this.pos.y + 1.2), Math.floor(this.pos.z));
-    const headFluid = world.getBlock(Math.floor(this.pos.x), Math.floor(this.pos.y + EYE), Math.floor(this.pos.z));
-    this.inWater = feet === WATER || mid === WATER || headFluid === WATER;
-    this.inLava = feet === LAVA || mid === LAVA || headFluid === LAVA;
+    // check fluids / ladders / cobwebs / ground material
+    const bx = Math.floor(this.pos.x), bz = Math.floor(this.pos.z);
+    const groundBlock = world.getBlock(bx, Math.floor(this.pos.y - 0.2), bz);
+    const feet = world.getBlock(bx, Math.floor(this.pos.y + 0.2), bz);
+    const mid = world.getBlock(bx, Math.floor(this.pos.y + 1.1), bz);
+    const headFluid = world.getBlock(bx, Math.floor(this.pos.y + EYE), bz);
+
+    const prevInWater = this.inWater;
+    this.inWater = isLiquidWater(feet) || isLiquidWater(mid) || isLiquidWater(headFluid);
+    this.inLava = isLiquidLava(feet) || isLiquidLava(mid) || isLiquidLava(headFluid);
+    if (!prevInWater && this.inWater && this.vel.y < -3.5 && audio?.splash) {
+      audio.splash();
+    }
+
+    this.onLadder = feet === LADDER || mid === LADDER;
+    this.inCobweb = feet === COBWEB || mid === COBWEB;
 
     // acceleration
     let speed = 4.317;
-    if (this.sneaking) speed = 1.4;
-    if (this.inWater) speed *= 0.42;
+    if (this.sneaking) speed = 1.35;
+    if (groundBlock === SLOW_SAND && this.onGround) speed *= 0.55;
+    if (this.inWater) speed *= 0.44;
     if (this.inLava) speed *= 0.28;
+    if (this.inCobweb) speed *= 0.25;
 
     const sin = Math.sin(this.yaw), cos = Math.cos(this.yaw);
-    // camera at yaw=0 looks toward -Z; movement must use the same basis
     let ax = (-forward * sin + strafe * cos);
     let az = (-forward * cos - strafe * sin);
     const len = Math.hypot(ax, az);
     if (len > 0) { ax /= len; az /= len; }
 
-    // velocity control (Minecraft-style ground/air control, scaled per second)
-    const control = this.onGround ? 8.5 : 1.6;
+    const onIce = this.onGround && groundBlock === ICE;
+    const control = this.onGround ? (onIce ? 2.4 : 8.5) : 1.6;
     if (len > 0) {
       this.vel.x += ax * speed * control * dt;
       this.vel.z += az * speed * control * dt;
     }
 
-    // gravity (Minecraft ~32 b/s², slightly softened for feel)
-    if (this.inWater || this.inLava) {
+    // gravity / swimming / ladders / cobweb
+    if (this.inCobweb) {
+      this.vel.y = Math.max(-1.2, this.vel.y - 8 * dt);
+      if (this.keys['Space']) this.vel.y = 0.8;
+      this.fallStart = null;
+    } else if (this.onLadder) {
+      this.fallStart = null;
+      if (this.keys['Space'] || len > 0) {
+        this.vel.y = 3.6;
+      } else if (this.sneaking) {
+        this.vel.y = 0;
+      } else {
+        this.vel.y = Math.max(this.vel.y - 20 * dt, -3.0);
+      }
+    } else if (this.inWater || this.inLava) {
       this.vel.y -= 7 * dt;
-      if (this.keys['Space']) this.vel.y += 10 * dt;
+      if (this.keys['Space']) this.vel.y += 10.5 * dt;
       this.vel.y *= Math.pow(0.88, dt * 20);
     } else {
       this.vel.y -= 28 * dt;
     }
 
     // jump (0.42 blocks/tick = 8.4 b/s ≈ 1.25 block jump)
-    if (this.keys['Space'] && this.onGround && !this.inWater) {
+    if (this.keys['Space'] && this.onGround && !this.inWater && !this.onLadder && !this.inCobweb) {
       this.vel.y = 8.45;
       this.onGround = false;
       this.stats.jumps++;
       if (audio) audio.jump();
     }
 
-    // frame-rate independent damping (beta: 0.72 ground / 0.91 air per tick @20tps)
-    const groundDamp = Math.pow(0.72, dt * 20);
+    // frame-rate independent damping
+    const groundDamp = Math.pow(onIce ? 0.96 : 0.72, dt * 20);
     const airDamp = Math.pow(0.91, dt * 20);
     const damping = (this.onGround && !this.inWater) ? groundDamp : airDamp;
     this.vel.x *= damping; this.vel.z *= damping;
@@ -192,57 +312,81 @@ export class Player {
       this.vel.x *= wDamp; this.vel.z *= wDamp;
     }
 
-    // clamp
-    const maxH = speed * 1.06;
+    // clamp horizontal speed
+    const maxH = speed * (onIce ? 1.28 : 1.06);
     const hv = Math.hypot(this.vel.x, this.vel.z);
     if (hv > maxH) {
       this.vel.x *= maxH / hv;
       this.vel.z *= maxH / hv;
     }
 
-    // integrate vertically first so landing and jumping remain deterministic
+    // integrate vertically first
     this.moveAxis(1, this.vel.y * dt, world);
     this.onGround = this.checkGround(world);
-    this.moveAxis(0, this.vel.x * dt, world);
-    this.moveAxis(2, this.vel.z * dt, world);
+
+    // Sneak edge protection (Beta bridge-building!)
+    let dx = this.vel.x * dt;
+    let dz = this.vel.z * dt;
+    if (this.sneaking && this.onGround) {
+      if (dx !== 0 && !this.checkGroundAt(world, this.pos.x + dx, this.pos.y, this.pos.z)) {
+        dx = 0;
+        this.vel.x = 0;
+      }
+      if (dz !== 0 && !this.checkGroundAt(world, this.pos.x + dx, this.pos.y, this.pos.z + dz)) {
+        dz = 0;
+        this.vel.z = 0;
+      }
+    }
+
+    const blockedX = this.moveAxis(0, dx, world) === 'blocked' || (dx !== 0 && this.vel.x === 0);
+    const blockedZ = this.moveAxis(2, dz, world) === 'blocked' || (dz !== 0 && this.vel.z === 0);
+    // Swim-up boost when jumping against a shoreline lip from water!
+    if ((this.inWater || this.inLava) && this.keys['Space'] && (blockedX || blockedZ)) {
+      this.vel.y = Math.max(this.vel.y, 6.2);
+    }
     this.onGround = this.checkGround(world);
 
     // fall damage
     if (this.onGround) {
       if (this.fallStart != null) {
         const dist = this.fallStart - this.pos.y;
-        if (dist > 3.2 && !this.inWater) {
+        if (dist > 3.2 && !this.inWater && !this.onLadder && !this.inCobweb) {
           const dmg = Math.floor(dist - 3);
           if (dmg > 0) this.damage(dmg, audio);
         }
         this.fallStart = null;
       }
-    } else if (this.vel.y < -0.5 && this.fallStart == null && !this.inWater) {
+    } else if (this.vel.y < -0.5 && this.fallStart == null && !this.inWater && !this.onLadder && !this.inCobweb) {
       this.fallStart = this.pos.y;
     }
-    if (this.inWater) this.fallStart = null;
+    if (this.inWater || this.onLadder || this.inCobweb) this.fallStart = null;
 
-    // walk sound
+    // walk sound & view bobbing
     const moved = Math.hypot(this.pos.x - (this._lastX ?? this.pos.x), this.pos.z - (this._lastZ ?? this.pos.z));
+    this.stats.distance += moved;
     if (this.onGround && moved > 0.001) {
       this._walkAcc = (this._walkAcc || 0) + moved;
-      if (this._walkAcc > 2.1) {
+      if (this._walkAcc > 2.05) {
         this._walkAcc = 0;
-        if (audio) audio.step(feet);
+        if (audio) audio.step(groundBlock || 2);
       }
+      this._bobPhase += moved * 2.7;
+      this._bobStrength = Math.min(1, this._bobStrength + dt * 8);
+    } else {
+      this._bobStrength = Math.max(0, this._bobStrength - dt * 8);
     }
     this._lastX = this.pos.x; this._lastZ = this.pos.z;
 
-    // drowning / lava damage
+    // drowning / lava / cactus contact damage
     const head = world.getBlock(Math.floor(this.pos.x), Math.floor(this.pos.y + EYE), Math.floor(this.pos.z));
-    if (head === WATER) {
+    if (isLiquidWater(head)) {
       this.air -= dt * 20;
       if (this.air <= 0) {
         this.air = 0;
         this._drownAcc = (this._drownAcc || 0) + dt;
         if (this._drownAcc > 1) {
           this._drownAcc = 0;
-          this.damage(2, audio);
+          this.damage(2, audio, true);
         }
       }
     } else {
@@ -252,20 +396,57 @@ export class Player {
       this._lavaAcc = (this._lavaAcc || 0) + dt;
       if (this._lavaAcc > 0.5) {
         this._lavaAcc = 0;
-        this.damage(2, audio);
+        this.damage(4, audio);
       }
     }
+    if (this.touchingBlock(world, CACTUS)) {
+      this._cactusAcc = (this._cactusAcc || 0) + dt;
+      if (this._cactusAcc > 0.5) {
+        this._cactusAcc = 0;
+        this.damage(1, audio);
+      }
+    } else {
+      this._cactusAcc = 0;
+    }
 
-    if (this.hurtTime > 0) this.hurtTime -= dt;
+    if (this.hurtTime > 0) this.hurtTime = Math.max(0, this.hurtTime - dt);
 
-    // camera
-    this.camera.position.set(this.pos.x, this.pos.y + EYE - (this.sneaking ? 0.12 : 0), this.pos.z);
+    // camera with subtle Beta view-bobbing and hurt tilt
+    const bobOffY = (this.viewBobbing && !this.sneaking) ? Math.abs(Math.cos(this._bobPhase)) * 0.045 * this._bobStrength : 0;
+    const bobOffX = (this.viewBobbing && !this.sneaking) ? Math.sin(this._bobPhase) * 0.03 * this._bobStrength : 0;
+    const rightX = Math.cos(this.yaw), rightZ = -Math.sin(this.yaw);
+    this.camera.position.set(
+      this.pos.x + rightX * bobOffX,
+      this.pos.y + EYE - (this.sneaking ? 0.14 : 0) + bobOffY,
+      this.pos.z + rightZ * bobOffX
+    );
     const dir = new THREE.Vector3(
       -Math.sin(this.yaw) * Math.cos(this.pitch),
       Math.sin(this.pitch),
       -Math.cos(this.yaw) * Math.cos(this.pitch)
     );
     this.camera.lookAt(this.camera.position.clone().add(dir));
+    if (this.hurtTime > 0 && this.camera.rotation) {
+      this.camera.rotation.z += Math.sin((this.hurtTime / 0.5) * Math.PI) * 0.07;
+    }
+  }
+
+  touchingBlock(world, blockId) {
+    const pad = 0.06;
+    const minX = Math.floor(this.pos.x - W / 2 - pad);
+    const maxX = Math.floor(this.pos.x + W / 2 + pad);
+    const minY = Math.floor(this.pos.y);
+    const maxY = Math.floor(this.pos.y + H);
+    const minZ = Math.floor(this.pos.z - W / 2 - pad);
+    const maxZ = Math.floor(this.pos.z + W / 2 + pad);
+    for (let y = minY; y <= maxY; y++) {
+      for (let z = minZ; z <= maxZ; z++) {
+        for (let x = minX; x <= maxX; x++) {
+          if (world.getBlock(x, y, z) === blockId) return true;
+        }
+      }
+    }
+    return false;
   }
 
   moveAxis(axis, amount, world) {
@@ -274,7 +455,6 @@ export class Player {
     const old = pos.getComponent(axis);
     pos.setComponent(axis, old + amount);
 
-    // resolve collisions
     const minX = pos.x - W / 2, maxX = pos.x + W / 2;
     const minY = pos.y, maxY = pos.y + H;
     const minZ = pos.z - W / 2, maxZ = pos.z + W / 2;
@@ -282,21 +462,27 @@ export class Player {
     for (let y = Math.floor(minY); y <= Math.floor(maxY); y++) {
       for (let z = Math.floor(minZ); z <= Math.floor(maxZ); z++) {
         for (let x = Math.floor(minX); x <= Math.floor(maxX); x++) {
+          if (!this._solidBlockAt(world, x, y, z)) continue;
           const b = world.getBlock(x, y, z);
-          const bd = getBlock(b);
-          if (!bd.solid) continue;
-          // AABB overlap check
-          if (maxX > x && minX < x + 1 && maxY > y && minY < y + 1 && maxZ > z && minZ < z + 1) {
+          const bounds = blockSelectionBounds(world, x, y, z, b);
+          const bx0 = x + (bounds ? bounds[0] : 0);
+          const by0 = y + (bounds ? bounds[1] : 0);
+          const bz0 = z + (bounds ? bounds[2] : 0);
+          const bx1 = x + (bounds ? bounds[3] : 1);
+          const by1 = y + (bounds ? bounds[4] : 1);
+          const bz1 = z + (bounds ? bounds[5] : 1);
+
+          if (maxX > bx0 && minX < bx1 && maxY > by0 && minY < by1 && maxZ > bz0 && minZ < bz1) {
             if (axis === 1) {
-              if (amount > 0) { pos.y = y - H - 0.001; this.vel.y = 0; }
-              else { pos.y = y + 1.001; this.vel.y = 0; }
+              if (amount > 0) { pos.y = by0 - H - 0.001; this.vel.y = 0; }
+              else { pos.y = by1 + 0.001; this.vel.y = 0; }
             } else if (axis === 0) {
-              if (amount > 0) pos.x = x - W / 2 - 0.001;
-              else pos.x = x + 1 + W / 2 + 0.001;
+              if (amount > 0) pos.x = bx0 - W / 2 - 0.001;
+              else pos.x = bx1 + W / 2 + 0.001;
               this.vel.x = 0;
             } else {
-              if (amount > 0) pos.z = z - W / 2 - 0.001;
-              else pos.z = z + 1 + W / 2 + 0.001;
+              if (amount > 0) pos.z = bz0 - W / 2 - 0.001;
+              else pos.z = bz1 + W / 2 + 0.001;
               this.vel.z = 0;
             }
             return amount > 0 ? 'blocked' : 'ground';
@@ -307,25 +493,48 @@ export class Player {
     return 'ok';
   }
 
-  checkGround(world) {
-    const x0 = Math.floor(this.pos.x - W / 2 + 0.001);
-    const x1 = Math.floor(this.pos.x + W / 2 - 0.001);
-    const z0 = Math.floor(this.pos.z - W / 2 + 0.001);
-    const z1 = Math.floor(this.pos.z + W / 2 - 0.001);
-    const y = Math.floor(this.pos.y - 0.02);
+  checkGroundAt(world, px, py, pz) {
+    const x0 = Math.floor(px - W / 2 + 0.001);
+    const x1 = Math.floor(px + W / 2 - 0.001);
+    const z0 = Math.floor(pz - W / 2 + 0.001);
+    const z1 = Math.floor(pz + W / 2 - 0.001);
+    const y = Math.floor(py - 0.02);
     for (let z = z0; z <= z1; z++) {
       for (let x = x0; x <= x1; x++) {
+        if (!this._solidBlockAt(world, x, y, z)) continue;
         const b = world.getBlock(x, y, z);
-        if (getBlock(b).solid) return true;
+        const bounds = blockSelectionBounds(world, x, y, z, b);
+        const topY = y + (bounds ? bounds[4] : 1);
+        if (Math.abs(py - topY) < 0.08 || (!bounds && py >= y)) return true;
       }
     }
     return false;
   }
 
-  damage(amount, audio) {
+  checkGround(world) {
+    return this.checkGroundAt(world, this.pos.x, this.pos.y, this.pos.z);
+  }
+
+  damage(amount, audio, bypassArmor = false) {
     if (this.dead || this.gameMode === 'creative') return;
     if (this.hurtTime > 0.35) return;
-    this.health -= amount;
+
+    let finalDamage = amount;
+    if (!bypassArmor && this.armorPoints > 0) {
+      // Beta 1.7.3: up to 80% damage reduction at 20 armor points (4% per armor point)
+      const reduction = Math.min(0.8, this.armorPoints * 0.04);
+      finalDamage = Math.max(1, Math.round(amount * (1 - reduction)));
+      const wear = Math.max(1, Math.ceil(amount / 2));
+      for (let i = 0; i < 4; i++) {
+        const piece = this.armor[i];
+        if (!piece) continue;
+        const maxDur = ITEMS[piece.id]?.durability || 100;
+        piece.damage = (piece.damage || 0) + wear;
+        if (piece.damage >= maxDur) this.armor[i] = null;
+      }
+    }
+
+    this.health -= finalDamage;
     this.hurtTime = 0.5;
     if (audio) audio.hurt();
     if (this.health <= 0) {
@@ -334,8 +543,8 @@ export class Player {
     }
   }
 
-  // Raycast through blocks (DDA), returns {x,y,z, face:[dx,dy,dz], dist} or null
-  raycast(world, maxDist = 5) {
+  // Raycast through blocks (DDA), returns {x,y,z, face:[dx,dy,dz], dist, block, bounds} or null
+  raycast(world, maxDist = 5, opts = {}) {
     const dir = new THREE.Vector3(
       -Math.sin(this.yaw) * Math.cos(this.pitch),
       Math.sin(this.pitch),
@@ -356,8 +565,39 @@ export class Player {
 
     while (t <= maxDist) {
       const b = world.getBlock(x, y, z);
-      if (b !== AIR && getBlock(b).solid) {
-        return { x, y, z, face, dist: t };
+      if (b !== AIR) {
+        const bd = getBlock(b);
+        let candidate = false;
+        if (opts.solidOnly) {
+          candidate = this._solidBlockAt(world, x, y, z);
+        } else if (opts.includeLiquids) {
+          candidate = bd.targetable !== false || bd.liquid;
+        } else {
+          candidate = bd.targetable !== false && !bd.liquid;
+        }
+
+        if (candidate) {
+          const bounds = blockSelectionBounds(world, x, y, z, b);
+          if (!bounds) {
+            return { x, y, z, face, dist: t, block: b, bounds: null };
+          }
+          const subHit = rayBoxIntersect(
+            origin.x, origin.y, origin.z,
+            dir.x, dir.y, dir.z,
+            x + bounds[0], y + bounds[1], z + bounds[2],
+            x + bounds[3], y + bounds[4], z + bounds[5],
+            maxDist,
+          );
+          if (subHit) {
+            return {
+              x, y, z,
+              face: (subHit.face[0] || subHit.face[1] || subHit.face[2]) ? subHit.face : face,
+              dist: subHit.dist,
+              block: b,
+              bounds,
+            };
+          }
+        }
       }
       if (tMaxX < tMaxY && tMaxX < tMaxZ) {
         x += stepX; t = tMaxX; tMaxX += tDeltaX;
@@ -412,30 +652,56 @@ export class Player {
     return this.insertItem(id, wanted, damage) === wanted;
   }
 
+  consumeItemId(id, amount = 1) {
+    let needed = amount;
+    for (let i = 0; i < this.inventory.length && needed > 0; i++) {
+      const s = this.inventory[i];
+      if (!s || s.id !== id) continue;
+      const take = Math.min(s.count, needed);
+      s.count -= take;
+      needed -= take;
+      if (s.count <= 0) this.inventory[i] = null;
+    }
+    return amount - needed;
+  }
+
+  hasItem(id, amount = 1) {
+    let total = 0;
+    for (const s of this.inventory) {
+      if (s && s.id === id) total += s.count;
+    }
+    return total >= amount;
+  }
+
   eatHeld(audio) {
     const stack = this.heldStack;
-    const food = stack && ITEMS[stack.id]?.food;
+    const def = stack && ITEMS[stack.id];
+    const food = def?.food;
     if (!food || this.health >= this.maxHealth || this.dead) return false;
     this.health = Math.min(this.maxHealth, this.health + food);
+    const returnItem = def.returns || null;
     this.consumeHeld();
+    if (returnItem) this.insertItem(returnItem, 1, 0);
     if (audio) audio.eat();
     return true;
   }
 
-  consumeHeld() {
+  consumeHeld(count = 1) {
     const s = this.inventory[this.hotbarIndex];
-    if (!s) return;
-    s.count--;
+    if (!s) return null;
+    const taken = Math.min(s.count, count);
+    const copy = { id: s.id, count: taken, damage: s.damage || 0 };
+    s.count -= taken;
     if (s.count <= 0) this.inventory[this.hotbarIndex] = null;
+    return copy;
   }
 
-  useHeldOn(blockId) {
-    // damage tool durability
+  useHeldOn(blockId, wear = 1) {
     const s = this.inventory[this.hotbarIndex];
     if (!s) return;
     const it = ITEMS[s.id];
     if (it && it.durability) {
-      s.damage = (s.damage || 0) + 1;
+      s.damage = (s.damage || 0) + wear;
       if (s.damage >= it.durability) this.inventory[this.hotbarIndex] = null;
     }
   }

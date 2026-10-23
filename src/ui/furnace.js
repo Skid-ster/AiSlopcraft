@@ -1,14 +1,21 @@
 // Small deterministic furnace simulation, separated for headless regression tests.
-import { ITEMS, LOG, PLANKS } from '../world/blocks.js';
+import { ITEMS, LOG, PLANKS, SAPLING, CHEST, WOOD_DOOR, LADDER } from '../world/blocks.js';
 import { smeltResult } from './recipes.js';
 
 export const FUEL_TIMES = Object.freeze({
   [LOG]: 15,
   [PLANKS]: 15,
-  280: 5,  // stick
-  263: 80, // coal / charcoal
-  47: 15, // bookshelf
-  58: 15, // crafting table
+  [SAPLING]: 5,
+  [CHEST]: 15,
+  [WOOD_DOOR]: 10,
+  [LADDER]: 15,
+  280: 5,    // stick
+  281: 5,    // wooden bowl
+  263: 80,   // coal / charcoal
+  327: 1000, // lava bucket
+  47: 15,    // bookshelf
+  58: 15,    // crafting table
+  268: 10, 269: 10, 270: 10, 271: 10, 290: 10, // wooden tools
 });
 
 export function createFurnaceState() {
@@ -90,12 +97,16 @@ export function tickFurnace(furnace, dt) {
   let cooked = 0;
   let result = getSmeltableResult(furnace);
   if (furnace.burn <= 0 && result != null && furnace.fuel && furnace.fuel.count > 0) {
-    const fuelDuration = FUEL_TIMES[furnace.fuel.id] || 0;
+    const fuelId = furnace.fuel.id;
+    const fuelDuration = FUEL_TIMES[fuelId] || 0;
     if (fuelDuration > 0) {
       furnace.burn = fuelDuration;
       furnace.burnMax = fuelDuration;
       furnace.fuel.count--;
-      if (furnace.fuel.count <= 0) furnace.fuel = null;
+      if (furnace.fuel.count <= 0) {
+        // Lava bucket leaves an empty bucket behind (Beta behavior!)
+        furnace.fuel = fuelId === 327 ? { id: 325, count: 1, damage: 0 } : null;
+      }
     }
   }
 
