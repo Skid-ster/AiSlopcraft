@@ -285,7 +285,7 @@ export class Mob {
     this.texture = new THREE.CanvasTexture(buildMobTexture(type));
     this.texture.magFilter = THREE.NearestFilter;
     this.texture.minFilter = THREE.NearestFilter;
-    this.texture.colorSpace = THREE.NoColorSpace;
+    this.texture.colorSpace = THREE.SRGBColorSpace;
     const model = buildMobModel(type, this.texture);
     this.group = model.group;
     this.parts = model.parts;
@@ -554,10 +554,15 @@ export class Mob {
       if (!object.material) return;
       const materials = Array.isArray(object.material) ? object.material : [object.material];
       for (const material of materials) {
-        if (!material.color) continue;
-        if (material.userData.baseColor === undefined) material.userData.baseColor = material.color.getHex();
-        material.color.setHex(tint ?? material.userData.baseColor);
-        if (!tint) material.color.multiplyScalar(brightness);
+        if (material.uniforms?.uTint) {
+          const base = material.userData.baseTint || new THREE.Color(1, 1, 1);
+          material.uniforms.uTint.value.copy(base);
+          if (tint) material.uniforms.uTint.value.lerp(new THREE.Color(tint), 0.72);
+        } else if (material.color) {
+          if (material.userData.baseColor === undefined) material.userData.baseColor = material.color.getHex();
+          material.color.setHex(tint ?? material.userData.baseColor);
+          if (!tint) material.color.multiplyScalar(brightness);
+        }
       }
     });
   }
@@ -624,9 +629,10 @@ export class Mob {
 }
 
 export class MobManager {
-  constructor(world, scene) {
+  constructor(world, scene, lighting = null) {
     this.world = world;
     this.scene = scene;
+    this.lighting = lighting;
     this.mobs = [];
     this.spawnTimer = 0;
     this.attackCooldown = 0;
@@ -651,6 +657,7 @@ export class MobManager {
 
   add(type, x, y, z) {
     const mob = new Mob(type, x, y, z);
+    this.lighting?.prepare(mob.group);
     this.mobs.push(mob);
     this.group.add(mob.group);
     return mob;
@@ -689,9 +696,11 @@ export class MobManager {
 
     for (const mob of this.mobs) {
       mob.update(dt, this.world, player, this.mobs, effects, audio, timeOfDay);
+      this.lighting?.refreshObject(mob.group, this.world, mob.pos, mob.def.h * 0.65);
       if (mob.dead) {
         this.group.remove(mob.group);
         if (effects?.dropMobLoot) effects.dropMobLoot(mob);
+        this.lighting?.forget(mob.group);
         mob.dispose();
       }
     }

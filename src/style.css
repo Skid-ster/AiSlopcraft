@@ -725,3 +725,7 @@ html, body {
   .options-toggles { grid-template-columns: 1fr; }
   .toggle-card { padding: 10px; }
 }
+
+/* Settings labels must keep their contrast on the dark finished panel. */
+.options-panel label { color: #eef2f6; }
+.setting-copy b { color: #f4f7fa; letter-spacing: .02em; }

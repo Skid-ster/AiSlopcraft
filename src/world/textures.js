@@ -1,4 +1,5 @@
 // Procedural 16x16 pixel-art texture atlas mimicking Minecraft Beta 1.7.3 textures.
+import * as THREE from 'three';
 import { TILES } from './blocks.js';
 
 const TS = 16;
@@ -43,7 +44,7 @@ export function buildAtlas() {
   const canvas = document.createElement('canvas');
   canvas.width = COLS * TS;
   canvas.height = COLS * TS;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -772,6 +773,38 @@ export function buildAtlas() {
 }
 
 // Item icon art (256 items use pixel art on transparent background)
+// A tiny companion atlas marks only the pixels that emit their own light.
+// Stone borders on a lit furnace and the wooden stem of a torch stay shaded.
+export function buildEmissionAtlas(atlasCanvas) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 256, 256);
+  const source = atlasCanvas.getContext('2d');
+  const paint = (tile, test) => {
+    const ox = (tile % 16) * 16, oy = Math.floor(tile / 16) * 16;
+    const img = source.getImageData(ox, oy, 16, 16);
+    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+      const i = (y * 16 + x) * 4;
+      const value = test(x, y, img.data[i], img.data[i + 1], img.data[i + 2], img.data[i + 3]);
+      if (value > 0) {
+        const v = Math.round(Math.min(1, value) * 255);
+        ctx.fillStyle = `rgb(${v},${v},${v})`; ctx.fillRect(ox + x, oy + y, 1, 1);
+      }
+    }
+  };
+  paint(TILES.lava, () => 1);
+  paint(TILES.glowstone, (x, y, r, g) => r > 220 && g > 180 ? 1 : 0.72);
+  paint(TILES.torch, (x, y, r, g, b, a) => a > 0 && y < 7 && x >= 6 && x < 10 ? 1 : 0);
+  paint(TILES.furnace_front_lit, (x, y, r, g) => y >= 9 && y < 13 && x >= 4 && x < 12 && r > 200 ? 1 : 0);
+  paint(TILES.jack_o_lantern, (x, y, r, g) => r > 240 && g > 200 ? 1 : 0);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.magFilter = texture.minFilter = THREE.NearestFilter;
+  texture.generateMipmaps = false;
+  texture.colorSpace = THREE.NoColorSpace;
+  return texture;
+}
+
 export function buildItemIcons() {
   const canvas = document.createElement('canvas');
   canvas.width = 256; canvas.height = 256;
