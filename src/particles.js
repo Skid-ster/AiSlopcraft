@@ -61,9 +61,10 @@ const MAX_PARTICLES = 256;
 const PARTICLE_SIZE = 0.09;
 
 export class ParticleManager {
-  constructor(scene, atlasCanvas) {
+  constructor(scene, atlasCanvas, lighting = null) {
     this.scene = scene;
     this.atlasCanvas = atlasCanvas;
+    this.lighting = lighting;
     this.atlasCtx = atlasCanvas ? atlasCanvas.getContext('2d') : null;
 
     // Cache of block color palettes: blockId -> array of THREE.Color
@@ -71,15 +72,21 @@ export class ParticleManager {
 
     // Reusable InstancedMesh for performance: 1 draw call for all particles
     this.geometry = new THREE.BoxGeometry(PARTICLE_SIZE, PARTICLE_SIZE, PARTICLE_SIZE);
-    this.material = new THREE.MeshBasicMaterial({
-      transparent: true,
-      opacity: 1.0,
-      depthWrite: true,
-    });
+    this.material = lighting ? lighting.createMaterial({ name: 'Particles', transparent: true }) : new THREE.MeshBasicMaterial({ transparent: true });
+
     this.mesh = new THREE.InstancedMesh(this.geometry, this.material, MAX_PARTICLES);
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     if (this.mesh.instanceColor) {
       this.mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
+    }
+    if (lighting) {
+      lighting.prepare(this.mesh);
+      this.instanceLight = new THREE.InstancedBufferAttribute(new Float32Array(MAX_PARTICLES * 2), 2);
+      this.instanceEmission = new THREE.InstancedBufferAttribute(new Float32Array(MAX_PARTICLES), 1);
+      this.instanceLight.setUsage(THREE.DynamicDrawUsage);
+      this.instanceEmission.setUsage(THREE.DynamicDrawUsage);
+      this.geometry.setAttribute('aInstanceLight', this.instanceLight);
+      this.geometry.setAttribute('aInstanceEmission', this.instanceEmission);
     }
     this.mesh.count = 0;
     this.mesh.frustumCulled = false;
@@ -113,7 +120,7 @@ export class ParticleManager {
             const idx = (py * 16 + px) * 4;
             const a = img[idx + 3];
             if (a > 50) {
-              colors.push(new THREE.Color(img[idx] / 255, img[idx + 1] / 255, img[idx + 2] / 255));
+              colors.push(new THREE.Color().setRGB(img[idx] / 255, img[idx + 1] / 255, img[idx + 2] / 255, THREE.SRGBColorSpace));
             }
           }
         }
@@ -129,7 +136,7 @@ export class ParticleManager {
         const r = Math.max(0, Math.min(255, base[0] + jitter)) / 255;
         const g = Math.max(0, Math.min(255, base[1] + jitter)) / 255;
         const b = Math.max(0, Math.min(255, base[2] + jitter)) / 255;
-        colors.push(new THREE.Color(r, g, b));
+        colors.push(new THREE.Color().setRGB(r, g, b, THREE.SRGBColorSpace));
       }
     }
 
@@ -193,6 +200,7 @@ export class ParticleManager {
       scale,
       gravity,
       collide: false,
+      emissive: true,
     });
   }
 
@@ -278,14 +286,16 @@ export class ParticleManager {
       this.dummy.updateMatrix();
 
       this.mesh.setMatrixAt(i, this.dummy.matrix);
-      if (this.mesh.setColorAt) {
-        this.mesh.setColorAt(i, p.color);
+      if (this.mesh.setColorAt) this.mesh.setColorAt(i, p.color);
+      if (this.instanceLight) {
+        const packed = world ? world.getLight(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) : 0xf0;
+        this.instanceLight.setXY(i, packed >> 4, packed & 15);
+        this.instanceEmission.setX(i, p.emissive ? 1 : 0);
       }
     }
 
     this.mesh.instanceMatrix.needsUpdate = true;
-    if (this.mesh.instanceColor) {
-      this.mesh.instanceColor.needsUpdate = true;
-    }
+    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+    if (this.instanceLight) { this.instanceLight.needsUpdate = true; this.instanceEmission.needsUpdate = true; }
   }
 }

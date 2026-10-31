@@ -67,11 +67,12 @@ function makeShadedBox(group, w, h, d, x, y, z, hexColor) {
 }
 
 export class FirstPersonArm {
-  constructor(camera, atlasTex, itemIconsCanvas, itemIconIndex = ITEM_ICON_INDEX) {
+  constructor(camera, atlasTex, itemIconsCanvas, itemIconIndex = ITEM_ICON_INDEX, lighting = null) {
     this.worldCamera = camera;
     this.atlasTex = atlasTex;
     this.itemIconsCanvas = itemIconsCanvas;
     this.itemIconIndex = itemIconIndex;
+    this.lighting = lighting;
 
     // Dedicated overlay scene & camera so the hand/tool never clips through blocks
     this.scene = new THREE.Scene();
@@ -89,6 +90,7 @@ export class FirstPersonArm {
 
     this.armMesh = this.buildArmMesh();
     this.pivot.add(this.armMesh);
+    this.prepareLighting(this.armMesh);
     this.swingProgress = 0;
     this.isSwinging = false;
     this.swingSpeed = 1;
@@ -139,10 +141,26 @@ export class FirstPersonArm {
     this.armMesh.visible = true;
     if (id == null) return;
     this.heldMesh = this.buildHeldMesh(id);
-    if (this.heldMesh) this.pivot.add(this.heldMesh);
+    if (this.heldMesh) {
+      this.prepareLighting(this.heldMesh);
+      this.pivot.add(this.heldMesh);
+    }
+  }
+
+  prepareLighting(root) {
+    if (!this.lighting) return;
+    this.lighting.prepare(root, { emissionMap: true, fog: false });
+    root.traverse(object => {
+      for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
+        if (!material?.uniforms?.uEmissionMap) continue;
+        // Item icons have their own atlas; only terrain UVs use the emission mask.
+        if (material.uniforms.map.value !== this.atlasTex) material.uniforms.uHasEmissionMap.value = 0;
+      }
+    });
   }
 
   disposeHeldMesh(root) {
+    this.lighting?.forget(root);
     const geometries = new Set(), materials = new Set();
     root.traverse(object => {
       if (object.geometry) geometries.add(object.geometry);
@@ -215,7 +233,7 @@ export class FirstPersonArm {
       this._itemTexture.magFilter = THREE.NearestFilter;
       this._itemTexture.minFilter = THREE.NearestFilter;
       this._itemTexture.generateMipmaps = false;
-      this._itemTexture.colorSpace = THREE.NoColorSpace;
+      this._itemTexture.colorSpace = THREE.SRGBColorSpace;
     }
     const index = this.itemIconIndex[id] ?? 0;
     const plane = new THREE.PlaneGeometry(0.36, 0.36);
@@ -254,8 +272,9 @@ export class FirstPersonArm {
   buildHeldTorch(redstone = false) {
     const group = new THREE.Group();
     makeShadedBox(group, 0.065, 0.34, 0.065, 0, -0.1, 0, 0x8b6037);
-    makeShadedBox(group, 0.11, 0.11, 0.11, 0, 0.1, 0, redstone ? 0xe02828 : 0xffa22c);
-    makeShadedBox(group, 0.075, 0.08, 0.075, 0, 0.15, 0, redstone ? 0xff7070 : 0xffdf54);
+    const flame = makeShadedBox(group, 0.11, 0.11, 0.11, 0, 0.1, 0, redstone ? 0xe02828 : 0xffa22c);
+    const tip = makeShadedBox(group, 0.075, 0.08, 0.075, 0, 0.15, 0, redstone ? 0xff7070 : 0xffdf54);
+    flame.userData.emissive = tip.userData.emissive = true;
     group.position.set(-0.04, -0.28, -0.16);
     group.rotation.set(0.14, 0.18, -0.22);
     return group;
@@ -299,7 +318,7 @@ export class FirstPersonArm {
     return group;
   }
 
-  update(dt, playerMoving, leftDown, eatingProgress = 0, brightness = 1) {
+  update(dt, playerMoving, leftDown, eatingProgress = 0) {
     this.camera.aspect = this.worldCamera.aspect;
     this.camera.updateProjectionMatrix();
 
@@ -341,12 +360,8 @@ export class FirstPersonArm {
       this.defaultRot.z - swingFactor * 0.65 - eatInward * 0.2,
     );
 
-    const emitsLight = this.heldId === TORCH || this.heldId === REDSTONE_TORCH ||
-      this.heldId === GLOWSTONE || this.heldId === JACK_O_LANTERN || this.heldId === 327;
-    const b = emitsLight ? 1.0 : Math.max(0.3, Math.min(1.0, brightness));
-    this.root.traverse(obj => {
-      if (obj.material?.color) obj.material.color.setRGB(b, b, b);
-    });
+    // Lighting is sampled from the player's head by the shared lighting system;
+    // never overwrite the vertex colors here (that used to erase skin/tool hues).
   }
 
   render(renderer) {

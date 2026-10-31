@@ -55,7 +55,9 @@ const player = {
 const game = {
   renderDistance: 6,
   shaderStyle: 'classic',
+  brightness: 1,
   setShaderStyle(style) { this.shaderStyle = style; },
+  setBrightness(value) { this.brightness = value; },
   audio: {
     volume: 0.5,
     init: () => calls.push(['audio.init']),
@@ -87,6 +89,9 @@ try {
   btn('opt-shader').value = 'cinematic';
   btn('opt-shader').dispatchEvent(new dom.window.Event('change'));
   check('shader selection applies live to the game renderer', game.shaderStyle === 'cinematic');
+  btn('opt-brightness').value = '120';
+  btn('opt-brightness').dispatchEvent(new dom.window.Event('input'));
+  check('brightness slider applies live', Math.abs(game.brightness - 1.2) < 1e-6);
   btn('opt-shader').value = 'shader';
   btn('opt-shader').dispatchEvent(new dom.window.Event('change'));
   check('Shader Lite preset applies immediately', game.shaderStyle === 'shader');

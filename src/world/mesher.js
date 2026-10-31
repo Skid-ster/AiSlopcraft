@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { CH, WORLD_H } from './chunk.js';
 import {
-  getBlock, AIR, WATER, LAVA, TILES, LEAVES, ICE, CACTUS, TORCH, REDSTONE_TORCH,
+  getBlock, AIR, WATER, WATER_FLOW, LAVA, LAVA_FLOW, TILES, LEAVES, ICE, CACTUS, TORCH, REDSTONE_TORCH,
   LADDER, SNOW, CROPS, FARMLAND, CHEST, CAKE_BLOCK, WOOD_DOOR, IRON_DOOR,
   FURNACE, FURNACE_LIT, PUMPKIN, JACK_O_LANTERN,
 } from './blocks.js';
@@ -124,14 +124,38 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
       b[tangentAxes[1]] += signs[1];
       diagonal[tangentAxes[0]] += signs[0];
       diagonal[tangentAxes[1]] += signs[1];
-      const occupied = point => getBlock(getB(point[0], point[1], point[2])).solid;
+      const occupied = point => getBlock(getB(point[0], point[1], point[2])).opaque;
       const sideA = occupied(a), sideB = occupied(b), cornerBlock = occupied(diagonal);
       if (sideA && sideB) return 0.68;
       return 1 - (Number(sideA) + Number(sideB) + Number(cornerBlock)) * 0.10;
     });
   };
 
-  const pushQuad = (buf, corners, tile, shade, skyL, blkL, tint, alpha = 1, uvRect = null, vertexShade = null) => {
+  // Smooth sky/torch light over the four cells touching each face corner. Opaque
+  // samples are excluded so a wall cannot leak brightness onto its lit side.
+  const faceLightData = (x, y, z, face) => {
+    const axes = [0, 1, 2].filter(axis => face.dir[axis] === 0);
+    const base = [x + face.dir[0], y + face.dir[1], z + face.dir[2]];
+    const sky = [], block = [];
+    for (const corner of face.corners) {
+      const signs = axes.map(axis => corner[axis] === 1 ? 1 : -1);
+      const points = [base.slice(), base.slice(), base.slice(), base.slice()];
+      points[1][axes[0]] += signs[0];
+      points[2][axes[1]] += signs[1];
+      points[3][axes[0]] += signs[0]; points[3][axes[1]] += signs[1];
+      let s = 0, b = 0, n = 0;
+      for (const point of points) {
+        if (getBlock(getB(point[0], point[1], point[2])).opaque) continue;
+        const light = getL(point[0], point[1], point[2]);
+        s += light >> 4; b += light & 15; n++;
+      }
+      if (n === 0) { const light = getL(base[0], base[1], base[2]); s = light >> 4; b = light & 15; n = 1; }
+      sky.push(s / n); block.push(b / n);
+    }
+    return { sky, block };
+  };
+
+  const pushQuad = (buf, corners, tile, shade, skyL, blkL, tint, alpha = 1, uvRect = null, vertexShade = null, smooth = null) => {
     const [u0, v0, u1, v1] = uvRect
       ? tileUV(tile, uvRect[0], uvRect[1], uvRect[2], uvRect[3])
       : tileUV(tile);
@@ -148,10 +172,16 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
       buf.uv.push(uvs[i][0], uvs[i][1]);
       const vertexLight = vertexShade?.[i] ?? 1;
       buf.col.push(shade * tint[0] * vertexLight, shade * tint[1] * vertexLight, shade * tint[2] * vertexLight, alpha);
-      buf.light.push(skyL, blkL);
+      buf.light.push(smooth ? smooth.sky[i] : skyL, smooth ? smooth.block[i] : blkL);
       buf.normal.push(normal[0], normal[1], normal[2]);
     }
-    buf.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    // Choose the diagonal that interpolates the corner occlusion/light most
+    // evenly, avoiding the classic alternating dark triangles on flat walls.
+    if (vertexShade && vertexShade[0] + vertexShade[2] < vertexShade[1] + vertexShade[3]) {
+      buf.idx.push(base, base + 1, base + 3, base + 1, base + 2, base + 3);
+    } else {
+      buf.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    }
   };
 
   const pushBox = (buf, x0, y0, z0, x1, y1, z1, tiles, skyL, blkL, tint = WHITE_TINT, uvRects = null) => {
@@ -165,7 +195,8 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
     ];
     for (let f = 0; f < 6; f++) {
       const bf = boxFaces[f];
-      pushQuad(buf, bf.corners, bf.tile, bf.shade, skyL, blkL, tint, 1, uvRects ? uvRects[f] : null);
+      const smooth = faceLightData(Math.floor(x0), Math.floor(y0), Math.floor(z0), FACES[f]);
+      pushQuad(buf, bf.corners, bf.tile, bf.shade, skyL, blkL, tint, 1, uvRects ? uvRects[f] : null, null, smooth);
     }
   };
 
@@ -183,7 +214,8 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
         if (bd.tint === 'grass') biomeTint = grassColor(biome.temp, biome.hum);
         else if (bd.tint === 'foliage') biomeTint = foliageColor(biome.temp, biome.hum);
 
-        const isLava = id === LAVA || id === 10;
+        const isLava = id === LAVA || id === LAVA_FLOW;
+        const isWaterFamily = id === WATER || id === WATER_FLOW;
         let buf = solid;
         if (bd.render === 'liquid') buf = isLava ? solid : water;
         else if (bd.render !== 'cube') buf = cutout;
@@ -301,10 +333,14 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
           const nx = x + face.dir[0], ny = y + face.dir[1], nz = z + face.dir[2];
           const nb = getB(nx, ny, nz);
           const nbd = getBlock(nb);
+          const inside = nx >= 0 && nx < CH && nz >= 0 && nz < CH;
+          const neighborLoaded = inside || !!world.getChunk(Math.floor((wx0 + nx) / CH), Math.floor((wz0 + nz) / CH))?.generated;
+          if (!neighborLoaded) continue; // do not flash bright boundary walls while streaming
 
           let visible = false;
           if (bd.render === 'liquid') {
-            visible = nb !== id && !nbd.opaque && nb !== ICE;
+            const sameFluid = isWaterFamily ? (nb === WATER || nb === WATER_FLOW) : (nb === LAVA || nb === LAVA_FLOW);
+            visible = !sameFluid && !nbd.opaque && nb !== ICE;
             if (f === 0 && nb === AIR) visible = true;
           } else if (bd.render === 'flat') {
             visible = (f === 0);
@@ -332,7 +368,7 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
           const faceTint = (bd.tint === 'grass') ? (f === 0 ? biomeTint : WHITE_TINT) : biomeTint;
 
           let yTop = 1.0;
-          if (bd.render === 'liquid' && getB(x, y + 1, z) !== id) yTop = 0.88;
+          if (bd.render === 'liquid' && !(isWaterFamily ? (getB(x, y + 1, z) === WATER || getB(x, y + 1, z) === WATER_FLOW) : (getB(x, y + 1, z) === LAVA || getB(x, y + 1, z) === LAVA_FLOW))) yTop = 0.88;
           else if (id === SNOW) yTop = 0.125;
           else if (bd.render === 'flat') yTop = 0.04;
           else if (id === FARMLAND) yTop = 0.9375;
@@ -349,14 +385,16 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
             return [cx, cy, cz];
           });
 
+          const smooth = faceLightData(x, y, z, face);
           if (bd.render === 'liquid' && !isLava) {
-            // Water uses standalone 16x16 animated waterTex: map full [0..1] UVs!
+            // Water uses standalone 16x16 animated waterTex: map full [0..1] UVs.
+            // Alpha has one owner (the material), not two multiplied 0.82s.
             const base = buf.pos.length / 3;
             for (const c of corners) buf.pos.push(c[0], c[1], c[2]);
             buf.uv.push(0.002, 0.002, 0.998, 0.002, 0.998, 0.998, 0.002, 0.998);
             for (let i = 0; i < 4; i++) {
-              buf.col.push(face.shade, face.shade, face.shade, 0.82);
-              buf.light.push(skyL, blkL);
+              buf.col.push(face.shade, face.shade, face.shade, 1);
+              buf.light.push(smooth.sky[i], smooth.block[i]);
               buf.normal.push(face.dir[0], face.dir[1], face.dir[2]);
             }
             buf.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
@@ -364,7 +402,7 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
             const ao = !isLava && (bd.render === 'cube' || bd.render === 'cutout')
               ? faceOcclusion(x, y, z, face)
               : null;
-            pushQuad(buf, corners, tile, isLava ? 1.0 : face.shade, skyL, blkL, faceTint, 1, null, ao);
+            pushQuad(buf, corners, tile, isLava ? 1.0 : face.shade, skyL, blkL, faceTint, 1, null, ao, smooth);
           }
         }
       }
@@ -376,7 +414,7 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(buf.pos, 3));
     g.setAttribute('uv', new THREE.Float32BufferAttribute(buf.uv, 2));
-    g.setAttribute('color', new THREE.Float32BufferAttribute(buf.col, 4));
+    g.setAttribute('aTint', new THREE.Float32BufferAttribute(buf.col, 4));
     // The lighting shader consumes this per-vertex pair as sky light / block light.
     // Keep it attached to every solid, cutout, and water mesh; otherwise WebGL's
     // default disabled-attribute value leaves every face effectively unlit.

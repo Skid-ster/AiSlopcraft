@@ -3,12 +3,12 @@ import * as THREE from 'three';
 import { World } from './world/world.js';
 import { CH, WORLD_H, SEA_LEVEL } from './world/chunk.js';
 import { buildChunkMesh } from './world/mesher.js';
-import { buildAtlas, buildItemIcons } from './world/textures.js';
+import { buildAtlas, buildItemIcons, buildEmissionAtlas } from './world/textures.js';
 import {
-  AIR, WATER, LAVA, TORCH, CRAFTING_TABLE, FURNACE, SAND, GRAVEL, LEAVES, GRASS, DIRT,
+  AIR, WATER, WATER_FLOW, LAVA, TORCH, CRAFTING_TABLE, FURNACE, SAND, GRAVEL, LEAVES, GRASS, DIRT,
   LOG, GLASS, getBlock, breakTime, canHarvest, ITEMS, itemName, isBlock, STONE, COBBLE,
   TILES, SAPLING, TALL_GRASS, PLANKS, TNT, WOOD_DOOR, IRON_DOOR,
-  BED_BLOCK, CAKE_BLOCK, placeableBlockForItem
+  BED_BLOCK, CAKE_BLOCK, placeableBlockForItem, FURNACE_LIT
 } from './world/blocks.js';
 import { Player } from './entities/player.js';
 import { advanceEating } from './entities/eating.js';
@@ -19,17 +19,19 @@ import { Sky } from './sky.js';
 import { createFurnaceState, tickFurnace, interactWithFurnaceSlot } from './ui/furnace.js';
 import { ParticleManager } from './particles.js';
 import { FirstPersonArm } from './arm.js';
-import { syncFogUniforms } from './rendering.js';
+import { Lighting, SHADER_STYLES, shaderStyleId } from './rendering.js';
 
 const canvas = document.getElementById('game-canvas');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+THREE.ColorManagement.enabled = true;
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 600);
 camera.rotation.order = 'YXZ';
+camera.layers.enable(1); // voxel shadow casters
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -37,17 +39,13 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// ---- textures ----
-// classic pixel look: no color management, straight passthrough
-THREE.ColorManagement.enabled = false;
-renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
-
+// ---- textures and shared lighting ----
 const atlasCanvas = buildAtlas();
 const atlasTex = new THREE.CanvasTexture(atlasCanvas);
 atlasTex.magFilter = THREE.NearestFilter;
 atlasTex.minFilter = THREE.NearestFilter;
 atlasTex.generateMipmaps = false;
-atlasTex.colorSpace = THREE.NoColorSpace;
+atlasTex.colorSpace = THREE.SRGBColorSpace;
 
 const waterCanvas = document.createElement('canvas');
 waterCanvas.width = 16; waterCanvas.height = 16;
@@ -57,7 +55,7 @@ waterCanvas.width = 16; waterCanvas.height = 16;
   for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
     const i = (y * 16 + x) * 4;
     const v = Math.sin((x + y * 1.7) * 0.9) * 10 + Math.sin(x * 1.3 + y * 0.7) * 8;
-    img.data[i] = 42 + v; img.data[i + 1] = 82 + v; img.data[i + 2] = 196 + v; img.data[i + 3] = 190;
+    img.data[i] = 42 + v; img.data[i + 1] = 82 + v; img.data[i + 2] = 196 + v; img.data[i + 3] = 255;
   }
   ctx.putImageData(img, 0, 0);
 }
@@ -65,135 +63,12 @@ const waterTex = new THREE.CanvasTexture(waterCanvas);
 waterTex.magFilter = THREE.NearestFilter;
 waterTex.minFilter = THREE.NearestFilter;
 waterTex.wrapS = waterTex.wrapT = THREE.RepeatWrapping;
-waterTex.colorSpace = THREE.NoColorSpace;
+waterTex.colorSpace = THREE.SRGBColorSpace;
 
-// ---- lighting shader: sky light dims at night, torch light stays warm ----
-const lightVert = `
-  attribute vec4 color;
-  attribute vec2 aLight;
-  attribute vec3 aNormal;
-  varying vec4 vColor;
-  varying vec2 vUv;
-  varying vec2 vLight;
-  varying vec3 vWorldNormal;
-  varying vec3 vWorldPosition;
-  varying float vFogDist;
-  void main() {
-    vColor = color;
-    vUv = uv;
-    vLight = aLight;
-    vec4 world = modelMatrix * vec4(position, 1.0);
-    vWorldPosition = world.xyz;
-    vWorldNormal = normalize(mat3(modelMatrix) * aNormal);
-    vec4 mv = viewMatrix * world;
-    vFogDist = length(mv.xyz);
-    gl_Position = projectionMatrix * mv;
-  }
-`;
-const lightFrag = `
-  uniform sampler2D map;
-  uniform float uSky;
-  uniform vec3 uSkyTint;
-  uniform vec3 uBlockTint;
-  uniform float uOpacity;
-  uniform float uCutout;
-  uniform float uShaderStyle;
-  uniform vec3 uSunDirection;
-  uniform float uSunIntensity;
-  uniform float uTime;
-  uniform vec3 uCameraPosition;
-  uniform float uWater;
-  uniform vec3 uFogColor;
-  uniform float uFogNear;
-  uniform float uFogFar;
-  varying vec4 vColor;
-  varying vec2 vUv;
-  varying vec2 vLight;
-  varying vec3 vWorldNormal;
-  varying vec3 vWorldPosition;
-  varying float vFogDist;
-  void main() {
-    vec4 tex = texture2D(map, vUv);
-    if (uCutout > 0.5 && tex.a < 0.45) discard;
-    float sky = pow(clamp(vLight.x / 15.0, 0.0, 1.0), 1.2) * uSky;
-    float block = pow(clamp(vLight.y / 15.0, 0.0, 1.0), 1.15);
-    vec3 normal = normalize(vWorldNormal);
-    if (!gl_FrontFacing) normal = -normal;
-    float sunFace = max(dot(normal, normalize(uSunDirection)), 0.0);
-    float sunDiffuse = uSunIntensity * sunFace;
-    // Minecraft-style hemisphere fill plus directional sunlight. Sky visibility
-    // gates the sun so caves stay dark; emitted block light remains warm.
-    vec3 skyLight = uSkyTint * sky * (0.48 + 0.62 * sunDiffuse);
-    vec3 torchLight = uBlockTint * block;
-    vec3 light = max(skyLight, torchLight) + min(skyLight, torchLight) * 0.22;
-    light = max(light, vec3(0.045, 0.05, 0.065));
-    vec3 rgb = tex.rgb * vColor.rgb * min(light, vec3(1.28));
-    float luminance = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
-    if (uShaderStyle < 0.5) {
-      // Classic: preserve the original softly lit pixel-art palette.
-    } else if (uShaderStyle < 1.5) {
-      // Vibrant: richer colors and a touch more definition, without losing pixels.
-      rgb = mix(vec3(luminance), rgb, 1.24);
-      rgb = (rgb - 0.5) * 1.07 + 0.5;
-    } else if (uShaderStyle < 2.5) {
-      // Cinematic: gentle cool shadows, warm highlights, and restrained contrast.
-      rgb = (rgb - 0.5) * 1.10 + 0.5;
-      float shadow = 1.0 - smoothstep(0.12, 0.62, luminance);
-      float highlight = smoothstep(0.42, 0.95, luminance);
-      rgb *= mix(vec3(1.0), vec3(0.90, 0.98, 1.10), shadow * 0.34);
-      rgb *= mix(vec3(1.0), vec3(1.08, 1.02, 0.91), highlight * 0.26);
-    } else {
-      // Shader Lite: filmic contrast and physically motivated water reflections.
-      rgb = max(vec3(0.0), (rgb - 0.42) * 1.08 + 0.42);
-      if (uWater > 0.5) {
-        vec3 viewDir = normalize(uCameraPosition - vWorldPosition);
-        float fresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 3.0);
-        vec3 halfDir = normalize(normalize(uSunDirection) + viewDir);
-        float specular = pow(max(dot(normal, halfDir), 0.0), 48.0) * uSunIntensity;
-        float ripple = 0.5 + 0.5 * sin(vWorldPosition.x * 0.62 + vWorldPosition.z * 0.47 + uTime * 1.7);
-        rgb = mix(rgb, vec3(0.20, 0.48, 0.72), 0.10 + fresnel * 0.28 + ripple * 0.05);
-        rgb += vec3(0.55, 0.72, 0.92) * specular * 0.55;
-      }
-    }
-    float fog = smoothstep(uFogNear, uFogFar, vFogDist);
-    gl_FragColor = vec4(mix(rgb, uFogColor, fog), tex.a * vColor.a * uOpacity);
-  }
-`;
-
-function makeLightMaterial(opts = {}) {
-  return new THREE.ShaderMaterial({
-    vertexShader: lightVert,
-    fragmentShader: lightFrag,
-    uniforms: {
-      map: { value: atlasTex },
-      uSky: { value: 1.0 },
-      uSkyTint: { value: new THREE.Color(1, 1, 1) },
-      uBlockTint: { value: new THREE.Color(1.08, 0.93, 0.72) },
-      uOpacity: { value: opts.opacity ?? 1.0 },
-      uCutout: { value: opts.cutout ? 1.0 : 0.0 },
-      uShaderStyle: { value: 0.0 },
-      uSunDirection: { value: new THREE.Vector3(0.35, 0.82, 0.44).normalize() },
-      uSunIntensity: { value: 1.0 },
-      uTime: { value: 0.0 },
-      uCameraPosition: { value: new THREE.Vector3() },
-      uWater: { value: opts.water ? 1.0 : 0.0 },
-      uFogColor: { value: new THREE.Color(0xc0d8ff) },
-      uFogNear: { value: 55 },
-      uFogFar: { value: 185 },
-    },
-    transparent: !!opts.transparent,
-    alphaTest: 0,
-    side: opts.doubleSide ? THREE.DoubleSide : THREE.FrontSide,
-    depthWrite: opts.depthWrite !== false,
-  });
-}
-
-const solidMat = makeLightMaterial();
-const cutoutMat = makeLightMaterial({ cutout: true, doubleSide: true });
-const waterMat = makeLightMaterial({
-  transparent: true, opacity: 0.82, doubleSide: true, depthWrite: false, water: true,
-});
-waterMat.uniforms.map.value = waterTex;
+const lighting = new Lighting({ atlasTexture: atlasTex, emissionTexture: buildEmissionAtlas(atlasCanvas) });
+const solidMat = lighting.createMaterial({ name: 'Terrain', voxel: true, map: atlasTex, emissionMap: true });
+const cutoutMat = lighting.createMaterial({ name: 'TerrainCutout', voxel: true, map: atlasTex, emissionMap: true, cutout: true, doubleSide: true });
+const waterMat = lighting.createMaterial({ name: 'Water', voxel: true, map: waterTex, water: true, transparent: true, opacity: 0.78, doubleSide: true, depthWrite: false });
 
 // ---- game state ----
 const SEED = new URLSearchParams(location.search).get('seed') || 'Beta 1.7.3';
@@ -216,19 +91,26 @@ if (Array.isArray(savedGame?.edits)) {
 const player = new Player(world, camera, canvas);
 const audio = new Audio();
 const sky = new Sky(scene, camera);
-const mobs = new MobManager(world, scene);
+const mobs = new MobManager(world, scene, lighting);
 const game = {
-  world, player, audio, sky, mobs,
+  world, player, audio, sky, mobs, renderer, lighting,
   atlasCanvas,
   itemIconsCanvas: buildItemIcons(),
   renderDistance: Math.max(2, Math.min(12, Number(savedGame?.settings?.renderDistance) || 6)),
   keepInventory: savedGame?.settings?.keepInventory !== false,
   shaderStyle: ['classic', 'vibrant', 'cinematic', 'shader'].includes(savedGame?.settings?.shaderStyle) ? savedGame.settings.shaderStyle : 'shader',
+  brightness: Math.max(0.5, Math.min(1.5, Number(savedGame?.settings?.brightness) || 1)),
+  setBrightness(value) {
+    this.brightness = Math.max(0.5, Math.min(1.5, Number(value) || 1));
+    lighting.shared.uBrightness.value = this.brightness;
+  },
   setShaderStyle(style) {
-    const id = ({ classic: 0, vibrant: 1, cinematic: 2, shader: 3 })[style];
-    if (id === undefined) return;
+    if (!SHADER_STYLES.includes(style)) return;
     this.shaderStyle = style;
-    for (const material of [solidMat, cutoutMat, waterMat]) material.uniforms.uShaderStyle.value = id;
+    lighting.shared.uShaderStyle.value = shaderStyleId(style);
+  },
+  onRenderDistanceChange() {
+    updateChunks(true);
   },
   started: false,
   time: 0,
@@ -241,9 +123,26 @@ const game = {
     for (let cz = -1; cz <= 1; cz++) {
       for (let cx = -1; cx <= 1; cx++) world.generateChunk(cx, cz);
     }
-    const x = 8.5, z = 8.5;
-    const y = findSafeGround(world, x, z, 0.6, 1.8);
-    return { x, y: y ?? (world.heightAt(8, 8) + 1.001), z };
+    // Prefer an open, walkable spawn instead of the top of a tree canopy.
+    for (let r = 0; r <= 8; r++) {
+      for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+        const x = 8.5 + dx, z = 8.5 + dz;
+        const y = findSafeGround(world, x, z, 0.6, 1.8);
+        if (y == null) continue;
+        const bx = Math.floor(x), bz = Math.floor(z);
+        const support = world.getBlock(bx, Math.floor(y - 1), bz);
+        if (support === LEAVES || support === LOG || support === WATER) continue;
+        let open = true;
+        for (let yy = Math.floor(y); yy < Math.floor(y) + 3 && open; yy++) {
+          for (let dz2 = -1; dz2 <= 1 && open; dz2++) for (let dx2 = -1; dx2 <= 1; dx2++) {
+            if (getBlock(world.getBlock(bx + dx2, yy, bz + dz2)).solid) { open = false; break; }
+          }
+        }
+        if (open) return { x, y, z };
+      }
+    }
+    return { x: 8.5, y: world.heightAt(8, 8) + 1.001, z: 8.5 };
   },
   respawn() {
     const spawn = this.prepareSpawn();
@@ -256,7 +155,7 @@ const game = {
   saveSettings() {
     try {
       const previous = readSave() || {};
-      previous.settings = { ...(previous.settings || {}), renderDistance: this.renderDistance, keepInventory: this.keepInventory, sensitivity: player.sensitivity, viewBobbing: player.viewBobbing, volume: audio.volume, shaderStyle: this.shaderStyle };
+      previous.settings = { ...(previous.settings || {}), renderDistance: this.renderDistance, keepInventory: this.keepInventory, sensitivity: player.sensitivity, viewBobbing: player.viewBobbing, volume: audio.volume, shaderStyle: this.shaderStyle, brightness: this.brightness };
       localStorage.setItem(SAVE_KEY, JSON.stringify(previous));
     } catch (error) { console.warn('Could not save settings', error); }
   },
@@ -267,7 +166,7 @@ const game = {
   },
   saveGame() {
     const payload = { version: 1, seed: SEED, edits: [...world.edits].map(([key, id]) => [key, id, world.metaEdits.get(key) || 0]),
-      settings: { renderDistance: this.renderDistance, keepInventory: this.keepInventory, sensitivity: player.sensitivity, viewBobbing: player.viewBobbing, volume: audio.volume, shaderStyle: this.shaderStyle },
+      settings: { renderDistance: this.renderDistance, keepInventory: this.keepInventory, sensitivity: player.sensitivity, viewBobbing: player.viewBobbing, volume: audio.volume, shaderStyle: this.shaderStyle, brightness: this.brightness },
       player: { pos: player.pos.toArray(), yaw: player.yaw, pitch: player.pitch, health: player.health, inventory: player.inventory, armor: player.armor, hotbarIndex: player.hotbarIndex, stats: player.stats } };
     try { localStorage.setItem(SAVE_KEY, JSON.stringify(payload)); return true; }
     catch (error) { console.warn('Could not save world', error); ui?.notify('Save failed — browser storage may be full'); return false; }
@@ -299,6 +198,7 @@ const game = {
 const ui = new UI(game);
 game.ui = ui;
 game.setShaderStyle(game.shaderStyle);
+game.setBrightness(game.brightness);
 if (savedGame?.settings) {
   player.sensitivity = Number(savedGame.settings.sensitivity) || player.sensitivity;
   player.viewBobbing = savedGame.settings.viewBobbing !== false;
@@ -311,8 +211,8 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ---- particles, first-person arm, target wireframe & crack overlay ----
-const particles = new ParticleManager(scene, atlasCanvas);
-const firstPersonArm = new FirstPersonArm(camera, atlasTex, game.itemIconsCanvas);
+const particles = new ParticleManager(scene, atlasCanvas, lighting);
+const firstPersonArm = new FirstPersonArm(camera, atlasTex, game.itemIconsCanvas, undefined, lighting);
 
 // A. Target selection wireframe
 const selectionWireframe = new THREE.LineSegments(
@@ -394,6 +294,7 @@ function updateChunks(force = false) {
     if (ddx * ddx + ddz * ddz > (rd + 3) * (rd + 3)) {
       chunk.dispose(scene);
       world.chunks.delete(key);
+      world.lighting.chunkRemoved(chunk);
     }
   }
 }
@@ -409,8 +310,8 @@ function processChunkQueue() {
       const s = built.makeMesh(built.solid, solidMat);
       const c = built.makeMesh(built.cutout, cutoutMat);
       const w = built.makeMesh(built.water, waterMat);
-      if (s) { scene.add(s); meshes.solid = s; }
-      if (c) { scene.add(c); meshes.cutout = c; }
+      if (s) { s.layers.enable(1); scene.add(s); meshes.solid = s; }
+      if (c) { c.layers.enable(1); scene.add(c); meshes.cutout = c; }
       if (w) { scene.add(w); meshes.water = w; }
       chunk.meshes = meshes;
       chunk.dirty = false;
@@ -427,15 +328,10 @@ function rebuildDirtyChunks() {
       const s = built.makeMesh(built.solid, solidMat);
       const c = built.makeMesh(built.cutout, cutoutMat);
       const w = built.makeMesh(built.water, waterMat);
-      if (s) { scene.add(s); meshes.solid = s; }
-      if (c) { scene.add(c); meshes.cutout = c; }
+      if (s) { s.layers.enable(1); scene.add(s); meshes.solid = s; }
+      if (c) { c.layers.enable(1); scene.add(c); meshes.cutout = c; }
       if (w) { scene.add(w); meshes.water = w; }
-      if (chunk.meshes) {
-        for (const k of Object.keys(chunk.meshes)) {
-          const m = chunk.meshes[k];
-          if (m) { scene.remove(m); m.geometry.dispose(); }
-        }
-      }
+      // buildChunkMesh already removed/disposed the previous meshes.
       chunk.meshes = meshes;
       chunk.dirty = false;
       n++;
@@ -480,7 +376,9 @@ function spawnItem(x, y, z, id, count = 1, damage = 0) {
       transparent: true, alphaTest: 0.4, side: THREE.DoubleSide,
     }));
   }
+  lighting.prepare(mesh, { emissionMap: isBlock(id) });
   mesh.position.set(x + 0.5, y + 0.3, z + 0.5);
+  lighting.refreshObject(mesh, world, mesh.position, 0);
   itemGroup.add(mesh);
   itemEntities.push({ mesh, id, count, damage, vy: 2, age: 0, onGround: false });
 }
@@ -513,6 +411,7 @@ function updateItems(dt) {
       it.onGround = true;
     }
     it.mesh.rotation.y += dt * 1.6;
+    lighting.refreshObject(it.mesh, world, it.mesh.position, 0);
 
     // pickup
     const d = it.mesh.position.distanceTo(player.pos.clone().add(new THREE.Vector3(0, 0.8, 0)));
@@ -529,6 +428,7 @@ function updateItems(dt) {
   for (const it of itemEntities) {
     if (it.dead) {
       itemGroup.remove(it.mesh);
+      lighting.forget(it.mesh);
       it.mesh.geometry?.dispose();
       if (Array.isArray(it.mesh.material)) it.mesh.material.forEach(material => material.dispose());
       else it.mesh.material?.dispose();
@@ -702,7 +602,9 @@ function shootArrow(fromMob, player) {
   const dir = to.sub(from).normalize().multiplyScalar(18);
   const geo = new THREE.BoxGeometry(0.08, 0.08, 0.5);
   const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0x8a6a42 }));
+  lighting.prepare(mesh);
   mesh.position.copy(from);
+  lighting.refreshObject(mesh, world, mesh.position, 0);
   scene.add(mesh);
   arrows.push({ mesh, vel: dir, age: 0 });
 }
@@ -713,6 +615,7 @@ function updateArrows(dt) {
     a.vel.y -= 12 * dt;
     a.mesh.position.addScaledVector(a.vel, dt);
     a.mesh.lookAt(a.mesh.position.clone().add(a.vel));
+    lighting.refreshObject(a.mesh, world, a.mesh.position, 0);
     // hit player
     if (a.mesh.position.distanceTo(player.pos.clone().add(new THREE.Vector3(0, 1, 0))) < 0.8) {
       player.damage(2, audio);
@@ -724,7 +627,7 @@ function updateArrows(dt) {
     if (getBlock(b).solid) a.dead = true;
     if (a.age > 6) a.dead = true;
   }
-  for (const a of arrows) if (a.dead) scene.remove(a.mesh);
+  for (const a of arrows) if (a.dead) { scene.remove(a.mesh); lighting.forget(a.mesh); a.mesh.geometry.dispose(); a.mesh.material.dispose(); }
   for (let i = arrows.length - 1; i >= 0; i--) if (arrows[i].dead) arrows.splice(i, 1);
 }
 
@@ -752,9 +655,12 @@ function updateFurnaces(dt) {
   for (const [key, furnace] of furnaces) {
     const [x, y, z] = key.split(',').map(Number);
     const chunk = world.getChunk(Math.floor(x / CH), Math.floor(z / CH));
-    if (!chunk?.generated || world.getBlock(x, y, z) !== FURNACE) continue;
+    const current = world.getBlock(x, y, z);
+    if (!chunk?.generated || (current !== FURNACE && current !== FURNACE_LIT)) continue;
 
     const state = tickFurnace(furnace, dt);
+    const desired = state.burning ? FURNACE_LIT : FURNACE;
+    if (current !== desired) world.setBlock(x, y, z, desired, world.getMeta(x, y, z));
     furnace.soundTimer = Math.max(0, (furnace.soundTimer || 0) - dt);
     if (state.burning && furnace.soundTimer <= 0) {
       audio.furnace();
@@ -865,7 +771,7 @@ document.addEventListener('mousedown', (e) => {
         ui.setMode('crafting');
         return;
       }
-      if (id === FURNACE) {
+      if (id === FURNACE || id === FURNACE_LIT) {
         openFurnace(hit.x, hit.y, hit.z);
         return;
       }
@@ -901,20 +807,6 @@ function updateTNT(dt) {
   for (let i = tntFuses.length - 1; i >= 0; i--) if (tntFuses[i].dead) tntFuses.splice(i, 1);
 }
 
-// ---- lighting modulation (day/night) ----
-// Shader uniform: sky-lit faces dim at night, torch-lit faces stay warm-bright.
-function applyDayLight(dayFactor) {
-  const skyFactor = 0.16 + 0.84 * dayFactor;
-  const sunIntensity = dayFactor * (game.shaderStyle === 'shader' ? 1.15 : 1.0);
-  for (const material of [solidMat, cutoutMat, waterMat]) {
-    material.uniforms.uSky.value = skyFactor;
-    material.uniforms.uSunIntensity.value = sunIntensity;
-    material.uniforms.uSunDirection.value.copy(sky.sunDirection);
-    material.uniforms.uTime.value = game.time;
-    material.uniforms.uCameraPosition.value.copy(camera.position);
-  }
-}
-
 // ---- main loop ----
 let lastT = performance.now();
 let fps = 0, fpsCount = 0, fpsTimer = 0;
@@ -925,7 +817,9 @@ function frame() {
   let dt = (now - lastT) / 1000;
   lastT = now;
   if (dt > 0.1) dt = 0.1;
-  game.time += dt;
+  const simulationPaused = game.started && ui.mode !== 'title' &&
+    ['pause', 'death', 'inventory', 'crafting', 'furnace', 'chest'].includes(ui.mode);
+  if (!simulationPaused) game.time += dt;
   if (game.started && ui.mode !== 'title') {
     saveClock += dt;
     if (saveClock >= 15) { game.saveGame(); saveClock = 0; }
@@ -935,7 +829,7 @@ function frame() {
   if (fpsTimer >= 1) { fps = fpsCount; fpsCount = 0; fpsTimer = 0; }
 
   if (game.started && ui.mode !== 'title') {
-    const paused = ui.mode === 'pause' || ui.mode === 'death' || ui.mode === 'inventory' || ui.mode === 'crafting' || ui.mode === 'furnace';
+    const paused = simulationPaused;
 
     if (!paused) {
       player.update(dt, world, audio);
@@ -996,7 +890,8 @@ function frame() {
       firstPersonArm.root.visible = true;
       firstPersonArm.setHeldItem(player.heldStack);
       const isMoving = player.onGround && Math.hypot(player.vel.x, player.vel.z) > 0.5;
-      firstPersonArm.update(dt, isMoving, player.leftDown && player.pointerLocked);
+      firstPersonArm.update(dt, isMoving, player.leftDown && player.pointerLocked, eating ? eating.progress : 0);
+      lighting.refreshObject(firstPersonArm.root, world, player.pos, 1.62);
     } else {
       firstPersonArm.root.visible = false;
     }
@@ -1005,23 +900,9 @@ function frame() {
     processChunkQueue();
     rebuildDirtyChunks();
 
-    const dayFactor = sky.update(dt, camera.position);
     const head = world.getBlock(Math.floor(player.pos.x), Math.floor(player.pos.y + 1.62), Math.floor(player.pos.z));
-    const underwater = head === WATER;
-    if (scene.fog) {
-      if (underwater) {
-        scene.fog.color.set(0x174a9b);
-        scene.fog.near = 0.1;
-        scene.fog.far = 30;
-      } else {
-        // Sky.update sets the proper Beta day/night fog each frame; never leave stale water fog behind.
-        scene.fog.near = 55;
-        scene.fog.far = Math.max(70, game.renderDistance * 16 - 4);
-      }
-    }
-    // water texture scroll (beta animated water)
-    waterTex.offset.y = (game.time * 0.012) % 1;
-    waterTex.offset.x = (game.time * 0.004) % 1;
+    const underwater = head === WATER || head === WATER_FLOW;
+    const dayFactor = sky.update(paused ? 0 : dt, camera.position, game.renderDistance, { underwater });
 
     // hurt flash overlay
     const hurtOverlay = document.getElementById('hurt-overlay');
@@ -1031,7 +912,7 @@ function frame() {
 
     // Underwater tint and shortened fog accompany the oxygen bubbles in the HUD.
     const waterOverlay = document.getElementById('water-overlay');
-    if (waterOverlay) waterOverlay.style.opacity = underwater ? 0.56 : 0;
+    if (waterOverlay) waterOverlay.style.opacity = underwater ? 0.32 : 0;
 
     // debug
     if (ui.showDebug) {
@@ -1057,7 +938,6 @@ function frame() {
       ui.showDeath(player.stats.blocksMined * 10 + player.stats.blocksPlaced * 5);
     }
   } else {
-    sky.update(dt, camera.position);
     // slow orbit for title screen
     camera.position.set(
       Math.cos(game.time * 0.08) * 12 + 8,
@@ -1065,6 +945,7 @@ function frame() {
       Math.sin(game.time * 0.08) * 12 + 8
     );
     camera.lookAt(8, world.heightAt(8, 8), 8);
+    sky.update(dt, camera.position, game.renderDistance);
     if (!game.started) {
       // pregenerate spawn chunks for the title backdrop
       processChunkQueue();
@@ -1072,10 +953,10 @@ function frame() {
     }
   }
 
-  // Keep day/night lighting and shader camera data in sync on both the title
-  // backdrop and active gameplay frames.
-  applyDayLight(sky.dayFactor);
-  syncFogUniforms([solidMat, cutoutMat, waterMat], scene.fog);
+  // One shared update drives terrain, entities, particles and the hand on both
+  // the title backdrop and gameplay frames.
+  lighting.update({ sky, time: game.time, style: game.shaderStyle, fog: scene.fog });
+  lighting.updateShadows(renderer, scene, camera, sky, game.shaderStyle, game.time);
   renderer.render(scene, camera);
   if (game.started && ui.mode !== 'title') firstPersonArm.render(renderer);
 }

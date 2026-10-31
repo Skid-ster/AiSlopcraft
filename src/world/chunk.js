@@ -14,6 +14,7 @@ export class Chunk {
     this.blockLight = new Uint8Array(CH * WORLD_H * CH);
     this.dirty = true;
     this.generated = false;
+    this.lightingReady = false;
     this.decorated = false;
     this.meshes = null; // { solid, cutout, water }
   }

@@ -94,11 +94,12 @@ export class UI {
     const bobbing = this.game.player.viewBobbing !== false;
     const keepInv = this.game.keepInventory !== false;
     const shaderStyle = this.game.shaderStyle || 'classic';
+    const brightness = Math.round((this.game.brightness ?? 1) * 100);
     const shaderDescriptions = {
-      classic: 'Classic pixel lighting, true to the original look.',
+      classic: 'Classic pixel lighting with smooth voxel light.',
       vibrant: 'Richer colors and a little extra contrast.',
-      cinematic: 'Cool shadows with a gentle, warm highlight grade.',
-      shader: 'Directional sun, contact shading, animated water glints, and atmospheric fog.',
+      cinematic: 'Soft sun shadows with a gentle, warm film grade.',
+      shader: 'Sun shadows, animated water reflections, and emissive blocks.',
     };
     div.innerHTML = `
       <div class="panel options-panel">
@@ -118,6 +119,10 @@ export class UI {
               <option value="shader" ${shaderStyle === 'shader' ? 'selected' : ''}>Shader Lite</option>
             </select>
           </label>
+          <div class="setting-card range-setting">
+            <label for="opt-brightness"><span class="setting-copy"><b>Brightness</b><small>Lift dark caves without washing out daylight</small></span><span class="setting-value"><strong id="opt-bright">${brightness}</strong><small>%</small></span></label>
+            <input type="range" min="50" max="150" value="${brightness}" id="opt-brightness" aria-label="Brightness">
+          </div>
           <div class="setting-card range-setting">
             <label for="opt-render"><span class="setting-copy"><b>Render distance</b><small>How far the landscape is drawn</small></span><span class="setting-value"><strong id="opt-rd">${this.game.renderDistance}</strong><small>chunks</small></span></label>
             <input type="range" min="2" max="12" value="${this.game.renderDistance}" id="opt-render" aria-label="Render distance">
@@ -150,6 +155,11 @@ export class UI {
       this.game.audio.click();
       this.game.setShaderStyle?.(e.target.value);
       div.querySelector('#opt-shader-desc').textContent = shaderDescriptions[e.target.value] || shaderDescriptions.classic;
+      this.game.saveSettings?.();
+    });
+    div.querySelector('#opt-brightness').addEventListener('input', e => {
+      this.game.setBrightness?.(+e.target.value / 100);
+      div.querySelector('#opt-bright').textContent = e.target.value;
       this.game.saveSettings?.();
     });
     div.querySelector('#opt-render').addEventListener('input', e => {

@@ -18,20 +18,28 @@ export class Sky {
   constructor(scene, camera) {
     this.scene = scene;
     this.camera = camera;
-    this.time = 0.30; // start mid-morning (0.25 = dawn, 0.50 = noon)
+    this.time = 0.38; // mid-morning: the title backdrop opens in full daylight
+    this.elapsed = 0;
     this.dayFactor = 1;
     this.sunDirection = new THREE.Vector3(1, 0, 0);
 
-    // A camera-following, vertex-coloured sky dome replaces the flat color-only
-    // backdrop with a gentle horizon-to-zenith gradient, while retaining the
-    // crisp, low-poly pixel-art look.
+    // Analytic gradient: no per-frame CPU vertex-buffer uploads or color pops.
     this.skyDomeGeometry = new THREE.SphereGeometry(480, 32, 16);
-    this.skyDomeGeometry.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(this.skyDomeGeometry.getAttribute('position').count * 3), 3));
-    this.skyDome = new THREE.Mesh(this.skyDomeGeometry, new THREE.MeshBasicMaterial({
-      vertexColors: true,
-      side: THREE.BackSide,
-      depthWrite: false,
-      fog: false,
+    this.skyUniforms = {
+      uHorizon: { value: new THREE.Color() },
+      uZenith: { value: new THREE.Color() },
+      uNadir: { value: new THREE.Color() },
+      uUnderwater: { value: 0 },
+      uWaterColor: { value: new THREE.Color() },
+    };
+    this.skyDome = new THREE.Mesh(this.skyDomeGeometry, new THREE.ShaderMaterial({
+      uniforms: this.skyUniforms,
+      vertexShader: `varying float vHeight; void main() { vHeight = normalize(position).y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: `uniform vec3 uHorizon; uniform vec3 uZenith; uniform vec3 uNadir; uniform float uUnderwater; uniform vec3 uWaterColor; varying float vHeight;
+        void main() { float h = max(vHeight, 0.0); vec3 c = mix(uHorizon, uZenith, pow(h, 0.7)); c = mix(c, uNadir, max(-vHeight, 0.0)); gl_FragColor = vec4(mix(c, uWaterColor, uUnderwater), 1.0);
+        #include <colorspace_fragment>
+        }`,
+      side: THREE.BackSide, depthWrite: false, fog: false,
     }));
     this.skyDome.renderOrder = -20;
     scene.add(this.skyDome);
@@ -40,14 +48,14 @@ export class Sky {
     const sunGeo = new THREE.PlaneGeometry(32, 32);
     const sunTex = this.makeSunTexture();
     this.sun = new THREE.Mesh(sunGeo, new THREE.MeshBasicMaterial({
-      map: sunTex, transparent: true, depthWrite: false, depthTest: false, fog: false,
+      map: sunTex, transparent: true, depthWrite: false, depthTest: true, fog: false,
     }));
     this.sun.renderOrder = -10;
     scene.add(this.sun);
 
     const moonTex = this.makeMoonTexture();
     this.moon = new THREE.Mesh(new THREE.PlaneGeometry(22, 22), new THREE.MeshBasicMaterial({
-      map: moonTex, transparent: true, depthWrite: false, depthTest: false, fog: false,
+      map: moonTex, transparent: true, depthWrite: false, depthTest: true, fog: false,
     }));
     this.moon.renderOrder = -10;
     scene.add(this.moon);
@@ -56,12 +64,12 @@ export class Sky {
     const starGeo = new THREE.BufferGeometry();
     const starPos = [];
     for (let i = 0; i < 750; i++) {
-      const v = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize().multiplyScalar(320);
+      const v = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize().multiplyScalar(390);
       starPos.push(v.x, v.y, v.z);
     }
     starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starPos, 3));
     this.stars = new THREE.Points(starGeo, new THREE.PointsMaterial({
-      color: 0xffffff, size: 1.5, sizeAttenuation: false, transparent: true, opacity: 0, depthWrite: false, depthTest: false, fog: false,
+      color: 0xffffff, size: 1.5, sizeAttenuation: false, transparent: true, opacity: 0, depthWrite: false, depthTest: true, fog: false,
     }));
     this.stars.renderOrder = -11;
     scene.add(this.stars);
@@ -99,7 +107,7 @@ export class Sky {
     t.magFilter = THREE.NearestFilter;
     t.minFilter = THREE.NearestFilter;
     t.generateMipmaps = false;
-    t.colorSpace = THREE.NoColorSpace;
+    t.colorSpace = THREE.SRGBColorSpace;
     return t;
   }
 
@@ -117,7 +125,7 @@ export class Sky {
     t.magFilter = THREE.NearestFilter;
     t.minFilter = THREE.NearestFilter;
     t.generateMipmaps = false;
-    t.colorSpace = THREE.NoColorSpace;
+    t.colorSpace = THREE.SRGBColorSpace;
     return t;
   }
 
@@ -160,13 +168,14 @@ export class Sky {
     t.magFilter = THREE.NearestFilter;
     t.minFilter = THREE.NearestFilter;
     t.generateMipmaps = false;
-    t.colorSpace = THREE.NoColorSpace;
+    t.colorSpace = THREE.SRGBColorSpace;
     return t;
   }
 
   // time: 0.0 = midnight, 0.25 = dawn, 0.50 = noon, 0.75 = dusk
-  update(dt, playerPos, renderDistance = 6) {
+  update(dt, playerPos, renderDistance = 6, { underwater = false } = {}) {
     this.time = (this.time + dt / DAY_LENGTH) % 1;
+    this.elapsed += dt;
 
     const sunAngle = (this.time - 0.25) * Math.PI * 2;
     const sunDir = new THREE.Vector3(Math.cos(sunAngle), Math.sin(sunAngle), 0.18).normalize();
@@ -176,9 +185,9 @@ export class Sky {
     this.dayFactor = Math.max(0, Math.min(1, (elev + 0.12) / 0.32));
 
     const center = playerPos.clone();
-    this.sun.position.copy(center).add(sunDir.clone().multiplyScalar(280));
+    this.sun.position.copy(center).add(sunDir.clone().multiplyScalar(400));
     this.sun.lookAt(center);
-    this.moon.position.copy(center).sub(sunDir.clone().multiplyScalar(280));
+    this.moon.position.copy(center).sub(sunDir.clone().multiplyScalar(400));
     this.moon.lookAt(center);
     this.stars.position.copy(center);
     this.stars.rotation.z = sunAngle * 0.25;
@@ -187,7 +196,9 @@ export class Sky {
     // clouds drift & take day/sunset/night tint
     this.clouds.position.x = playerPos.x;
     this.clouds.position.z = playerPos.z;
-    this.cloudMat.map.offset.x = (performance.now() * 0.0000045) % 1;
+    // Compensate the camera-following mesh so clouds stay anchored to the world.
+    this.cloudMat.map.offset.x = playerPos.x / 128 + this.elapsed * 0.0015;
+    this.cloudMat.map.offset.y = -playerPos.z / 128;
     this.cloudMat.opacity = 0.65 + this.dayFactor * 0.25;
 
     const sky = new THREE.Color();
@@ -211,30 +222,26 @@ export class Sky {
     this.cloudMat.color.copy(cloud);
     this.scene.background = sky;
     this.skyDome.position.copy(center);
-    const horizon = sky.clone().lerp(
-      this.dayFactor > 0.32 ? new THREE.Color(0xdceaff) : new THREE.Color(0x4c5277),
-      this.dayFactor > 0.32 ? 0.34 : 0.42,
-    );
-    const zenith = sky.clone().multiplyScalar(0.56);
+    const horizon = sky.clone().lerp(FOG_DAY, 0.20 + 0.25 * this.dayFactor);
+    const zenith = sky.clone().multiplyScalar(0.52);
     const nadir = sky.clone().multiplyScalar(0.68);
-    const domePosition = this.skyDomeGeometry.getAttribute('position');
-    const domeColor = this.skyDomeGeometry.getAttribute('color');
-    for (let i = 0; i < domePosition.count; i++) {
-      const h = domePosition.getY(i) / 480;
-      const mix = h >= 0 ? Math.pow(h, 0.7) : -h;
-      const end = h >= 0 ? zenith : nadir;
-      domeColor.setXYZ(i,
-        horizon.r + (end.r - horizon.r) * mix,
-        horizon.g + (end.g - horizon.g) * mix,
-        horizon.b + (end.b - horizon.b) * mix,
-      );
-    }
-    domeColor.needsUpdate = true;
+    this.skyUniforms.uHorizon.value.copy(horizon);
+    this.skyUniforms.uZenith.value.copy(zenith);
+    this.skyUniforms.uNadir.value.copy(nadir);
+    this.skyUniforms.uUnderwater.value = underwater ? 1 : 0;
+    this.skyUniforms.uWaterColor.value.copy(FOG_NIGHT).lerp(new THREE.Color(0x174a9b), this.dayFactor);
+    this.sun.visible = this.moon.visible = this.stars.visible = this.clouds.visible = !underwater;
     if (this.scene.fog) {
-      const far = Math.max(52, renderDistance * 16 - 4);
-      this.scene.fog.color.copy(fog);
-      this.scene.fog.near = far * 0.48;
-      this.scene.fog.far = far;
+      if (underwater) {
+        this.scene.fog.color.copy(FOG_NIGHT).lerp(new THREE.Color(0x174a9b), this.dayFactor);
+        this.scene.fog.near = 0.5;
+        this.scene.fog.far = 26;
+      } else {
+        const far = Math.max(24, renderDistance * 16 - 8);
+        this.scene.fog.color.copy(fog);
+        this.scene.fog.near = far * 0.52;
+        this.scene.fog.far = far;
+      }
     }
 
     return this.dayFactor;
