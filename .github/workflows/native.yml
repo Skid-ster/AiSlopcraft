@@ -31,7 +31,8 @@ jobs:
           sudo apt-get install -y ninja-build libasound2-dev libdbus-1-dev libpulse-dev \
             libudev-dev libwayland-dev wayland-protocols libx11-dev libxext-dev \
             libxcursor-dev libxi-dev libxfixes-dev libxrandr-dev libxss-dev \
-            libxtst-dev libxkbcommon-dev libegl1-mesa-dev libgl1-mesa-dev
+            libxtst-dev libxkbcommon-dev libegl1-mesa-dev libgl1-mesa-dev \
+            libgl1-mesa-dri xvfb xauth mesa-utils
 
       - name: Configure desktop app and tests (pinned SDL3 source/SHA256)
         shell: bash
@@ -48,20 +49,55 @@ jobs:
 
       - name: Compile complete native application
         shell: bash
-        run: cmake --build build --config Release --parallel 2
+        run: cmake --build build --config Release --parallel 2 2>&1 | tee build-log.txt
+
+      - name: Surface build errors as check annotations (logs host is inaccessible in sandbox)
+        if: failure()
+        shell: bash
+        run: |
+          if [[ -f build-log.txt ]]; then
+            { grep -Ei 'fatal error|error [A-Z]+[0-9]+:|error:|FAILED:|LNK[0-9]+|MSB[0-9]+' build-log.txt || true; } | tail -n 20 |
+              while IFS= read -r line; do echo "::error::$line"; done
+          fi
 
       - name: Assert CTest discovered the full suite
         shell: bash
         run: |
-          ctest --test-dir build --config Release -N | tee test-discovery.txt
-          grep -q '^Total Tests: 3$' test-discovery.txt
+          ctest --test-dir build --config Release -N 2>&1 | tee test-discovery.txt
+          if ! grep -Eq '^Total Tests:[[:space:]]*3[[:space:]]*$' test-discovery.txt; then
+            echo '::error::CTest did not discover exactly three tests'
+            while IFS= read -r line; do echo "::error::$line"; done < test-discovery.txt
+            exit 1
+          fi
           for name in voxcore_tests vox_asset_audit vox_startup_smoke; do
-            grep -q "Test #[0-9]*: $name" test-discovery.txt
+            if ! grep -Eq "Test[[:space:]]*#[[:space:]]*[0-9]+:[[:space:]]*$name" test-discovery.txt; then
+              echo "::error::CTest did not discover $name"
+              while IFS= read -r line; do echo "::error::$line"; done < test-discovery.txt
+              exit 1
+            fi
           done
 
       - name: Run core, asset and headless app smoke tests
         shell: bash
         run: ctest --test-dir build --config Release --output-on-failure | tee test-results.txt
+
+      - name: Render title and world on Mesa software OpenGL (Linux only)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          xvfb-run -a -s '-screen 0 1280x720x24 +extension GLX +render -noreset' \
+            env LIBGL_ALWAYS_SOFTWARE=1 SDL_VIDEODRIVER=x11 \
+            ./build/aislopcraft --visual-smoke visual-smoke
+          python3 - <<'PY'
+          import pathlib, struct
+          for name in ('title.png', 'world.png'):
+              image = pathlib.Path('visual-smoke') / name
+              data = image.read_bytes()
+              assert len(data) > 5000, f'{image}: suspiciously small'
+              assert data[:8] == b'\x89PNG\r\n\x1a\n', f'{image}: invalid PNG header'
+              assert struct.unpack('>II', data[16:24]) == (1280, 720), f'{image}: wrong size'
+              print(f'{image}: PNG 1280x720, {len(data)} bytes')
+          PY
 
       - name: Package runnable native game and original assets
         shell: bash
@@ -73,11 +109,20 @@ jobs:
           else
             cp build/aislopcraft package/
             cp -r build/assets package/
+            cp -r visual-smoke package/
           fi
           cp README.md LICENSE package/
           cp -r docs package/
           test -s package/aislopcraft.exe || test -s package/aislopcraft
           test -s package/assets/atlas.png
+
+      - name: Upload Linux software-GL captures for visual inspection
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: aislopcraft-Linux-software-gl-captures
+          path: visual-smoke/
+          if-no-files-found: error
 
       - name: Upload runnable bundle (not a graphical test)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -92,6 +137,7 @@ jobs:
         with:
           name: native-test-logs-${{ runner.os }}
           path: |
+            build-log.txt
             test-discovery.txt
             test-results.txt
             build/Testing/Temporary/LastTest.log

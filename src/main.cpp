@@ -106,10 +106,16 @@ int main(int argc,char* argv[]) {
         std::string flag=argv[1];
         if(flag=="--selftest")return selftest();
         if(flag=="--benchmark")return benchmark();
+        if(flag=="--visual-smoke") {
+            if(argc!=3) {std::cerr<<"Usage: aislopcraft --visual-smoke <output-directory>\n";return 2;}
+            vox::Game game;
+            return game.visualSmoke(argv[2]);
+        }
         if(flag=="--help") {
             std::cout<<"AiSlopcraft (unofficial 1.7.3-inspired native sandbox)\n"
                 <<"  aislopcraft             Open the SDL3/OpenGL desktop game\n"
                 <<"  aislopcraft --selftest  Headless startup/core smoke test\n"
+                <<"  aislopcraft --visual-smoke <dir>  Capture GL title/world frames (display required)\n"
                 <<"  aislopcraft --benchmark CPU-only workloads (NOT 1440p FPS)\n";
             return 0;
         }

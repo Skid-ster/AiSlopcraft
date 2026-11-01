@@ -67,7 +67,7 @@ bool Game::startup(std::string& error) {
 void Game::shutdown() {
     stopWorker();
     if(world_) save();
-    saveSettings();
+    if(!visualSmoke_) saveSettings();
     capture(false);
     audio_.shutdown();
     if(context_) renderer_.shutdown();
@@ -76,6 +76,42 @@ void Game::shutdown() {
     if(window_) SDL_DestroyWindow(window_);
     window_=nullptr;
     SDL_Quit();
+}
+int Game::visualSmoke(const std::filesystem::path& directory) {
+    visualSmoke_=true;
+    std::string error;
+    if(!startup(error)) {
+        std::cerr<<"VISUAL SMOKE FAILED: "<<error<<'\n';
+        shutdown();return 1;
+    }
+    // This command is intentionally NOT part of headless CTest: it needs
+    // a real OpenGL desktop driver (Mesa's software renderer is sufficient).
+    // Screenshot happens before swapping the back buffer in frame().
+    screenshotPath_=directory/"title.png";
+    screenshotRequested_=true;
+    frame();
+    bool titleOkay=screenshotOk_;
+    if(titleOkay) {
+        createCreative_=true; // show the starter item art in the HUD frame
+        startWorld(true);
+        if(world_ && screen_==Screen::Playing) {
+            screenshotPath_=directory/"world.png";
+            screenshotRequested_=true;
+            frame();
+        } else screenshotOk_=false;
+    }
+    bool worldOkay=screenshotOk_ && titleOkay;
+    stopWorker();
+    world_.reset(); // disposable smoke world: never write a user save
+    shutdown();
+    if(!worldOkay) {
+        std::cerr<<"VISUAL SMOKE FAILED: title/world frame could not be captured\n";
+        return 1;
+    }
+    std::cout<<"VISUAL SMOKE PASS: OpenGL "<<renderer_.driver()
+             <<", title and one in-world frame captured to "<<directory.string()
+             <<". This is not a gameplay, reference-parity or GPU FPS test.\n";
+    return 0;
 }
 int Game::run() {
     std::string error;
@@ -514,7 +550,7 @@ void Game::events() {
     }
 }
 void Game::key(SDL_Scancode k) {
-    if(k==SDL_SCANCODE_F2) {screenshotRequested_=true;return;}
+    if(k==SDL_SCANCODE_F2) {screenshotPath_.clear();screenshotRequested_=true;return;}
     if(k==SDL_SCANCODE_F3) {debug_=!debug_;return;}
     if(k==SDL_SCANCODE_F1) {hideHud_=!hideHud_;return;}
     if(screen_==Screen::Title) {
@@ -631,10 +667,11 @@ void Game::frame() {
     if(screenshotRequested_) {
         screenshotRequested_=false;
         std::string err;
-        auto path=std::filesystem::path("screenshots")/
-            ("aislopcraft-"+std::to_string(SDL_GetTicks())+".png");
-        if(renderer_.screenshot(path,width_,height_,err))message_="Screenshot: "+path.string();
-        else message_="Screenshot failed: "+err;
+        auto path=screenshotPath_.empty() ? std::filesystem::path("screenshots")/
+            ("aislopcraft-"+std::to_string(SDL_GetTicks())+".png") : screenshotPath_;
+        screenshotOk_=renderer_.screenshot(path,width_,height_,err);
+        if(screenshotOk_) message_="Screenshot: "+path.string();
+        else {message_="Screenshot failed: "+err;std::cerr<<message_<<'\n';}
     }
     SDL_GL_SwapWindow(window_);
 }

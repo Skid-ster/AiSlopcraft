@@ -23,6 +23,9 @@ public:
     Game()=default;
     Game(const Game&)=delete;Game& operator=(const Game&)=delete;
     int run(); // 0 on clean exit, nonzero on startup failure
+    // Requires a working desktop OpenGL context. Captures title and in-world
+    // frames to the given directory without saving the temporary world.
+    int visualSmoke(const std::filesystem::path& directory);
 private:
     enum class Screen {Title,Playing,Pause,Options,Inventory,Crafting,Furnace,Chest,Death};
     SDL_Window* window_=nullptr;
@@ -35,7 +38,9 @@ private:
     Player player_;
     Screen screen_=Screen::Title;
     bool running_=true,captured_=false,mouseLeft_=false,debug_=false,hideHud_=false;
-    bool screenshotRequested_=false,createCreative_=false,vsync_=true;
+    bool screenshotRequested_=false,screenshotOk_=false,createCreative_=false,vsync_=true;
+    bool visualSmoke_=false;
+    std::filesystem::path screenshotPath_;
     float fov_=70.f,sensitivity_=0.13f,miningProgress_=0;
     int width_=1280,height_=720,renderDistance_=4,frames_=0;
     float mouseX_=0,mouseY_=0;

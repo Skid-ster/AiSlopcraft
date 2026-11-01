@@ -68,12 +68,14 @@ Core-only, explicitly without SDL3/OpenGL: `cmake -S . -B build/core -DVOXCRAFT_
 ctest --test-dir build/release --output-on-failure -V
 ./build/release/aislopcraft --selftest       # no GPU required
 ./build/release/aislopcraft --benchmark      # CPU-only, NOT game FPS
+# Only on a GL 3.3 desktop, render two PNGs (no progress saved):
+./build/release/aislopcraft --visual-smoke screenshots/smoke
 # Rebuild original assets (requires Python 3.11+ and Pillow):
 ./build/release/dump_tiles > assets/tiles/list.txt
 python3 tools/assetgen/generate.py
 ```
 
-`voxcore_tests` checks block/item IDs, recipes/smelting, inventory, RNG/terrain/negative chunk boundaries, fluid/lighting addition and removal, physics/damage, and save round trips/CRC/interrupted-temp handling. `vox_asset_audit` decodes images, checks 20,816 registry face/icon lookups, animations, WAV headers and one CPU mesh. `vox_startup_smoke` runs the app's *headless* CLI. A green CTest result does not prove gameplay visuals or Minecraft behavior. Original pixel-art study: `assets/previews/art-study.png` (an atlas QA sheet, **not** a game screenshot).
+`voxcore_tests` checks block/item IDs, recipes/smelting, inventory, RNG/terrain/negative chunk boundaries, fluid/lighting addition and removal, physics/damage, and save round trips/CRC/interrupted-temp handling. `vox_asset_audit` decodes images, checks 20,816 registry face/icon lookups, animations, WAV headers and one CPU mesh. `vox_startup_smoke` runs the app's *headless* CLI. A green CTest result does not prove gameplay visuals or Minecraft behavior. The new `--visual-smoke` command attempts actual OpenGL title and in-world PNGs; **it cannot run in this sandbox** and its Linux CI software-renderer check is pending. It is not a client comparison or target-PC benchmark. Original pixel-art study: `assets/previews/art-study.png` (an atlas QA sheet, **not** a game screenshot).
 
 The CPU-only benchmark reports one-chunk generation/mesh milliseconds and labels missing mob work; it is **not** the requested native-1440p seven-scene GPU benchmark. On a GPU-equipped PC, run at 2560×1440 and inspect F3, capture F2 screenshots and record frame-time distribution with an external profiler. See [performance plan](docs/PERFORMANCE.md). **No** performance result has been measured on the requested RTX 5060 Ti/i5-13400 machine.
 
