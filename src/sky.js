@@ -230,7 +230,8 @@ export class Sky {
     this.skyUniforms.uNadir.value.copy(nadir);
     this.skyUniforms.uUnderwater.value = underwater ? 1 : 0;
     this.skyUniforms.uWaterColor.value.copy(FOG_NIGHT).lerp(new THREE.Color(0x174a9b), this.dayFactor);
-    this.sun.visible = this.moon.visible = this.stars.visible = this.clouds.visible = !underwater;
+    this.sun.visible = this.moon.visible = this.stars.visible = !underwater;
+    this.clouds.visible = !underwater && this.showClouds !== false;
     if (this.scene.fog) {
       if (underwater) {
         this.scene.fog.color.copy(FOG_NIGHT).lerp(new THREE.Color(0x174a9b), this.dayFactor);

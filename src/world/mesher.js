@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { CH, WORLD_H } from './chunk.js';
 import {
   getBlock, AIR, WATER, WATER_FLOW, LAVA, LAVA_FLOW, TILES, LEAVES, ICE, CACTUS, TORCH, REDSTONE_TORCH,
-  LADDER, SNOW, CROPS, FARMLAND, CHEST, CAKE_BLOCK, WOOD_DOOR, IRON_DOOR,
+  LADDER, SNOW, CROPS, FARMLAND, CHEST, LEVER, REDSTONE_WIRE, REDSTONE_REPEATER, CAKE_BLOCK, WOOD_DOOR, IRON_DOOR,
   FURNACE, FURNACE_LIT, PUMPKIN, JACK_O_LANTERN,
 } from './blocks.js';
 
@@ -38,6 +38,8 @@ const FACES = [
     corners: [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]],
   },
 ];
+
+for (const face of FACES) face.axes = [0, 1, 2].filter(axis => face.dir[axis] === 0);
 
 const ATLAS_COLS = 16;
 
@@ -92,65 +94,72 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
   const water = { pos: [], uv: [], col: [], light: [], normal: [], idx: [] };
   const wx0 = chunk.cx * CH, wz0 = chunk.cz * CH;
 
-  const biomeCache = new Array(CH * CH);
-  for (let z = 0; z < CH; z++) {
-    for (let x = 0; x < CH; x++) {
-      biomeCache[z * CH + x] = world.gen.columnInfo(wx0 + x, wz0 + z);
-    }
+  // Biomes are seed/coordinate dependent, not affected by block edits.
+  const biomeCache = chunk.biomeCache || (chunk.biomeCache = new Array(CH * CH));
+  if (!biomeCache[0]) for (let z = 0; z < CH; z++) {
+    for (let x = 0; x < CH; x++) biomeCache[z * CH + x] = world.gen.columnInfo(wx0 + x, wz0 + z);
   }
   const biomeAt = (x, z) => biomeCache[z * CH + x];
 
+  // Cache cross-border reads for this build: AO and smooth lighting repeatedly
+  // sample the same neighboring cells, and world lookups otherwise hash strings.
+  const paddedWidth = CH + 2;
+  const boundaryBlocks = new Uint16Array(paddedWidth * paddedWidth * WORLD_H);
+  const boundaryLight = new Uint16Array(paddedWidth * paddedWidth * WORLD_H);
+  const boundaryIndex = (x, y, z) => (y * paddedWidth + z + 1) * paddedWidth + x + 1;
   const getB = (x, y, z) => {
     if (y < 0 || y >= WORLD_H) return AIR;
     if (x >= 0 && x < CH && z >= 0 && z < CH) return chunk.get(x, y, z);
-    return world.getBlock(wx0 + x, y, wz0 + z);
+    if (x < -1 || x > CH || z < -1 || z > CH) return world.getBlock(wx0 + x, y, wz0 + z);
+    const i = boundaryIndex(x, y, z);
+    if (!boundaryBlocks[i]) boundaryBlocks[i] = world.getBlock(wx0 + x, y, wz0 + z) + 1;
+    return boundaryBlocks[i] - 1;
   };
   const getL = (x, y, z) => {
     if (y >= WORLD_H) return 0xf0;
     if (y < 0) return 0;
     if (x >= 0 && x < CH && z >= 0 && z < CH) return chunk.getLight(x, y, z);
-    return world.getLight(wx0 + x, y, wz0 + z);
+    if (x < -1 || x > CH || z < -1 || z > CH) return world.getLight(wx0 + x, y, wz0 + z);
+    const i = boundaryIndex(x, y, z);
+    if (!boundaryLight[i]) boundaryLight[i] = world.getLight(wx0 + x, y, wz0 + z) + 1;
+    return boundaryLight[i] - 1;
   };
 
-  // Corner occlusion adds gentle contact shadows where terrain blocks meet,
-  // giving the world depth without realtime shadow maps or extra draw calls.
   const faceOcclusion = (x, y, z, face) => {
-    const tangentAxes = [0, 1, 2].filter(axis => face.dir[axis] === 0);
-    return face.corners.map(corner => {
-      const signs = tangentAxes.map(axis => corner[axis] === 1 ? 1 : -1);
-      const base = [x + face.dir[0], y + face.dir[1], z + face.dir[2]];
-      const a = [...base], b = [...base], diagonal = [...base];
-      a[tangentAxes[0]] += signs[0];
-      b[tangentAxes[1]] += signs[1];
-      diagonal[tangentAxes[0]] += signs[0];
-      diagonal[tangentAxes[1]] += signs[1];
-      const occupied = point => getBlock(getB(point[0], point[1], point[2])).opaque;
-      const sideA = occupied(a), sideB = occupied(b), cornerBlock = occupied(diagonal);
-      if (sideA && sideB) return 0.68;
-      return 1 - (Number(sideA) + Number(sideB) + Number(cornerBlock)) * 0.10;
-    });
+    const axes = face.axes;
+    const bx = x + face.dir[0], by = y + face.dir[1], bz = z + face.dir[2];
+    const result = [];
+    for (const corner of face.corners) {
+      const a = corner[axes[0]] ? 1 : -1, b = corner[axes[1]] ? 1 : -1;
+      const ax = axes[0] === 0 ? a : 0, ay = axes[0] === 1 ? a : 0, az = axes[0] === 2 ? a : 0;
+      const bx2 = axes[1] === 0 ? b : 0, by2 = axes[1] === 1 ? b : 0, bz2 = axes[1] === 2 ? b : 0;
+      const sideA = getBlock(getB(bx + ax, by + ay, bz + az)).opaque;
+      const sideB = getBlock(getB(bx + bx2, by + by2, bz + bz2)).opaque;
+      const diagonal = getBlock(getB(bx + ax + bx2, by + ay + by2, bz + az + bz2)).opaque;
+      result.push(sideA && sideB ? 0.68 : 1 - (Number(sideA) + Number(sideB) + Number(diagonal)) * 0.10);
+    }
+    return result;
   };
 
-  // Smooth sky/torch light over the four cells touching each face corner. Opaque
-  // samples are excluded so a wall cannot leak brightness onto its lit side.
   const faceLightData = (x, y, z, face) => {
-    const axes = [0, 1, 2].filter(axis => face.dir[axis] === 0);
-    const base = [x + face.dir[0], y + face.dir[1], z + face.dir[2]];
+    const axes = face.axes;
+    const bx = x + face.dir[0], by = y + face.dir[1], bz = z + face.dir[2];
     const sky = [], block = [];
     for (const corner of face.corners) {
-      const signs = axes.map(axis => corner[axis] === 1 ? 1 : -1);
-      const points = [base.slice(), base.slice(), base.slice(), base.slice()];
-      points[1][axes[0]] += signs[0];
-      points[2][axes[1]] += signs[1];
-      points[3][axes[0]] += signs[0]; points[3][axes[1]] += signs[1];
-      let s = 0, b = 0, n = 0;
-      for (const point of points) {
-        if (getBlock(getB(point[0], point[1], point[2])).opaque) continue;
-        const light = getL(point[0], point[1], point[2]);
-        s += light >> 4; b += light & 15; n++;
+      const a = corner[axes[0]] ? 1 : -1, b = corner[axes[1]] ? 1 : -1;
+      const ax = axes[0] === 0 ? a : 0, ay = axes[0] === 1 ? a : 0, az = axes[0] === 2 ? a : 0;
+      const bx2 = axes[1] === 0 ? b : 0, by2 = axes[1] === 1 ? b : 0, bz2 = axes[1] === 2 ? b : 0;
+      let s = 0, lightBlock = 0, n = 0;
+      for (let i = 0; i < 4; i++) {
+        const px = bx + ((i & 1) ? ax : 0) + ((i & 2) ? bx2 : 0);
+        const py = by + ((i & 1) ? ay : 0) + ((i & 2) ? by2 : 0);
+        const pz = bz + ((i & 1) ? az : 0) + ((i & 2) ? bz2 : 0);
+        if (getBlock(getB(px, py, pz)).opaque) continue;
+        const light = getL(px, py, pz);
+        s += light >> 4; lightBlock += light & 15; n++;
       }
-      if (n === 0) { const light = getL(base[0], base[1], base[2]); s = light >> 4; b = light & 15; n = 1; }
-      sky.push(s / n); block.push(b / n);
+      if (n === 0) { const light = getL(bx, by, bz); s = light >> 4; lightBlock = light & 15; n = 1; }
+      sky.push(s / n); block.push(lightBlock / n);
     }
     return { sky, block };
   };
@@ -200,7 +209,17 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
     }
   };
 
-  for (let y = 0; y < WORLD_H; y++) {
+  // Avoid traversing the empty sky above this chunk, while preserving blocks
+  // placed at any height. The contiguous y-major storage makes this cheap.
+  let top = WORLD_H - 1;
+  while (top >= 0) {
+    let occupied = false;
+    const start = top * CH * CH;
+    for (let i = start; i < start + CH * CH; i++) if (chunk.blocks[i] !== AIR) { occupied = true; break; }
+    if (occupied) break;
+    top--;
+  }
+  for (let y = 0; y <= top; y++) {
     for (let z = 0; z < CH; z++) {
       for (let x = 0; x < CH; x++) {
         const id = chunk.get(x, y, z);
@@ -236,11 +255,11 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
 
         if (bd.render === 'torch') {
           const light = getL(x, y, z);
-          const skyL = light >> 4, blkL = Math.max(light & 15, id === TORCH ? 14 : 7);
+          const skyL = light >> 4, blkL = Math.max(light & 15, id === TORCH ? 14 : (id === REDSTONE_TORCH && !(meta & 8) ? 7 : 0));
           const w = 1 / 16;
           const cx = x + 0.5, cz = z + 0.5;
           const h = 0.625;
-          const torchTile = TILES.torch;
+          const torchTile = id === LEVER ? TILES.lever : id === REDSTONE_TORCH && (meta & 8) ? TILES.redstone_torch_off : TILES.torch;
           const sideRect = [7 / 16, 0, 9 / 16, 10 / 16];
           const topRect = [7 / 16, 10 / 16, 9 / 16, 12 / 16];
           pushBox(
@@ -249,7 +268,7 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
             cx + w, y + h, cz + w,
             [torchTile, torchTile, torchTile, torchTile, torchTile, torchTile],
             skyL, blkL,
-            id === REDSTONE_TORCH ? [1.15, 0.45, 0.45] : WHITE_TINT,
+            id === REDSTONE_TORCH && !(meta & 8) ? [1.15, 0.45, 0.45] : WHITE_TINT,
             [topRect, sideRect, sideRect, sideRect, sideRect, sideRect],
           );
           continue;
@@ -263,8 +282,9 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
             const x0 = x + 0.0625 + eaten * 0.125;
             pushBox(buf, x0, y, z + 0.0625, x + 0.9375, y + 0.5, z + 0.9375, bd.tiles, skyL, blkL);
           } else {
-            // Bed slab
-            pushBox(buf, x, y, z, x + 1, y + 0.5625, z + 1, bd.tiles, skyL, blkL);
+            // The head carries the pillow; the foot is a red blanket.
+            const tiles = id === 26 && !(meta & 8) ? [TILES.bed_foot, ...bd.tiles.slice(1)] : bd.tiles;
+            pushBox(buf, x, y, z, x + 1, y + 0.5625, z + 1, tiles, skyL, blkL);
           }
           continue;
         }
@@ -282,7 +302,8 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
           else if (orient === 1) z0 = z + 1 - t;
           else if (orient === 2) x1 = x + t;
           else x0 = x + 1 - t;
-          pushBox(buf, x0, y, z0, x1, y + 1, z1, bd.tiles, skyL, blkL);
+          const doorTile = id === WOOD_DOOR ? (meta & 8 ? TILES.door_wood : TILES.door_wood_bottom) : (meta & 8 ? TILES.door_iron : TILES.door_iron_bottom);
+          pushBox(buf, x0, y, z0, x1, y + 1, z1, [bd.tiles[0], bd.tiles[1], doorTile, doorTile, doorTile, doorTile], skyL, blkL);
           continue;
         }
 
@@ -341,6 +362,12 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
           if (bd.render === 'liquid') {
             const sameFluid = isWaterFamily ? (nb === WATER || nb === WATER_FLOW) : (nb === LAVA || nb === LAVA_FLOW);
             visible = !sameFluid && !nbd.opaque && nb !== ICE;
+            if (sameFluid && f >= 2) {
+              const neighborMeta = inside ? chunk.getMeta(nx, ny, nz) : world.getMeta(wx0 + nx, ny, wz0 + nz);
+              const thisLevel = id === WATER_FLOW || id === LAVA_FLOW ? (meta & 8 ? 0 : meta & 7) : 0;
+              const otherLevel = nb === WATER_FLOW || nb === LAVA_FLOW ? (neighborMeta & 8 ? 0 : neighborMeta & 7) : 0;
+              visible = otherLevel > thisLevel;
+            }
             if (f === 0 && nb === AIR) visible = true;
           } else if (bd.render === 'flat') {
             visible = (f === 0);
@@ -365,10 +392,12 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
           }
 
           // Only tint top face of GRASS; tint all faces of foliage blocks (LEAVES)
-          const faceTint = (bd.tint === 'grass') ? (f === 0 ? biomeTint : WHITE_TINT) : biomeTint;
+          const faceTint = id === REDSTONE_WIRE ? (meta ? [1.0, 0.45 + meta / 30, 0.45 + meta / 30] : [0.45, 0.35, 0.35]) :
+            id === REDSTONE_REPEATER && (meta & 4) ? [1.2, 0.65, 0.65] :
+            (bd.tint === 'grass') ? (f === 0 ? biomeTint : WHITE_TINT) : biomeTint;
 
           let yTop = 1.0;
-          if (bd.render === 'liquid' && !(isWaterFamily ? (getB(x, y + 1, z) === WATER || getB(x, y + 1, z) === WATER_FLOW) : (getB(x, y + 1, z) === LAVA || getB(x, y + 1, z) === LAVA_FLOW))) yTop = 0.88;
+          if (bd.render === 'liquid' && !(isWaterFamily ? (getB(x, y + 1, z) === WATER || getB(x, y + 1, z) === WATER_FLOW) : (getB(x, y + 1, z) === LAVA || getB(x, y + 1, z) === LAVA_FLOW))) yTop = (id === WATER_FLOW || id === LAVA_FLOW) && !(meta & 8) ? Math.max(0.12, 0.88 - (meta & 7) * 0.1) : 0.88;
           else if (id === SNOW) yTop = 0.125;
           else if (bd.render === 'flat') yTop = 0.04;
           else if (id === FARMLAND) yTop = 0.9375;

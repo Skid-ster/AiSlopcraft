@@ -77,6 +77,8 @@ export const SHAPED = [
   { pattern: [[GOLD, GOLD, GOLD], [GOLD, APPLE, GOLD], [GOLD, GOLD, GOLD]], out: [GOLDEN_APPLE, 1] },
   { pattern: [[0, IRON, 0], [IRON, REDSTONE, IRON], [0, IRON, 0]], out: [COMPASS, 1] },
   { pattern: [[REDSTONE], [STICK]], out: [76, 1] },
+  { pattern: [[STICK], [COBBLE]], out: [69, 1] },
+  { pattern: [[76, REDSTONE, 76], [STONE, STONE, STONE]], out: [356, 1] },
   { pattern: [[PUMPKIN], [TORCH]], out: [JACK_O_LANTERN, 1] },
   { pattern: [[PLANKS, PLANKS, PLANKS], [PLANKS, 0, PLANKS], [PLANKS, PLANKS, PLANKS]], out: [CHEST, 1] },
   { pattern: [[PLANKS, PLANKS, PLANKS], [BOOK, BOOK, BOOK], [PLANKS, PLANKS, PLANKS]], out: [BOOKSHELF, 1] },

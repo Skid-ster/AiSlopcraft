@@ -1,3 +1,5 @@
+import { DEFAULT_KEYS } from '../settings.js';
+import { itemStackLimit } from '../world/blocks.js';
 // Player physics + controls. Beta 1.7.3 feel: no sprint, 4.317 b/s walk,
 // 1.25-block jump, fall damage, sneak edge-guard, ladders, cobwebs, ice, swimming, armor.
 import * as THREE from 'three';
@@ -117,6 +119,8 @@ export class Player {
     this.mouseDX = 0; this.mouseDY = 0;
     this.leftDown = false; this.rightDown = false;
     this.sensitivity = 0.0022;
+    this.bindings = { ...DEFAULT_KEYS };
+    this.invertMouse = false;
 
     canvas.addEventListener('click', () => {
       if (!this.pointerLocked && !window.uiPause) canvas.requestPointerLock?.();
@@ -130,7 +134,7 @@ export class Player {
         this.mouseDY = 0;
         this.mining.active = false;
         this.mining.progress = 0;
-        for (const code of ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'ShiftRight']) this.keys[code] = false;
+        this.keys = {};
       }
     });
     document.addEventListener('mousemove', (e) => {
@@ -141,27 +145,21 @@ export class Player {
     });
     document.addEventListener('mousedown', (e) => {
       if (!this.pointerLocked) return;
-      if (e.button === 0) this.leftDown = true;
-      if (e.button === 2) this.rightDown = true;
+      if (`Mouse${e.button}` === this.bindings.attack) this.leftDown = true;
+      if (`Mouse${e.button}` === this.bindings.use) this.rightDown = true;
     });
     document.addEventListener('mouseup', (e) => {
-      if (e.button === 0) { this.leftDown = false; this.mining.active = false; this.mining.progress = 0; }
-      if (e.button === 2) this.rightDown = false;
+      if (`Mouse${e.button}` === this.bindings.attack) { this.leftDown = false; this.mining.active = false; this.mining.progress = 0; }
+      if (`Mouse${e.button}` === this.bindings.use) this.rightDown = false;
     });
     document.addEventListener('contextmenu', e => e.preventDefault());
     document.addEventListener('keydown', (e) => {
       this.keys[e.code] = true;
-      if (e.code === 'Digit1') this.hotbarIndex = 0;
-      if (e.code === 'Digit2') this.hotbarIndex = 1;
-      if (e.code === 'Digit3') this.hotbarIndex = 2;
-      if (e.code === 'Digit4') this.hotbarIndex = 3;
-      if (e.code === 'Digit5') this.hotbarIndex = 4;
-      if (e.code === 'Digit6') this.hotbarIndex = 5;
-      if (e.code === 'Digit7') this.hotbarIndex = 6;
-      if (e.code === 'Digit8') this.hotbarIndex = 7;
-      if (e.code === 'Digit9') this.hotbarIndex = 8;
+      for (let i = 1; i <= 9; i++) if (e.code === this.bindings[`hotbar${i}`]) this.hotbarIndex = i - 1;
+      if (e.code === this.bindings.attack) this.leftDown = true;
+      if (e.code === this.bindings.use) this.rightDown = true;
     });
-    document.addEventListener('keyup', (e) => { this.keys[e.code] = false; });
+    document.addEventListener('keyup', (e) => { this.keys[e.code] = false; if (e.code === this.bindings.attack) { this.leftDown = false; this.mining.active = false; this.mining.progress = 0; } if (e.code === this.bindings.use) this.rightDown = false; });
     document.addEventListener('wheel', (e) => {
       if (!this.pointerLocked) return;
       this.hotbarIndex = (this.hotbarIndex + (e.deltaY > 0 ? 1 : -1) + 9) % 9;
@@ -218,21 +216,33 @@ export class Player {
     return getBlock(world.getBlock(x, y, z)).solid;
   }
 
+  updateRidingView(dt) {
+    this.yaw -= this.mouseDX * this.sensitivity;
+    this.pitch -= this.mouseDY * this.sensitivity * (this.invertMouse ? -1 : 1);
+    this.mouseDX = this.mouseDY = 0;
+    const limit = Math.PI / 2 - 0.001;
+    this.pitch = Math.max(-limit, Math.min(limit, this.pitch));
+    this.hurtTime = Math.max(0, this.hurtTime - dt);
+    this.camera.position.set(this.pos.x, this.pos.y + EYE, this.pos.z);
+    const dir = new THREE.Vector3(-Math.sin(this.yaw) * Math.cos(this.pitch), Math.sin(this.pitch), -Math.cos(this.yaw) * Math.cos(this.pitch));
+    this.camera.lookAt(this.camera.position.clone().add(dir));
+  }
+
   update(dt, world, audio) {
     if (this.dead) return;
     dt = Math.min(dt, 0.05);
 
     // mouse look
     this.yaw -= this.mouseDX * this.sensitivity;
-    this.pitch -= this.mouseDY * this.sensitivity;
+    this.pitch -= this.mouseDY * this.sensitivity * (this.invertMouse ? -1 : 1);
     this.mouseDX = 0; this.mouseDY = 0;
     const lim = Math.PI / 2 - 0.001;
     this.pitch = Math.max(-lim, Math.min(lim, this.pitch));
 
     // movement input
-    const forward = (this.keys['KeyW'] ? 1 : 0) - (this.keys['KeyS'] ? 1 : 0);
-    const strafe = (this.keys['KeyD'] ? 1 : 0) - (this.keys['KeyA'] ? 1 : 0);
-    this.sneaking = !!(this.keys['ShiftLeft'] || this.keys['ShiftRight']);
+    const forward = (this.keys[this.bindings.forward] ? 1 : 0) - (this.keys[this.bindings.back] ? 1 : 0);
+    const strafe = (this.keys[this.bindings.right] ? 1 : 0) - (this.keys[this.bindings.left] ? 1 : 0);
+    this.sneaking = !!(this.keys[this.bindings.sneak]);
 
     // check fluids / ladders / cobwebs / ground material
     const bx = Math.floor(this.pos.x), bz = Math.floor(this.pos.z);
@@ -275,11 +285,11 @@ export class Player {
     // gravity / swimming / ladders / cobweb
     if (this.inCobweb) {
       this.vel.y = Math.max(-1.2, this.vel.y - 8 * dt);
-      if (this.keys['Space']) this.vel.y = 0.8;
+      if (this.keys[this.bindings.jump]) this.vel.y = 0.8;
       this.fallStart = null;
     } else if (this.onLadder) {
       this.fallStart = null;
-      if (this.keys['Space'] || len > 0) {
+      if (this.keys[this.bindings.jump] || len > 0) {
         this.vel.y = 3.6;
       } else if (this.sneaking) {
         this.vel.y = 0;
@@ -288,14 +298,14 @@ export class Player {
       }
     } else if (this.inWater || this.inLava) {
       this.vel.y -= 7 * dt;
-      if (this.keys['Space']) this.vel.y += 10.5 * dt;
+      if (this.keys[this.bindings.jump]) this.vel.y += 10.5 * dt;
       this.vel.y *= Math.pow(0.88, dt * 20);
     } else {
       this.vel.y -= 28 * dt;
     }
 
     // jump (0.42 blocks/tick = 8.4 b/s ≈ 1.25 block jump)
-    if (this.keys['Space'] && this.onGround && !this.inWater && !this.onLadder && !this.inCobweb) {
+    if (this.keys[this.bindings.jump] && this.onGround && !this.inWater && !this.onLadder && !this.inCobweb) {
       this.vel.y = 8.45;
       this.onGround = false;
       this.stats.jumps++;
@@ -341,7 +351,7 @@ export class Player {
     const blockedX = this.moveAxis(0, dx, world) === 'blocked' || (dx !== 0 && this.vel.x === 0);
     const blockedZ = this.moveAxis(2, dz, world) === 'blocked' || (dz !== 0 && this.vel.z === 0);
     // Swim-up boost when jumping against a shoreline lip from water!
-    if ((this.inWater || this.inLava) && this.keys['Space'] && (blockedX || blockedZ)) {
+    if ((this.inWater || this.inLava) && this.keys[this.bindings.jump] && (blockedX || blockedZ)) {
       this.vel.y = Math.max(this.vel.y, 6.2);
     }
     this.onGround = this.checkGround(world);
@@ -616,7 +626,7 @@ export class Player {
   insertItem(id, count = 1, damage = 0) {
     let remaining = Math.max(0, Math.floor(count));
     if (!remaining) return 0;
-    const maxStack = ITEMS[id]?.durability ? 1 : 64;
+    const maxStack = itemStackLimit(id);
 
     if (maxStack > 1) {
       for (let i = 0; i < this.inventory.length && remaining > 0; i++) {
@@ -640,7 +650,7 @@ export class Player {
   addItem(id, count = 1, damage = 0) {
     const wanted = Math.max(0, Math.floor(count));
     if (!wanted) return true;
-    const maxStack = ITEMS[id]?.durability ? 1 : 64;
+    const maxStack = itemStackLimit(id);
     let capacity = 0;
     if (maxStack > 1) {
       for (const stack of this.inventory) {
@@ -677,7 +687,7 @@ export class Player {
     const stack = this.heldStack;
     const def = stack && ITEMS[stack.id];
     const food = def?.food;
-    if (!food || this.health >= this.maxHealth || this.dead) return false;
+    if (!food || this.dead) return false;
     this.health = Math.min(this.maxHealth, this.health + food);
     const returnItem = def.returns || null;
     this.consumeHeld();

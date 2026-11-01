@@ -1,5 +1,5 @@
 // Small deterministic furnace simulation, separated for headless regression tests.
-import { ITEMS, LOG, PLANKS, SAPLING, CHEST, WOOD_DOOR, LADDER } from '../world/blocks.js';
+import { itemStackLimit, LOG, PLANKS, SAPLING, CHEST, WOOD_DOOR, LADDER } from '../world/blocks.js';
 import { smeltResult } from './recipes.js';
 
 export const FUEL_TIMES = Object.freeze({
@@ -23,7 +23,7 @@ export function createFurnaceState() {
 }
 
 export function furnaceStackLimit(stack) {
-  return ITEMS[stack.id]?.durability ? 1 : 64;
+  return itemStackLimit(stack.id);
 }
 
 function canMergeStacks(a, b) {

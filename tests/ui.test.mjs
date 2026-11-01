@@ -28,6 +28,7 @@ dom.window.HTMLCanvasElement.prototype.getContext = () => new Proxy({}, {
 });
 
 const { UI } = await import('../src/ui/ui.js');
+const { sanitizeSettings } = await import('../src/settings.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -53,6 +54,8 @@ const player = {
   addItem(id, count) { calls.push(['addItem', id, count]); },
 };
 const game = {
+  settings: sanitizeSettings(),
+  applySettings() { this.renderDistance = this.settings.renderDistance; this.shaderStyle = this.settings.shaderStyle; this.brightness = this.settings.brightness; },
   renderDistance: 6,
   shaderStyle: 'classic',
   brightness: 1,
@@ -83,23 +86,43 @@ try {
   // ---------- title: Options ----------
   btn('btn-options').click();
   check('Options button opens options screen', !!btn('options-screen'));
-  check('options sliders present', !!btn('opt-render') && !!btn('opt-volume') && !!btn('opt-sens-in'));
-  check('shader style choices are available', ['classic', 'vibrant', 'cinematic', 'shader'].every(value =>
-    [...btn('opt-shader').options].some(option => option.value === value)));
-  btn('opt-shader').value = 'cinematic';
-  btn('opt-shader').dispatchEvent(new dom.window.Event('change'));
+  btn('opt-video').click();
+  check('video controls present', !!btn('opt-render') && !!btn('opt-fov') && !!btn('opt-shader'));
+  btn('opt-shader').click(); btn('opt-shader').click();
   check('shader selection applies live to the game renderer', game.shaderStyle === 'cinematic');
   btn('opt-brightness').value = '120';
   btn('opt-brightness').dispatchEvent(new dom.window.Event('input'));
   check('brightness slider applies live', Math.abs(game.brightness - 1.2) < 1e-6);
-  btn('opt-shader').value = 'shader';
-  btn('opt-shader').dispatchEvent(new dom.window.Event('change'));
+  btn('opt-shader').click();
   check('Shader Lite preset applies immediately', game.shaderStyle === 'shader');
   btn('opt-render').value = '8';
   btn('opt-render').dispatchEvent(new dom.window.Event('input'));
   check('render distance slider applies', game.renderDistance === 8);
   btn('opt-done').click();
+  btn('opt-controls').click();
+  check('control settings present', !!btn('opt-sens-in'));
+  document.querySelector('[data-action="forward"]').click();
+  document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { code: 'KeyI', bubbles: true }));
+  check('key binding updates', game.settings.keys.forward === 'KeyI');
+  btn('opt-done').click();
+  btn('opt-sound').click();
+  check('sound settings present', !!btn('opt-volume'));
+  btn('opt-done').click();
+  btn('opt-done').click();
   check('Options Done closes screen', gone('options-screen'));
+
+  // Chest clicks support splitting, placing and shift transfers.
+  game.openChestData = { slots: new Array(27).fill(null) };
+  game.openChestData.slots[0] = { id: 5, count: 5 };
+  ui.mode = 'chest';
+  ui.slotClick(click(2), 'chest', 0);
+  check('right-click splits chest stack', player.cursorStack?.count === 3 && game.openChestData.slots[0].count === 2);
+  ui.slotClick(click(0), 'chest', 1);
+  check('chest accepts cursor stack', !player.cursorStack && game.openChestData.slots[1].count === 3);
+  ui.slotClick({ ...click(0), shiftKey: true }, 'chest', 1);
+  check('shift-click transfers chest stack to inventory', !game.openChestData.slots[1] && player.inventory.some(s => s?.id === 5 && s.count === 3));
+  player.inventory.fill(null);
+  ui.mode = 'title';
 
   // ---------- title: Singleplayer ----------
   btn('btn-singleplayer').click();
@@ -168,6 +191,13 @@ try {
   check('E closes inventory, back to game', ui.mode === 'game' && !visible('inventory-screen'));
   check('cursor stack returned via addItem on close',
     calls.some(c => c[0] === 'addItem' && c[1] === STICK && c[2] === 4));
+
+  // Cake uses three milk buckets, which must be returned to the crafting grid.
+  ui.setMode('crafting');
+  ui.craftSlots = [335,335,335,353,344,353,296,296,296].map(id => ({ id, count: 1 }));
+  ui.slotClick(click(0), 'out', 0);
+  check('cake crafting returns the three empty buckets', player.cursorStack?.id === 354 && ui.craftSlots.slice(0, 3).every(s => s?.id === 325));
+  player.cursorStack = null; ui.craftSlots.fill(null); ui.setMode('game');
 
   // ---------- pause menu ----------
   ui.onKey(key('Escape'));

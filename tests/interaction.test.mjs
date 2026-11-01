@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { World } from '../src/world/world.js';
 import { Player } from '../src/entities/player.js';
-import { advanceEating, EAT_DURATION } from '../src/entities/eating.js';
+import { advanceEating } from '../src/entities/eating.js';
 import {
   AIR, STONE, DIRT, GRASS, WATER, LAVA, TALL_GRASS, SAPLING, PLANKS,
   TILES, breakTime, canHarvest, getBlock
@@ -179,22 +179,16 @@ player.pointerLocked = true;
 player.rightDown = true;
 let ate = 0;
 const eatAudio = { eat() { ate++; } };
-let eatingState = { id: 320, progress: 0 };
-let eatingStep = advanceEating(eatingState, 1.5, player, eatAudio, true);
-eatingState = eatingStep.eating;
-check('food does not heal or consume before the eating timer completes',
-  !eatingStep.completed && eatingState.progress < EAT_DURATION && player.health === 10 && player.inventory[0].count === 2);
-eatingStep = advanceEating(eatingState, 0.1, player, eatAudio, true);
-eatingState = eatingStep.eating;
-check('holding right-click for the full eating timer heals and consumes once',
-  eatingStep.completed && eatingState === null && player.health === 18 && player.inventory[0].count === 1 && ate === 1);
+let eatingStep = advanceEating({ id: 320 }, 0, player, eatAudio, true);
+check('food heals immediately on use in Beta 1.7.3',
+  eatingStep.completed && eatingStep.eating === null && player.health === 18 && player.inventory[0].count === 1 && ate === 1);
 player.rightDown = false;
-eatingStep = advanceEating({ id: 320, progress: 1.2 }, 0.5, player, eatAudio, true);
-check('releasing right-click cancels eating without consuming food',
-  !eatingStep.completed && eatingStep.eating === null && player.inventory[0].count === 1 && ate === 1);
+eatingStep = advanceEating({ id: 320 }, 0, player, eatAudio, true);
+check('food is not consumed when use is released',
+  !eatingStep.completed && player.inventory[0].count === 1 && ate === 1);
 player.rightDown = true;
 player.health = 20;
-check('food cannot be wasted at full health', !player.eatHeld({ eat() { ate++; } }) && player.inventory[0].count === 1 && ate === 1);
+check('food can be consumed at full health in Beta 1.7.3', player.eatHeld({ eat() { ate++; } }) && player.inventory[0] === null && ate === 2);
 
 player.inventory.fill(null);
 player.inventory[0] = { id: PLANKS, count: 63, damage: 0 };

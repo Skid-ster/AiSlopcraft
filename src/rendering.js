@@ -357,7 +357,7 @@ export class Lighting {
   updateShadows(renderer, scene, camera, sky, style, time, force = false) {
     const id = shaderStyleId(style);
     if (id < 2 || sky.sunDirection.y <= 0.06) { this.shared.uShadowStrength.value = 0; return; }
-    if (!force && time - this.lastShadowTime < 0.1 && camera.position.distanceToSquared(this.lastShadowPosition) < 0.25) return;
+    if (!force && time - this.lastShadowTime < 0.1) return;
     this.lastShadowTime = time;
     this.lastShadowPosition.copy(camera.position);
     camera.getWorldDirection(this._forward);

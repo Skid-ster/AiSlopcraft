@@ -514,34 +514,6 @@ html, body {
   margin-bottom: 24px;
 }
 
-/* options */
-.options-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 15px;
-  min-width: 430px;
-}
-.options-panel h2 {
-  color: #3a3a3a;
-  text-align: center;
-}
-.options-panel label {
-  color: #2f2f2f;
-  font-size: 15px;
-  font-weight: bold;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-.options-panel input[type=range] {
-  width: 100%;
-  cursor: pointer;
-}
-.options-toggles {
-  display: flex;
-  gap: 10px;
-}
-
 @media (max-width: 720px) {
   .title-main { font-size: 42px; }
   .splash { right: -12px; font-size: 14px; }
@@ -584,148 +556,128 @@ html, body {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
 
-/* A deliberately more finished settings experience, while inventory retains its
-   crisp Beta-era panels. */
+/* ---------- Minecraft-style Options ---------- */
 .options-screen {
   z-index: 40;
-  padding: 24px;
-  background: radial-gradient(ellipse at 50% 18%, rgba(62, 91, 123, .58), rgba(7, 12, 20, .88) 70%), rgba(4, 8, 14, .62);
-  backdrop-filter: blur(7px) saturate(.8);
+  padding: 24px 16px;
+  background-image: linear-gradient(rgba(0, 0, 0, .64), rgba(0, 0, 0, .64)), url('./ui/dirt.svg');
+  background-size: auto, 64px 64px;
+  image-rendering: pixelated;
 }
-.options-panel {
-  width: min(620px, calc(100vw - 32px));
-  max-height: min(92vh, 900px);
+.options-page {
+  width: min(640px, 96vw);
+  max-height: 92vh;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 30px 34px 24px;
-  color: #e8edf5;
-  background: linear-gradient(145deg, rgba(27, 39, 53, .98), rgba(17, 25, 36, .99));
-  border: 1px solid rgba(220, 234, 250, .28);
-  outline: 1px solid rgba(7, 12, 19, .9);
-  box-shadow: 0 28px 90px rgba(0, 0, 0, .7), inset 0 1px rgba(255,255,255,.1);
-  border-radius: 9px;
+  gap: 14px;
+  padding: 18px 20px 22px;
+  transform: scale(var(--gui-scale, 1));
+  transform-origin: top center;
 }
-.options-heading { padding-bottom: 3px; }
-.options-eyebrow {
-  color: #a8c7a0;
-  letter-spacing: .2em;
-  font-size: 10px;
-  font-weight: 900;
-  margin-bottom: 7px;
+.mc-title {
+  color: #fff;
+  text-align: center;
+  font-size: 24px;
+  font-weight: bold;
+  text-shadow: 2px 2px 0 #3f3f3f;
+  margin-bottom: 6px;
 }
-.options-heading h2 {
-  color: #f7f5e9;
-  text-align: left;
-  font-size: 32px;
-  line-height: 1;
-  letter-spacing: .025em;
-  text-shadow: 0 2px 0 rgba(0,0,0,.35);
+.mc-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 12px;
 }
-.options-heading p { color: #aab7c4; font: 13px/1.5 Arial, sans-serif; margin-top: 8px; }
-.settings-section { display: flex; flex-direction: column; gap: 9px; }
-.settings-section-title {
-  display: flex;
-  gap: 11px;
-  align-items: center;
-  margin-bottom: 2px;
-  color: #f2f4f6;
+.mc-btn {
+  min-width: 0;
+  width: 100%;
+  height: 40px;
+  padding: 0 10px;
+  font-size: 15px;
+  border-radius: 0;
+  background: linear-gradient(#8b8b8b, #6f6f6f);
+  border: 2px solid #000;
+  box-shadow: inset 2px 2px 0 #b7b7b7, inset -2px -2px 0 #4a4a4a;
+  color: #e0e0e0;
+  text-shadow: 2px 2px 0 #3f3f3f;
 }
-.settings-section-title > div { display: flex; flex-direction: column; gap: 2px; }
-.settings-section-title b { font-size: 14px; letter-spacing: .02em; }
-.settings-section-title small { color: #8f9eae; font: 11px Arial, sans-serif; }
-.settings-icon {
-  width: 32px; height: 32px; display: grid; place-items: center;
-  border: 1px solid rgba(185, 211, 164, .35); border-radius: 7px;
-  color: #c6e5a6; background: rgba(154, 197, 116, .1); font-size: 17px;
+.mc-btn:hover {
+  background: linear-gradient(#8d97c4, #6f79a8);
+  color: #ffffa0;
 }
-.setting-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  min-height: 58px;
-  padding: 12px 14px;
-  border-radius: 6px;
-  border: 1px solid rgba(211, 225, 240, .11);
-  background: linear-gradient(105deg, rgba(255,255,255,.065), rgba(255,255,255,.025));
-  color: #eef2f6;
+.mc-btn:active { box-shadow: inset 2px 2px 0 #4a4a4a, inset -2px -2px 0 #b7b7b7; }
+.mc-danger { background: linear-gradient(#9c4c4c, #743434); }
+.mc-slider {
+  position: relative;
+  height: 40px;
+  border: 2px solid #000;
+  background: linear-gradient(#5a5a5a, #4a4a4a);
+  box-shadow: inset 2px 2px 0 #2f2f2f, inset -2px -2px 0 #7a7a7a;
 }
-.setting-copy { display: flex; flex-direction: column; gap: 4px; }
-.setting-copy b { font-size: 12px; }
-.setting-copy small { color: #9ba9b7; font: 11px/1.35 Arial, sans-serif; }
-.shader-setting select {
-  min-width: 142px;
-  padding: 10px 34px 10px 12px;
-  color: #eff5e8;
-  font: bold 12px 'Courier New', monospace;
-  border: 1px solid #718963;
-  border-radius: 4px;
-  background: #293b2c;
+.mc-slider input[type=range] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
   cursor: pointer;
 }
-.shader-setting select:hover { border-color: #b4d58f; background-color: #334a34; }
-.shader-setting select:focus-visible { outline: 2px solid #d0e5a7; outline-offset: 2px; }
-.shader-setting { min-height: 72px; }
-.range-setting { display: block; }
-.range-setting > label { display: flex; align-items: center; justify-content: space-between; gap: 14px; cursor: pointer; }
-.setting-value { display: flex; align-items: baseline; gap: 5px; color: #d5e9bc; white-space: nowrap; }
-.setting-value strong { font-size: 17px; }
-.setting-value small { color: #9eae9c; font: 10px Arial, sans-serif; }
-.options-panel input[type=range] {
-  appearance: none;
-  display: block;
-  height: 5px;
-  margin: 13px 2px 3px;
-  width: calc(100% - 4px);
-  border-radius: 8px;
-  background: linear-gradient(90deg, #a6cf7d, #d7e9a6);
-  cursor: pointer;
+.mc-slider-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #e0e0e0;
+  font-size: 15px;
+  font-weight: bold;
+  text-shadow: 2px 2px 0 #3f3f3f;
+  pointer-events: none;
+  z-index: 1;
 }
-.options-panel input[type=range]::-webkit-slider-thumb {
-  appearance: none; width: 16px; height: 16px; border-radius: 3px;
-  background: #f5f4e8; border: 2px solid #536b47;
-  box-shadow: 0 2px 5px rgba(0,0,0,.5);
+.mc-slider::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: clamp(8px, var(--thumb, 50%), calc(100% - 8px));
+  width: 16px;
+  margin-left: -8px;
+  background: linear-gradient(#8b8b8b, #6f6f6f);
+  border: 2px solid #000;
+  box-shadow: inset 1px 1px 0 #b7b7b7, inset -1px -1px 0 #4a4a4a;
+  pointer-events: none;
 }
-.options-panel input[type=range]::-moz-range-thumb {
-  width: 13px; height: 13px; border-radius: 3px;
-  background: #f5f4e8; border: 2px solid #536b47;
-  box-shadow: 0 2px 5px rgba(0,0,0,.5);
+.mc-slider:hover .mc-slider-label { color: #ffffa0; }
+.mc-done-row {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 8px;
 }
-.range-ends { display: flex; justify-content: space-between; color: #82909d; font: 9px Arial, sans-serif; }
-.options-toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
-.toggle-card {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  padding: 12px; text-align: left; color: #e6ecf1; cursor: pointer;
-  border: 1px solid rgba(211,225,240,.12); border-radius: 6px;
-  background: rgba(255,255,255,.045); font-family: inherit;
+.mc-done-row .mc-btn { width: min(300px, 100%); }
+.mc-keys {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: 4px 2px;
 }
-.toggle-card:hover { border-color: rgba(190,220,155,.5); background: rgba(177,213,143,.09); }
-.toggle-card span { display: flex; flex-direction: column; gap: 5px; }
-.toggle-card b { font-size: 11px; }
-.toggle-card small { color: #96a4b0; font: 10px Arial, sans-serif; }
-.toggle-card i {
-  padding: 5px 7px; font-size: 9px; font-style: normal; font-weight: bold;
-  color: #d7eeb8; border: 1px solid rgba(172,211,131,.35); border-radius: 3px;
-  background: rgba(145,190,100,.12);
+.mc-key-row {
+  display: grid;
+  grid-template-columns: 1fr 180px;
+  align-items: center;
+  gap: 12px;
+  color: #fff;
+  font-size: 15px;
+  text-shadow: 2px 2px 0 #3f3f3f;
 }
-.options-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 5px; border-top: 1px solid rgba(224,235,244,.1); }
-.options-panel .btn { min-width: 0; padding: 10px 16px; font-size: 12px; border-radius: 4px; }
-.options-panel .btn-danger { color: #f1d6cf; border-color: #583a37; background: #603e3b; }
-.options-panel .options-done { min-width: 150px; background: linear-gradient(#9ab97c, #66844f); color: #10180e; text-shadow: none; border-color: #35472c; }
-.options-done span { margin-left: 16px; opacity: .65; }
-.options-panel .btn:hover { filter: brightness(1.14); color: inherit; }
+.mc-key-btn { height: 34px; font-size: 14px; }
+.mc-key-btn.listening { color: #ffff55; background: linear-gradient(#6f6f4a, #5a5a3a); }
 @media (max-width: 560px) {
-  .options-screen { padding: 10px; }
-  .options-panel { padding: 22px 16px 16px; gap: 13px; }
-  .options-heading h2 { font-size: 27px; }
-  .setting-card { padding: 10px; gap: 8px; }
-  .shader-setting select { min-width: 112px; }
-  .options-toggles { grid-template-columns: 1fr; }
-  .toggle-card { padding: 10px; }
+  .mc-grid { grid-template-columns: 1fr; }
+  .mc-key-row { grid-template-columns: 1fr 140px; }
+  .options-page { padding: 12px; }
 }
-
-/* Settings labels must keep their contrast on the dark finished panel. */
-.options-panel label { color: #eef2f6; }
-.setting-copy b { color: #f4f7fa; letter-spacing: .02em; }
