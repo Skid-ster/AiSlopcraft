@@ -12,7 +12,7 @@
 
 - A fixed bounded 96×96×32 **in-memory** daylight scene with creative edits only; no world loading, survival, inventory/crafting, persistent save, 2013 biome generator, fluid/light engine, hand/item animation, sounds, clouds, weather, mobs, interaction blocks, title/inventory screens or multiplayer. Exiting discards all edits. Old `saves/`/`options.txt` are not opened.
 - Hand-authored new 12-material atlas and HUD are **not 2013 reference-matched**. Default camera/meadow is an art/interaction test, not a Java seed comparison. Alpha-cutout leaves, daylight fog and a 182×22 hotbar silhouette are provisional choices until a matched source/client screenshot exists.
-- Core tests and headless startup do not run a desktop GL scene. A new Linux Xvfb/Mesa before/after-edit smoke is wired into CI, but Windows physical input, actual pixels, and user-targeted 1440p frame times require separate verification. M1's first-person hand/item and step-up collision are not implemented.
+- Core tests and headless startup do not run a desktop GL scene. [PR CI 41356845709](https://github.com/Skid-ster/AiSlopcraft/actions/runs/41356845709) built the new binary on Windows 2022/VS 2026 and Ubuntu (5/5 CTests); Linux Xvfb/Mesa captured two distinct 1280×720 frames and passed **SDL-synthetic** Escape/recapture/place/mine through the same event dispatcher. Its assertions checked sky/vegetation/HUD pixel classes, **not** correct appearance; the screenshot pixels could not be viewed in this sandbox. Windows physical input, a reference comparison and target-PC 1440p frame times remain unverified. M1's first-person hand/item and step-up collision are not implemented.
 
 ## Superseded prototype gameplay/content (`aislopcraft`)
 
