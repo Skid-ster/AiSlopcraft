@@ -18,6 +18,11 @@ export const BLOCK_SPRITES = {
   cactus_side:'cactus_side', cactus_top:'cactus_top', reeds:'sugarcane', flower_rose:'rose', flower_dandelion:'dandelion', tallgrass:'tall_grass',
   mushroom_red:'mushroom_red', mushroom_brown:'mushroom_brown', sapling_oak:'sapling', torch_on:'torch', ladder:'ladder', rail_normal:'rail',
   jukebox_side:'jukebox_side', jukebox_top:'jukebox_top', web:'cobweb', farmland_dry:'farmland', farmland_wet:'farmland_wet',
+  bed_head_top:'bed_top', bed_feet_top:'bed_foot', bed_head_side:'bed_side', bed_head_end:'bed_end',
+  cake_top:'cake_top', cake_side:'cake_side', cake_bottom:'cake_bottom', lever:'lever', repeater_off:'repeater',
+  redstone_torch_off:'redstone_torch_off', door_wood_upper:'door_wood', door_wood_lower:'door_wood_bottom',
+  door_iron_upper:'door_iron', door_iron_lower:'door_iron_bottom', water_still:'water',
+  ...Object.fromEntries(Array.from({length: 10}, (_, i) => [`destroy_stage_${i}`, `destroy${i}`])),
   ...Object.fromEntries(['white','red','orange','yellow','lime','green','cyan','light_blue','blue','purple','magenta','pink','gray','silver','brown','black'].map(c => [`wool_colored_${c}`, `wool_${c === 'light_blue' ? 'lightblue' : c === 'silver' ? 'lightgray' : c}`])),
   ...Object.fromEntries(Array.from({length: 8}, (_, i) => [`wheat_stage_${i}`, `crops${i}`])),
 };
@@ -100,6 +105,8 @@ export async function paintBlockSprites(target, sprites) {
       }
       const x = tile % 16 * 16, y = Math.floor(tile / 16) * 16;
       out.clearRect(x, y, 16, 16); out.drawImage(part, x, y);
+      // Snow layers and snow blocks share the same sprite in Java 1.7.3.
+      if (name === 'snow') { const sx = TILES.snow_block % 16 * 16, sy = Math.floor(TILES.snow_block / 16) * 16; out.clearRect(sx, sy, 16, 16); out.drawImage(part, sx, sy); }
     }
     const ctx = target.getContext('2d'); ctx.clearRect(0, 0, target.width, target.height); ctx.drawImage(staged, 0, 0);
     return Object.keys(sprites).filter(name => Object.hasOwn(BLOCK_SPRITES, name)).length;

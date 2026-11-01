@@ -74,11 +74,18 @@ waterTex.magFilter = THREE.NearestFilter;
 waterTex.minFilter = THREE.NearestFilter;
 waterTex.wrapS = waterTex.wrapT = THREE.RepeatWrapping;
 waterTex.colorSpace = THREE.SRGBColorSpace;
+// Keep the standalone water renderer in sync with the corresponding atlas tile.
+const waterX = TILES.water % 16 * 16, waterY = Math.floor(TILES.water / 16) * 16;
+defaultAtlas.getContext('2d').clearRect(waterX, waterY, 16, 16);
+defaultAtlas.getContext('2d').drawImage(waterCanvas, waterX, waterY);
 
 const lighting = new Lighting({ atlasTexture: atlasTex, emissionTexture: buildEmissionAtlas(atlasCanvas) });
 let atlasGeneration = 0;
 function refreshAtlas() {
   atlasTex.needsUpdate = true;
+  waterCanvas.getContext('2d').clearRect(0, 0, 16, 16);
+  waterCanvas.getContext('2d').drawImage(atlasCanvas, waterX, waterY, 16, 16, 0, 0, 16, 16);
+  waterTex.needsUpdate = true;
   const updated = buildEmissionAtlas(atlasCanvas);
   const emission = lighting.emissionTexture;
   emission.image.getContext('2d').drawImage(updated.image, 0, 0);

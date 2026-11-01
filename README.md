@@ -67,6 +67,9 @@ art. Use only assets you have the right to use.
 
 This is a partial resource-pack importer: missing sprites fall back to the
 bundled art. It does not import item, entity, GUI, sky, colormap or sound assets;
-animated textures use their first frame, and biome colouring is approximated.
-Water uses its own renderer and is not imported. It does not change gameplay to
+animated textures, including water and lava, use their first frame, and biome
+colouring is approximated. Chest faces and redstone wire retain their bundled
+art because their Minecraft layouts require special handling. All other
+project block-atlas tiles are mapped or explicitly aliased; missing pack files
+still fall back to the bundled art. The importer does not change gameplay to
 Java release 1.7.3.
