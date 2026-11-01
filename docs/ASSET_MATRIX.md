@@ -1,4 +1,6 @@
-# Original asset coverage and visual QA
+# Archived asset coverage — superseded native prototype
+
+> These counts describe the rejected **legacy** 460-tile atlas, not the independent rebuild's small original 12-tile art study (`tools/rebuild_art.py`). Neither is visually verified against a 2013 reference. See [REBUILD_PLAN.md](REBUILD_PLAN.md).
 
 Asset statuses: **NOT STARTED / IN PROGRESS / IMPLEMENTED / VERIFIED / BLOCKED**. *VERIFIED* for lookup/loading does **not** mean that artwork matches a release-1.7.3 screenshot. All atlas pixels, WAVs, animation frames and shaders are created in this project; the font is a bundled SIL OFL-licensed Press Start 2P.
 
@@ -20,7 +22,7 @@ Asset statuses: **NOT STARTED / IN PROGRESS / IMPLEMENTED / VERIFIED / BLOCKED**
 
 `assets/previews/art-study.png` was opened and inspected: material-specific grass/dirt/stone/planks/logs/leaves/ores/bricks/liquids/flowers/tools remain original pixel illustrations. A Windows screenshot subsequently exposed **double-colouring of already green grass/leaves**, producing dark noisy green, and sparse leaf gaps. The generator now emits neutral biome-tinted source tiles with denser 16px foliage; the QA study previews the biome tint. The art study is **not** a rendered-game screenshot, and the changed result has not yet been compared with the release client.
 
-[Linux CI run 41329077878](https://github.com/Skid-ster/AiSlopcraft/actions/runs/41329077878) additionally rendered title, world and creative-menu frames under Mesa/Xvfb software OpenGL, validated three 1280×720 PNG signatures/dimensions and nontrivial sizes, and uploaded `aislopcraft-Linux-software-gl-captures`. Attempts to download the artifact in this sandbox failed because GitHub redirected to a blocked Azure Blob results host; **the PNG pixels were not opened or visually compared here**. Existence of image files proves neither correct UVs/UI nor 1.7.3 parity. The user's earlier Windows screenshot does confirm a GL frame but shows visual problems; after-fix Windows pixels/target-GPU FPS remain untested.
+[Linux CI run 41329077878](https://github.com/Skid-ster/AiSlopcraft/actions/runs/41329077878) additionally rendered title, world and creative-menu frames under Mesa/Xvfb software OpenGL, validated three 1280×720 PNG signatures/dimensions and nontrivial sizes, and uploaded `aislopcraft-Linux-software-gl-captures`. Attempts to download the artifact in this sandbox failed because GitHub redirected to a blocked Azure Blob results host; **the PNG pixels were not opened or visually compared here**. Existence of image files proves neither correct UVs/UI nor 1.7.3 parity. The earlier Windows screenshot confirms a legacy GL frame but shows visual problems; the user later retested and **rejected the result**. A new screenshot, matched 2013 comparison and target-GPU FPS measurement remain unavailable.
 
 ## Seven matching-reference scenes (NOT YET CAPTURED)
 

@@ -8,6 +8,7 @@ CMakeUserPresets.json
 
 # Generated worlds / runtime data (never commit saves)
 saves/
+saves-rebuild/
 screenshots/
 options.txt
 logs/

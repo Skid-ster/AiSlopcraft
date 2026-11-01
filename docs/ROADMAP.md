@@ -1,4 +1,6 @@
-# Roadmap / continuation checklist (branch `arena/433092f5-aislopcraft`)
+# Archived roadmap — superseded native prototype
+
+> **Do not use this checklist as the active plan.** After retesting on Windows, the user rejected the earlier build's appearance/completeness. Its implementation/history/saves remain for rollback. The active, gated restart roadmap is [REBUILD_PLAN.md](REBUILD_PLAN.md); the independent study is `aislopcraft-rebuild`. Old checkboxes do not transfer to it.
 
 A checked box means a *code milestone exists*, not that Java 1.7.3 parity is achieved. Preserve Git history; push only this branch and open a PR to main. Document test results, never invent a completion claim.
 

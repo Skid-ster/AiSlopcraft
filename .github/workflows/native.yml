@@ -70,12 +70,12 @@ jobs:
             while IFS= read -r line; do echo "::error::$line"; done < test-discovery.txt
             exit 1
           fi
-          if ! grep -Eq '^Total Tests:[[:space:]]*3[[:space:]]*$' test-discovery.txt; then
-            echo '::error::CTest did not discover exactly three tests'
+          if ! grep -Eq '^Total Tests:[[:space:]]*5[[:space:]]*$' test-discovery.txt; then
+            echo '::error::CTest did not discover exactly five tests'
             while IFS= read -r line; do echo "::error::$line"; done < test-discovery.txt
             exit 1
           fi
-          for name in voxcore_tests vox_asset_audit vox_startup_smoke; do
+          for name in rebuild_core_tests voxcore_tests vox_asset_audit vox_startup_smoke rebuild_startup_smoke; do
             if ! grep -Eq "Test[[:space:]]*#[[:space:]]*[0-9]+:[[:space:]]*$name" test-discovery.txt; then
               echo "::error::CTest did not discover $name"
               while IFS= read -r line; do echo "::error::$line"; done < test-discovery.txt
@@ -124,6 +124,29 @@ jobs:
                   raise
           PY
 
+      - name: Capture independent rebuild before/after an edit on Mesa (Linux only)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if ! xvfb-run -a -s '-screen 0 1280x720x24 +extension GLX +render -noreset' \
+            env LIBGL_ALWAYS_SOFTWARE=1 SDL_VIDEODRIVER=x11 \
+            ./build/aislopcraft-rebuild --smoke rebuild-smoke 2>&1 | tee rebuild-smoke.log; then
+            echo '::error::Independent rebuild software GL smoke failed'
+            tail -n 25 rebuild-smoke.log | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
+          python3 - <<'PY'
+          from pathlib import Path
+          from struct import unpack
+          images = [(Path('rebuild-smoke') / name).read_bytes() for name in ('before.png', 'after.png')]
+          for image in images:
+              assert len(image) > 5000, 'Rebuild capture suspiciously small'
+              assert image[:8] == b'\x89PNG\r\n\x1a\n', 'Invalid rebuild PNG'
+              assert unpack('>II', image[16:24]) == (1280, 720), 'Wrong rebuild frame dimensions'
+          assert images[0] != images[1], 'Mine did not change the rendered frame'
+          print('Rebuild: two distinct 1280x720 frame files; appearance not reviewed')
+          PY
+
       - name: Exercise click-to-mine, hold, place and food on SDL/Xvfb (Linux only)
         if: runner.os == 'Linux'
         shell: bash
@@ -141,24 +164,27 @@ jobs:
         run: |
           mkdir -p package
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            cp build/Release/aislopcraft.exe package/
+            cp build/Release/aislopcraft.exe build/Release/aislopcraft-rebuild.exe package/
             cp -r build/Release/assets package/
           else
-            cp build/aislopcraft package/
+            cp build/aislopcraft build/aislopcraft-rebuild package/
             cp -r build/assets package/
-            cp -r visual-smoke package/
+            cp -r visual-smoke rebuild-smoke package/
           fi
           cp README.md LICENSE package/
           cp -r docs package/
           test -s package/aislopcraft.exe || test -s package/aislopcraft
-          test -s package/assets/atlas.png
+          test -s package/aislopcraft-rebuild.exe || test -s package/aislopcraft-rebuild
+          test -s package/assets/rebuild/atlas.png
 
       - name: Upload Linux software-GL captures for visual inspection
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: aislopcraft-Linux-software-gl-captures
-          path: visual-smoke/
+          path: |
+            visual-smoke/
+            rebuild-smoke/
           if-no-files-found: error
 
       - name: Upload runnable bundle (not a graphical test)
@@ -178,6 +204,7 @@ jobs:
             test-discovery.txt
             test-results.txt
             visual-smoke.log
+            rebuild-smoke.log
             interaction-smoke.log
             build/Testing/Temporary/LastTest.log
           if-no-files-found: warn
@@ -194,11 +221,11 @@ jobs:
         shell: cmd
         run: call build-windows.cmd
 
-      - name: Assert three named tests were discovered
+      - name: Assert five named tests were discovered
         shell: pwsh
         run: |
           $output = ctest --test-dir build/Release -C Release -N
           $output | Out-String | Write-Host
-          if ($LASTEXITCODE -ne 0 -or (($output | Out-String) -notmatch '(?m)^Total Tests:\s*3\s*$')) {
-            throw 'Expected three CTests on Visual Studio 2026'
+          if ($LASTEXITCODE -ne 0 -or (($output | Out-String) -notmatch '(?m)^Total Tests:\s*5\s*$')) {
+            throw 'Expected five CTests on Visual Studio 2026'
           }

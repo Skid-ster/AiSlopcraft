@@ -1,4 +1,6 @@
-# Performance evidence and benchmark methodology
+# Performance — legacy measurements and unverified rebuild target
+
+> The old prototype's CPU timing below **does not transfer** to the independent `aislopcraft-rebuild`. The user's Windows retest rejected the earlier build's visuals/completeness; there is still no target-PC post-rebuild frame-time measurement. Current acceptance target and seven-scene plan: [REBUILD_PLAN.md](REBUILD_PLAN.md).
 
 **Target goals, NOT achieved claims:** 60+ FPS at native 2560×1440 on user's NVIDIA RTX 5060 Ti (8 GB), Intel i5-13400 and 16 GB RAM; 144 FPS where practical. The target machine is not connected. No GPU desktop is available in this local sandbox: SDL3 configured dummy/offscreen and `SDL_OPENGL=OFF`; a local graphical launch failed cleanly. Ubuntu CI **did** render three 1280×720 stills under Mesa/Xvfb software OpenGL, but it recorded no gameplay FPS, frame times, RAM/VRAM or target-PC performance. **Actual native-1440p FPS/frame times/RAM/VRAM on target hardware were not measured.**
 

@@ -74,16 +74,19 @@ echo [3/4] Run CTest...
 ctest --test-dir "build\Release" -C Release --output-on-failure
 if errorlevel 1 goto :failed
 
-echo [4/4] Run headless startup self-test...
+echo [4/4] Run both headless startup self-tests...
 "build\Release\aislopcraft.exe" --selftest
+if errorlevel 1 goto :failed
+"build\Release\aislopcraft-rebuild.exe" --selftest
 if errorlevel 1 goto :failed
 
 echo.
-echo Build and headless tests passed. This does not verify a graphical Windows launch.
-echo Executable: "%CD%\build\Release\aislopcraft.exe"
-echo To play from the source checkout:
+echo Build and headless tests passed. No graphical Windows gameplay or visual-parity claim.
+echo Independent in-memory ART STUDY: "%CD%\build\Release\aislopcraft-rebuild.exe"
+echo Superseded legacy prototype: "%CD%\build\Release\aislopcraft.exe"
+echo To try the new study from the source checkout:
 echo   cd /d "%CD%"
-echo   build\Release\aislopcraft.exe
+echo   build\Release\aislopcraft-rebuild.exe
 popd
 exit /b 0
 

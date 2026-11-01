@@ -1,5 +1,7 @@
 # Release 1.7.3 research and evidence log
 
+> Historical version/asset research remains relevant; old `src/core/` design decisions below refer to the **superseded prototype**, not the independent study. See [REBUILD_PLAN.md](REBUILD_PLAN.md) for current reference gates after the user's negative Windows retest.
+
 **Target:** *Minecraft Java Edition release 1.7.3*, displayed as release 1.7.3 but technically the **first 1.7.4 pre-release**, dated **6 December 2013**. **Not** Beta 1.7.3 (2011) and **not** release 1.7.10. Our executable is named **AiSlopcraft**; it is unofficial, independently implemented, and does not contain Mojang game assets/code. This is a re-creation *goal*, not a compatibility or accuracy claim.
 
 ## Sources checked

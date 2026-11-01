@@ -58,6 +58,11 @@ target_link_libraries(voxcore PUBLIC Threads::Threads PRIVATE voxcraft_warnings)
 target_compile_definitions(voxcore PUBLIC
     VOXCRAFT_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
 
+# Independent rebuild core. Deliberately does not link the superseded voxcore.
+add_library(rebuild_core STATIC src/rebuild/World.cpp src/rebuild/Mesh.cpp)
+target_include_directories(rebuild_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(rebuild_core PRIVATE voxcraft_warnings)
+
 if(VOXCRAFT_BUILD_TOOLS)
     add_executable(dump_tiles tools/dump_tiles.cpp)
     target_link_libraries(dump_tiles PRIVATE voxcore voxcraft_warnings)
@@ -106,7 +111,32 @@ if(VOXCRAFT_BUILD_APP)
         add_custom_command(TARGET aislopcraft POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_directory
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets" "$<TARGET_FILE_DIR:aislopcraft>/assets"
-            COMMENT "Copying assets next to aislopcraft")
+            COMMENT "Copying assets next to isolated executables")
+
+        # New small reference-led study. Only the SDL GL symbol loader and
+        # licensed SDL3/stb dependencies are shared with the old prototype.
+        add_executable(aislopcraft-rebuild
+            src/rebuild/StudyGame.cpp src/rebuild/StudyRenderer.cpp src/platform/GL.cpp)
+        target_link_libraries(aislopcraft-rebuild PRIVATE rebuild_core voxcraft_warnings)
+        target_include_directories(aislopcraft-rebuild PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+        target_compile_definitions(aislopcraft-rebuild PRIVATE
+            VOXCRAFT_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
+        if(TARGET SDL3::SDL3-static)
+            target_link_libraries(aislopcraft-rebuild PRIVATE SDL3::SDL3-static)
+        else()
+            target_link_libraries(aislopcraft-rebuild PRIVATE SDL3::SDL3)
+        endif()
+        if(UNIX AND NOT APPLE)
+            target_link_libraries(aislopcraft-rebuild PRIVATE ${CMAKE_DL_LIBS} m)
+        endif()
+        if(APPLE)
+            target_link_libraries(aislopcraft-rebuild PRIVATE "-framework OpenGL")
+        endif()
+        add_custom_command(TARGET aislopcraft-rebuild POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+                "$<TARGET_FILE_DIR:aislopcraft-rebuild>/assets"
+            COMMENT "Copying original study art and legacy assets next to both executables")
     else()
         message(FATAL_ERROR
             "SDL3 is unavailable and fetching is disabled. Set VOXCRAFT_BUILD_APP=OFF for an explicit core-only build, or allow pinned SDL3 fetching.")

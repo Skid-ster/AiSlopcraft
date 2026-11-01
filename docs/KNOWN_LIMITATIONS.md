@@ -1,12 +1,20 @@
-# Known limitations — native milestone, not a complete recreation
+# Known limitations — superseded prototype and independent rebuild study
+
+> The previous `aislopcraft` build was **retested and rejected by the user** for being badly unfinished and visually unlike the 2013 target. Its code and old saves remain for rollback, not as the visual starting point. `aislopcraft-rebuild` is a new **in-memory daylight art study** with its own incomplete systems; see [REBUILD_PLAN.md](REBUILD_PLAN.md). The detailed legacy limitations below do not imply those legacy features exist in the new study.
 
 ## Directly observed blockers
 
-- **User's Windows report (before these fixes):** Their supplied screenshot confirms an OpenGL game window *did* render on Windows. They reported severe lag, inability to mine/interact and an appearance unlike release 1.7.3. This branch changes click handling, target feedback, depth/cutout rendering and original art. **It has not yet been retested on their PC**; do not call the blockers resolved based only on Linux compilation.
-- **Local graphical test limitation:** The sandbox lacks X11/Wayland/OpenGL development/runtime drivers. Its SDL3 dummy build has `SDL_OPENGL=OFF`; `--interaction-smoke` deliberately exits 1 here with `Cannot create OpenGL window ... dummy`. Earlier **Ubuntu CI Mesa/Xvfb software GL did launch** and output three 1280×720 PNGs, but GitHub artifacts redirect to a blocked Azure Blob host, so their pixels remain uninspected. Linux SDL interaction smoke [passed current Mesa/Xvfb CI](https://github.com/Skid-ster/AiSlopcraft/actions/runs/41351266541); Windows input, reference-client comparison and target-GPU FPS remain pending.
+- **Latest user Windows report:** The older screenshot proved a GL window opened, but the user later retested the changed build and says it is **still very bad, unfinished and nothing like 1.7.3**. Earlier they reported lag and inability to mine/interact. The latest message specifically confirms visual/completeness dissatisfaction; it does not say whether lag and interaction persisted after the previous fixes. Treat all as acceptance concerns, not as resolved by CI.
+- **Local graphical test limitation:** The sandbox lacks X11/Wayland/OpenGL development/runtime drivers. Its SDL3 dummy build has `SDL_OPENGL=OFF`; `--interaction-smoke` deliberately exits 1 here with `Cannot create OpenGL window ... dummy`. Earlier **Ubuntu CI Mesa/Xvfb software GL did launch** and output three 1280×720 PNGs, but GitHub artifacts redirect to a blocked Azure Blob host, so their pixels remain uninspected. Linux SDL interaction smoke [passed legacy Mesa/Xvfb CI](https://github.com/Skid-ster/AiSlopcraft/actions/runs/41351627299); Windows post-fix input outcome, reference-client comparison and target-GPU FPS remain unknown.
 - **Performance:** RTX 5060 Ti/i5-13400/16 GB PC is unavailable; CPU-only 25-chunk measurements on this sandbox do not prove 60/144 FPS at 2560×1440. No target-PC frame-time distribution or VRAM number exists. F3 now reports the active GL renderer and per-frame CPU timings to distinguish VSync/driver issues from streaming/meshing.
 
-## Gameplay/content
+## Independent rebuild-study limitations (`aislopcraft-rebuild`)
+
+- A fixed bounded 96×96×32 **in-memory** daylight scene with creative edits only; no world loading, survival, inventory/crafting, persistent save, 2013 biome generator, fluid/light engine, hand/item animation, sounds, clouds, weather, mobs, interaction blocks, title/inventory screens or multiplayer. Exiting discards all edits. Old `saves/`/`options.txt` are not opened.
+- Hand-authored new 12-material atlas and HUD are **not 2013 reference-matched**. Default camera/meadow is an art/interaction test, not a Java seed comparison. Alpha-cutout leaves, daylight fog and a 182×22 hotbar silhouette are provisional choices until a matched source/client screenshot exists.
+- Core tests and headless startup do not run a desktop GL scene. A new Linux Xvfb/Mesa before/after-edit smoke is wired into CI, but Windows physical input, actual pixels, and user-targeted 1440p frame times require separate verification. M1's first-person hand/item and step-up collision are not implemented.
+
+## Superseded prototype gameplay/content (`aislopcraft`)
 
 - **Not the entire game.** No mobs/models/AI/animation, first-person hands, physical item drops, XP economy, bosses/progression, portals, weather, redstone circuit solver/pistons, vehicles, fishing, brewing, enchanting, full farming/mob farms or protocol-4 multiplayer. Nether/End are *terrain-only* code paths with no travel UI/portal mechanics. No 1.7.3 server compatibility.
 - Terrain, biomes, trees, ore, caves and structures are 1.7-**inspired**, *not* Java seed compatible. No villages/dungeons/mineshafts/strongholds/temples; biomes approximated. Chunk edges are deterministic by global coordinates; no exhaustive seam/structure comparison.
