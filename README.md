@@ -17,7 +17,16 @@ An **unofficial, independently implemented** C++20 voxel-sandbox project targeti
 
 ### Windows (primary target; Release build/CTest passed in CI; graphical window not tested)
 
-Requires Windows 10/11, Visual Studio 2022 with C++ workload/MSVC and Windows SDK, CMake ≥3.20, a GPU/driver providing OpenGL ≥3.3, and internet for the **pinned** SDL3 3.4.18 archive. SDL3 is built from source on a clean checkout if not installed. Build from repository root:
+Requires Windows 10/11, Visual Studio 2022 with C++ workload/MSVC and Windows SDK, CMake ≥3.20, a GPU/driver providing OpenGL ≥3.3, and internet for the **pinned** SDL3 3.4.18 archive. SDL3 is built from source on a clean checkout if not installed. A **prebuilt CI artifact** contains the executable and assets, not the CMake/source files; clone the source repository if you want to compile it.
+
+From **Command Prompt in the source repository root**, use the included [`build-windows.cmd`](build-windows.cmd):
+
+```cmd
+build-windows.cmd
+build\Release\aislopcraft.exe
+```
+
+The script configures x64, compiles Release, runs the three CTests and the headless self-test, and stops on failure. It does not start a graphical window while building. It can be invoked from any working directory, but launch the resulting game from the repository root to keep local saves there. Equivalent manual build commands from the repository root:
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64

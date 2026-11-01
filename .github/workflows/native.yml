@@ -93,6 +93,11 @@ jobs:
             exit 1
           fi
 
+      - name: Validate the one-command Windows build helper (incremental rebuild)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: call build-windows.cmd
+
       - name: Render title, world and creative UI on Mesa software OpenGL (Linux only)
         if: runner.os == 'Linux'
         shell: bash
