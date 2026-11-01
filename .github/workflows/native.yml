@@ -1,0 +1,98 @@
+name: Native C++ builds and headless tests
+
+on:
+  push:
+    branches: [arena/433092f5-aislopcraft]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: ${{ matrix.os }} Release / CTest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-24.04]
+    steps:
+      - name: Checkout (pinned actions/checkout v4)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Install Linux SDL/OpenGL build headers
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libasound2-dev libdbus-1-dev libpulse-dev \
+            libudev-dev libwayland-dev wayland-protocols libx11-dev libxext-dev \
+            libxcursor-dev libxi-dev libxfixes-dev libxrandr-dev libxss-dev \
+            libxtst-dev libxkbcommon-dev libegl1-mesa-dev libgl1-mesa-dev
+
+      - name: Configure desktop app and tests (pinned SDL3 source/SHA256)
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cmake -S . -B build -G "Visual Studio 17 2022" -A x64 \
+              -DVOXCRAFT_BUILD_APP=ON -DVOXCRAFT_BUILD_TESTS=ON \
+              -DVOXCRAFT_FETCH_SDL3=ON
+          else
+            cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+              -DVOXCRAFT_BUILD_APP=ON -DVOXCRAFT_BUILD_TESTS=ON \
+              -DVOXCRAFT_FETCH_SDL3=ON
+          fi
+
+      - name: Compile complete native application
+        shell: bash
+        run: cmake --build build --config Release --parallel 2
+
+      - name: Assert CTest discovered the full suite
+        shell: bash
+        run: |
+          ctest --test-dir build --config Release -N | tee test-discovery.txt
+          grep -q '^Total Tests: 3$' test-discovery.txt
+          for name in voxcore_tests vox_asset_audit vox_startup_smoke; do
+            grep -q "Test #[0-9]*: $name" test-discovery.txt
+          done
+
+      - name: Run core, asset and headless app smoke tests
+        shell: bash
+        run: ctest --test-dir build --config Release --output-on-failure | tee test-results.txt
+
+      - name: Package runnable native game and original assets
+        shell: bash
+        run: |
+          mkdir -p package
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cp build/Release/aislopcraft.exe package/
+            cp -r build/Release/assets package/
+          else
+            cp build/aislopcraft package/
+            cp -r build/assets package/
+          fi
+          cp README.md LICENSE package/
+          cp -r docs package/
+          test -s package/aislopcraft.exe || test -s package/aislopcraft
+          test -s package/assets/atlas.png
+
+      - name: Upload runnable bundle (not a graphical test)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: aislopcraft-${{ runner.os }}-x64
+          path: package/
+          if-no-files-found: error
+
+      - name: Upload CTest discovery and result logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-test-logs-${{ runner.os }}
+          path: |
+            test-discovery.txt
+            test-results.txt
+            build/Testing/Temporary/LastTest.log
+          if-no-files-found: warn

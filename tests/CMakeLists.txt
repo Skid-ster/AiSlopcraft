@@ -1,0 +1,15 @@
+add_executable(voxcore_tests core_tests.cpp)
+target_link_libraries(voxcore_tests PRIVATE voxcore voxcraft_warnings)
+add_test(NAME voxcore_tests COMMAND voxcore_tests)
+set_tests_properties(voxcore_tests PROPERTIES TIMEOUT 120)
+
+add_executable(vox_asset_audit asset_tests.cpp)
+target_link_libraries(vox_asset_audit PRIVATE voxcore voxcraft_warnings)
+target_include_directories(vox_asset_audit PRIVATE ${PROJECT_SOURCE_DIR}/third_party)
+add_test(NAME vox_asset_audit COMMAND vox_asset_audit)
+set_tests_properties(vox_asset_audit PROPERTIES TIMEOUT 60)
+
+if(TARGET aislopcraft)
+    add_test(NAME vox_startup_smoke COMMAND $<TARGET_FILE:aislopcraft> --selftest)
+    set_tests_properties(vox_startup_smoke PROPERTIES TIMEOUT 60)
+endif()
