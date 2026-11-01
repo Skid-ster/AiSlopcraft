@@ -18,7 +18,9 @@ Asset statuses: **NOT STARTED / IN PROGRESS / IMPLEMENTED / VERIFIED / BLOCKED**
 
 ## Original art inspection
 
-`assets/previews/art-study.png` was opened and inspected: grass/dirt/stone/cobble/planks/log rings/leaves/ore facets/brick/sand/glass/water/lava/flowers/crops/metal pick/diamond sword/armor/apple/fish show different deliberate shapes. **Correction after inspection:** the grass-side tile had no green cap; the generator was changed to paint the cap, and the biome-tinted overlay uses pale rather than green source pixels. The art study is **not** a rendered-game screenshot; actual GL tiling/orientation, face shading and UI sizing remain unverified.
+`assets/previews/art-study.png` was opened and inspected: grass/dirt/stone/cobble/planks/log rings/leaves/ore facets/brick/sand/glass/water/lava/flowers/crops/metal pick/diamond sword/armor/apple/fish show different deliberate shapes. **Correction after inspection:** the grass-side tile had no green cap; the generator was changed to paint the cap, and the biome-tinted overlay uses pale rather than green source pixels. The art study is **not** a rendered-game screenshot.
+
+[Linux CI run 41329077878](https://github.com/Skid-ster/AiSlopcraft/actions/runs/41329077878) additionally rendered title, world and creative-menu frames under Mesa/Xvfb software OpenGL, validated three 1280×720 PNG signatures/dimensions and nontrivial sizes, and uploaded `aislopcraft-Linux-software-gl-captures`. Attempts to download the artifact in this sandbox failed because GitHub redirected to a blocked Azure Blob results host; **the PNG pixels were not opened or visually compared here**. Existence of image files proves neither correct UVs/UI nor 1.7.3 parity. Windows/target-GPU GL output remains untested.
 
 ## Seven matching-reference scenes (NOT YET CAPTURED)
 

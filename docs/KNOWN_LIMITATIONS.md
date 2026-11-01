@@ -2,7 +2,7 @@
 
 ## Directly observed blockers
 
-- **Graphical launch:** Local x86_64 sandbox lacks X11/Wayland/OpenGL development/runtime drivers. SDL3 was compiled with `SDL_UNIX_CONSOLE_BUILD=ON`, dummy/offscreen video/audio and `SDL_OPENGL=OFF`. `SDL_VIDEODRIVER=dummy build/native/aislopcraft` exited **1** with `Cannot create OpenGL window: OpenGL support is either not configured in SDL or not available in current SDL video driver (dummy) or platform`. `--selftest`, CTest and CPU benchmark ran successfully, but **no actual GL scene/GUI/input/audio interaction or FPS was verified**. Windows primary build needs independent CI/hardware test.
+- **Local graphical launch:** The local x86_64 sandbox lacks X11/Wayland/OpenGL development/runtime drivers. Its SDL3 console/dummy build has `SDL_OPENGL=OFF`. `SDL_VIDEODRIVER=dummy build/native-fetch/aislopcraft --visual-smoke ...` exited **1** with `Cannot create OpenGL window: OpenGL support is either not configured in SDL or not available in current SDL video driver (dummy) or platform`. Headless tests passed. Separately, **Ubuntu CI Mesa/Xvfb software OpenGL did launch** and output three 1280×720 PNGs (file signatures/sizes checked). GitHub artifact downloads redirect to an Azure Blob host blocked in this sandbox, so their pixels have **not** been visually inspected. No interactive input/audio, Windows GL window, real GPU/driver validation, client screenshot comparison or gameplay FPS measurement exists. Windows and Linux clean CI build/CTest **did pass**.
 - **Performance:** RTX 5060 Ti/i5-13400/16 GB PC is unavailable; one-chunk CPU milliseconds on a two-vCPU sandbox do not demonstrate 60/144 FPS at 2560×1440. No frame-time distribution or VRAM number exists.
 
 ## Gameplay/content

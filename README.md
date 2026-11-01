@@ -2,7 +2,7 @@
 
 An **unofficial, independently implemented** C++20 voxel-sandbox project targeting the *gameplay era* of **Minecraft Java Edition release 1.7.3**, the December 2013 first 1.7.4 pre-release. This is **not** Beta 1.7.3 (2011) or 1.7.10. AiSlopcraft is **not affiliated with, sponsored by, or endorsed by Mojang Studios or Microsoft**. No proprietary Mojang code/JAR/texture/audio is included. We made our own 16-pixel art, shaders and sounds; the bundled Press Start 2P font is SIL OFL-licensed.
 
-> **Status: first native milestone, NOT a complete recreation.** The core and an SDL3/OpenGL desktop executable compile and pass headless tests on Linux; this sandbox has no GL-capable desktop so **the graphical app has not been launched successfully or visually smoke-tested here**. The actual rendering, controls, GUI and Windows build need validation on real display hardware. See [feature matrix](docs/FEATURE_MATRIX.md), [asset matrix](docs/ASSET_MATRIX.md), [known limitations](docs/KNOWN_LIMITATIONS.md) and [roadmap](docs/ROADMAP.md). No pixel parity, vanilla seed parity, multiplayer compatibility or 1440p FPS claim is made.
+> **Status: first native milestone, NOT a complete recreation.** Clean-checkout [Windows and Linux CI](https://github.com/Skid-ster/AiSlopcraft/actions/runs/41329077878) built Release binaries and passed all **3/3** named headless CTests on each platform. Linux Mesa/Xvfb **software OpenGL** also produced title, world and creative PNGs (headers/dimensions/size checked; artifacts uploaded). Those captures **could not be downloaded or visually inspected from this restricted sandbox**, and this local sandbox still cannot open a GL window. No Windows graphical/interactive test, release-client screenshot comparison, target-hardware benchmark or visual-parity claim is made. See [feature matrix](docs/FEATURE_MATRIX.md), [asset matrix](docs/ASSET_MATRIX.md), [known limitations](docs/KNOWN_LIMITATIONS.md) and [roadmap](docs/ROADMAP.md).
 
 ## What the source currently provides
 
@@ -15,7 +15,7 @@ An **unofficial, independently implemented** C++20 voxel-sandbox project targeti
 
 ## Build and run
 
-### Windows (primary target; CI intended, local Windows not available here)
+### Windows (primary target; Release build/CTest passed in CI; graphical window not tested)
 
 Requires Windows 10/11, Visual Studio 2022 with C++ workload/MSVC and Windows SDK, CMake ≥3.20, a GPU/driver providing OpenGL ≥3.3, and internet for the **pinned** SDL3 3.4.18 archive. SDL3 is built from source on a clean checkout if not installed. Build from repository root:
 
@@ -29,9 +29,9 @@ ctest --test-dir build -C Release --output-on-failure
 
 Build Debug by changing `--config Release` to `--config Debug`. Keep the copied `build/Release/assets/` folder beside the executable. If distributing, copy the executable **and** `assets/` together; builds/saves are not committed.
 
-### Linux (headless compiler/tests **actually run**; graphical launch blocked here)
+### Linux (local headless build/tests passed; CI software-GL screenshots produced)
 
-Requires GCC 12+/Clang 16+, CMake ≥3.20, Ninja or Make, threads, a desktop with SDL3 video dependencies (X11 or Wayland plus development libraries) and a real OpenGL 3.3 driver. On Ubuntu install dependencies such as `libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxkbcommon-dev libwayland-dev wayland-protocols libegl1-mesa-dev libgl1-mesa-dev libasound2-dev libudev-dev`. See [SDL build notes](https://wiki.libsdl.org/SDL3/README-linux). For this sandbox, SDL3 was compiled separately with `SDL_UNIX_CONSOLE_BUILD=ON`, dummy video/audio backends, and used via `-DCMAKE_PREFIX_PATH=/home/user/deps/sdl3-install`.
+Requires GCC 12+/Clang 16+, CMake ≥3.20, Ninja or Make, threads, a desktop with SDL3 video dependencies (X11 or Wayland plus development libraries) and a real OpenGL 3.3 driver. On Ubuntu install dependencies such as `libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxkbcommon-dev libwayland-dev wayland-protocols libegl1-mesa-dev libgl1-mesa-dev libasound2-dev libudev-dev`. See [SDL build notes](https://wiki.libsdl.org/SDL3/README-linux). For local headless compiler/testing only, SDL3 was compiled with `-DSDL_UNIX_CONSOLE_BUILD=ON` (console/dummy video, **no desktop OpenGL**), first via `/home/user/deps/sdl3-install` and then with the pinned FetchContent build. **Do not use that flag for a graphical build**. The CI Linux runner instead installs X11/Mesa headers and runs an Xvfb software-GL smoke.
 
 ```bash
 cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -76,7 +76,7 @@ ctest --test-dir build/release --output-on-failure -V
 python3 tools/assetgen/generate.py
 ```
 
-`voxcore_tests` checks block/item IDs, recipes/smelting, inventory, RNG/terrain/negative chunk boundaries, fluid/lighting addition and removal, physics/damage, and save round trips/CRC/interrupted-temp handling. `vox_asset_audit` decodes images, checks 20,816 registry face/icon lookups, animations, WAV headers and one CPU mesh. `vox_startup_smoke` runs the app's *headless* CLI. A green CTest result does not prove gameplay visuals or Minecraft behavior. The new `--visual-smoke` command attempts actual OpenGL title, in-world and creative-menu PNGs; **it cannot run in this sandbox** and its Linux CI software-renderer check is pending. It is not a client comparison or target-PC benchmark. Original pixel-art study: `assets/previews/art-study.png` (an atlas QA sheet, **not** a game screenshot).
+`voxcore_tests` checks block/item IDs, recipes/smelting, inventory, creative catalogue validity, RNG/terrain/negative chunk boundaries, fluid/lighting addition and removal, physics/damage, and save round trips/CRC/interrupted-temp handling. `vox_asset_audit` decodes images, checks 20,816 registry face/icon lookups, animations, WAV headers and one CPU mesh. `vox_startup_smoke` runs the app's *headless* CLI. A green CTest result does not prove gameplay visuals or Minecraft behavior. `--visual-smoke` generated three 1280×720 PNGs under Linux Mesa/Xvfb in CI, with size/signature/dimensions checked and [capture artifact uploaded](https://github.com/Skid-ster/AiSlopcraft/actions/runs/41329077878). **The PNG pixels have not been inspected from this sandbox** (GitHub artifact downloads redirect to a disallowed host); Windows graphical output, interaction and reference-client similarity remain unverified. Original pixel-art study: `assets/previews/art-study.png` (an atlas QA sheet, **not** a game screenshot).
 
 The CPU-only benchmark reports one-chunk generation/mesh milliseconds and labels missing mob work; it is **not** the requested native-1440p seven-scene GPU benchmark. On a GPU-equipped PC, run at 2560×1440 and inspect F3, capture F2 screenshots and record frame-time distribution with an external profiler. See [performance plan](docs/PERFORMANCE.md). **No** performance result has been measured on the requested RTX 5060 Ti/i5-13400 machine.
 
