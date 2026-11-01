@@ -154,9 +154,20 @@ static void testChunksWorld() {
     CHECK(w.skyAt(0,4,0)<15);
     CHECK(w.setBlock(0,5,0,{}));
     CHECK(w.skyAt(0,4,0)==15);
+    const Chunk* home=w.findChunk(0,0);
+    CHECK(home && home->sectionHasBlocks(0) && !home->sectionHasBlocks(1));
+    CHECK(w.setBlock(0,20,0,{BlockID::Stone,0}));
+    CHECK(home->sectionHasBlocks(1));
+    CHECK(w.setBlock(0,20,0,{}));
+    CHECK(!home->sectionHasBlocks(1) && home->dirty[1]);
+    CHECK(blockDef(BlockID::Leaves).layer==RenderLayer::Cutout);
+    CHECK(!isFullCube(BlockID::Leaves,0));
     auto hit=w.raycast({0.5f,6.5f,0.5f},{0,-1,0},8);
     CHECK(hit.has_value() && hit->pos.y==3 && hit->face==Up);
     CHECK(w.collides(AABB::fromOriginSize({0.2f,3,0.2f},{0.5f,1,0.5f})));
+    World unloaded(777,WorldType::Flat);
+    CHECK(!unloaded.raycast({8.5f,5.5f,8.5f},{0,0,-1},4.5f));
+    CHECK(unloaded.loadedChunkCount()==0); // looking must never generate terrain
     w.tick(); CHECK(w.time()==6001);
 }
 static void testPhysicsFluids() {

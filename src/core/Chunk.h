@@ -55,6 +55,9 @@ public:
     void clearLight();
     void markAllDirty() { dirty.fill(true); }
     int topSolid(int lx, int lz) const; // true non-air surface (not heightmap)
+    bool sectionHasBlocks(int index) const {
+        return index>=0 && index<SectionCount && sections_[index] && sections_[index]->nonAir>0;
+    }
     std::size_t allocatedSections() const;
 private:
     Section& makeSection(int index);

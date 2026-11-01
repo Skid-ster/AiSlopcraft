@@ -78,11 +78,13 @@ def earth(name, top=None):
     return image
 
 def grass_top(name):
-    image = img(solid((94,153,56))); d=ImageDraw.Draw(image)
+    # This tile is biome-tinted in the shader. Neutral luminance is essential:
+    # multiplying green artwork by green foliage tint made the ground black-green.
+    image = img(solid((221, 221, 221))); d=ImageDraw.Draw(image)
     for x,y in [(0,2),(5,0),(11,1),(3,6),(9,5),(14,6),(0,11),(7,10),(12,12),(3,15)]:
-        d.polygon([(x,y+1),(x+1,y),(x+3,y),(x+2,y+2)],fill=solid((119,176,67)))
-        d.point((min(15,x+1),min(15,y+2)),fill=solid((58,119,50)))
-    for x,y in [(4,2),(13,4),(5,9),(10,15)]: d.line((x,y,x,y+2),fill=solid((73,134,48)))
+        d.polygon([(x,y+1),(x+1,y),(x+3,y),(x+2,y+2)],fill=solid((238,238,238)))
+        d.point((min(15,x+1),min(15,y+2)),fill=solid((194,194,194)))
+    for x,y in [(4,2),(13,4),(5,9),(10,15)]: d.line((x,y,x,y+2),fill=solid((205,205,205)))
     return image
 
 def stone(name):
@@ -162,14 +164,27 @@ def log(name):
     return image
 
 def leaves(name):
-    species=next((key for key in WOOD if key in name), 'oak')
-    base={'oak':(72,137,66),'spruce':(64,111,79),'birch':(117,158,70),
-          'jungle':(59,141,65),'acacia':(89,142,61),'big_oak':(66,120,61)}[species]
-    image=img();d=ImageDraw.Draw(image)
-    for x,y in [(2,1),(7,0),(11,2),(0,6),(5,5),(10,6),(14,5),(2,11),(7,10),(12,11),(6,14)]:
-        d.rectangle((x,y,min(15,x+3),min(15,y+3)),fill=solid(base))
-        d.line((x,y,min(15,x+2),y),fill=solid(mix(base,(231,239,114),.27)))
-        d.point((min(15,x+3),min(15,y+2)),fill=solid(shade(base,.65)))
+    # Fancy leaves use binary cutouts (not alpha-blended glass). Grayscale
+    # artwork is multiplied by the biome's foliage colour exactly once.
+    species=next((key for key in sorted(WOOD,key=len,reverse=True) if key in name), 'oak')
+    value={'oak':218,'spruce':204,'birch':230,'jungle':220,
+           'acacia':213,'big_oak':207}[species]
+    background=value-28
+    image=img(solid((background,background,background)));d=ImageDraw.Draw(image)
+    rng=random.Random(seed(name))
+    # Overlapping diagonal leaf clusters give depth without random pixel noise.
+    for row in range(5):
+        for col in range(5):
+            x=col*4+(row%2)-1;y=row*4-2+rng.randrange(2)
+            tone=max(175,min(249,value+rng.randrange(22)-8))
+            d.polygon([(x,y+1),(x+2,y),(x+3,y+1),(x+2,y+2),(x,y+3)],
+                      fill=solid((tone,tone,tone)))
+            shadow=max(160,tone-33)
+            d.line((x+1,y+2,x+2,y+2),fill=solid((shadow,shadow,shadow)))
+    # Small gaps, not the old mostly-transparent disconnected leaf squares.
+    for x,y in [(1,2),(7,0),(12,3),(4,5),(9,6),(0,9),
+                (14,8),(6,11),(11,12),(2,14),(15,15)]:
+        d.rectangle((x,y,min(15,x+1),min(15,y+1)),fill=(0,0,0,0))
     return image
 
 def ore(name):
@@ -247,6 +262,12 @@ def plant(name):
         for x,y in [(4,5),(10,4),(3,9),(11,9)]:
             d.polygon([(8,y+3),(x,y),(x+2,y+1)],fill=solid((66,142,65)))
             d.line((x,y,x+1,y),fill=solid((140,190,83)))
+    elif name.startswith(('double_plant_grass','double_plant_fern')):
+        for x in (3,7,11):
+            d.line((x,15,8,2 if x==7 else 5),fill=solid((206,206,206)),width=2)
+            d.line((8,11,x,9),fill=solid((231,231,231)))
+        if 'fern' in name:
+            for y in (6,9,12): d.line((4,y,12,y-1),fill=solid((189,189,189)))
     elif 'flower' in name or 'double_plant' in name:
         d.line((8,15,8,7),fill=solid((68,130,66)))
         d.polygon([(8,13),(4,11),(5,10),(8,11)],fill=solid((102,161,67)))
@@ -264,12 +285,20 @@ def plant(name):
             d.point((a,b),fill=solid(mix(col,(255,255,255),.45)))
         d.rectangle((7,5,9,7),fill=solid((159,105,51) if key=='sunflower' else (247,204,88)))
     elif name in ('tallgrass','fern','vine','deadbush'):
-        c=(102,150,69) if name!='deadbush' else (147,118,73)
+        c=(218,218,218) if name!='deadbush' else (147,118,73)
         for x in [3,7,11]:
             d.line((x,15,8,6 if x!=7 else 3),fill=solid(c),width=1)
-            d.line((8,9,x,10),fill=solid(mix(c,(223,214,130),.25)))
+            d.line((8,9,x,10),fill=solid((191,191,191) if name!='deadbush' else (172,141,95)))
         if name=='fern':
             for y in [7,10,13]:d.line((5,y,11,y-1),fill=solid(c))
+    elif name=='waterlily':
+        d.ellipse((1,2,14,14),fill=solid((222,222,222)))
+        d.polygon([(8,8),(15,4),(15,0)],fill=(0,0,0,0))
+        d.line((2,10,6,12),fill=solid((187,187,187)))
+    elif name=='reeds':
+        for x in (4,8,12):
+            d.line((x,15,x,1 if x==8 else 4),fill=solid((219,219,219)),width=2)
+            d.line((x,9,x+2,7),fill=solid((192,192,192)))
     else:
         d.line((8,15,8,4),fill=solid((77,137,62)),width=2)
         d.ellipse((3,3,12,9),fill=solid((115,165,70)))
@@ -519,9 +548,9 @@ def render_tile(name):
                 if x==y:d.rectangle((x,y,x+7,y+7),fill=(31,29,35,255))
         return image,'custom'
     if name=='grass_side_overlay':
-        image=img();d=ImageDraw.Draw(image);d.rectangle((0,0,15,2),fill=(248,251,239,255))
+        image=img();d=ImageDraw.Draw(image);d.rectangle((0,0,15,2),fill=(230,230,230,255))
         for x,y in [(1,5),(4,4),(8,6),(11,4),(14,5)]:
-            d.polygon([(x-1,2),(x+1,2),(x,y)],fill=(211,234,199,255))
+            d.polygon([(x-1,2),(x+1,2),(x,y)],fill=(207,207,207,255))
         return image,'custom'
     if name=='grass_top':return grass_top(name),'custom'
     if name=='grass_side':return earth(name,'grass'),'custom'
@@ -549,7 +578,7 @@ def render_tile(name):
         return block_metal(name),'custom'
     if name.startswith(('water_','lava_','fire_layer','portal')):
         return water_lava(name),'custom'
-    if name.startswith(('flower_','sapling_','double_plant_')) or name in ('tallgrass','fern','vine','deadbush','waterlily'):
+    if name.startswith(('flower_','sapling_','double_plant_')) or name in ('tallgrass','fern','vine','deadbush','waterlily','reeds'):
         return plant(name),'custom'
     if '_stage_' in name or name.startswith('nether_wart_stage'):
         return crop(name),'custom'
@@ -614,6 +643,14 @@ def generate_tiles():
     for i,name in enumerate(chosen):
         tile=atlas.crop(((names.index(name)%COLS)*16,(names.index(name)//COLS)*16,
                          (names.index(name)%COLS+1)*16,(names.index(name)//COLS+1)*16))
+        # Show the in-world result, not the untinted grayscale atlas source.
+        tint=(136,199,92) if name=='grass_top' else ((122,214,84) if name.startswith('leaves_') else None)
+        if tint:
+            pixels=tile.load()
+            for py in range(16):
+                for px in range(16):
+                    r,g,b,a=pixels[px,py]
+                    pixels[px,py]=(r*tint[0]//255,g*tint[1]//255,b*tint[2]//255,a)
         tile=tile.resize((64,64),Image.Resampling.NEAREST)
         x=(i%8)*96+15;y=(i//8)*115+5
         study.paste(tile,(x,y),tile)

@@ -124,6 +124,18 @@ jobs:
                   raise
           PY
 
+      - name: Exercise click-to-mine, hold, place and food on SDL/Xvfb (Linux only)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if ! xvfb-run -a -s '-screen 0 1280x720x24 +extension GLX +render -noreset' \
+            env LIBGL_ALWAYS_SOFTWARE=1 SDL_VIDEODRIVER=x11 \
+            ./build/aislopcraft --interaction-smoke 2>&1 | tee interaction-smoke.log; then
+            echo '::error::SDL interaction smoke failed; recent output follows'
+            tail -n 25 interaction-smoke.log | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
+
       - name: Package runnable native game and original assets
         shell: bash
         run: |
@@ -166,6 +178,7 @@ jobs:
             test-discovery.txt
             test-results.txt
             visual-smoke.log
+            interaction-smoke.log
             build/Testing/Temporary/LastTest.log
           if-no-files-found: warn
 

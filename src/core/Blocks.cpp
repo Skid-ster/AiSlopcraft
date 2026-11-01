@@ -340,12 +340,14 @@ static void initRegistry() {
     B(Leaves).tinted = true;
     B(Leaves2).tinted = true;
 
-    // leaves: transparent layer in Fancy, light-blocking
+    // Fancy foliage has binary transparent pixels: alpha test with depth
+    // writes, not glass-style alpha blending/depth sorting. Neighbouring solid
+    // faces must remain visible through the holes in the leaves.
     for (uint16_t id : {Leaves, Leaves2}) {
         BlockDef& d = B(id);
-        d.fullCubeOpaque = true; // 1.7 leaves block light completely
-        d.lightOpacity = 15;
-        d.layer = RenderLayer::Transparent; // fancy graphics: blended
+        d.fullCubeOpaque = false;
+        d.lightOpacity = 15; // preserve existing world lighting/save behaviour
+        d.layer = RenderLayer::Cutout;
         d.flammable = true; d.fireSpread = 30;
     }
 

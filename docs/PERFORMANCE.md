@@ -16,7 +16,18 @@ One Debug build run, Linux x86_64 sandbox, Intel Xeon @ 2.60 GHz **2 vCPU**, `bu
 | populated mobs | **UNIMPLEMENTED** | — | — |
 | flat save/reload | 8.64 | 4.37 | 3,456 |
 
-These are small **CPU workloads only** on a headless sandbox; report neither 60 nor 144 FPS from them. The `--benchmark` command labels them accordingly, including skipped mob scene. Profiling has **not** yet identified CPU/GPU bottlenecks on a real PC. Current code uses one capped background chunk worker, max 20 queued/finished chunks, one installation and two section VBO uploads per frame. Relighting 3×3 chunks synchronously and meshing allocations may cause stutters; measure before redesign.
+These are small **CPU workloads only** on a headless sandbox; report neither 60 nor 144 FPS from them. The `--benchmark` command labels them accordingly, including skipped mob scene. Profiling has **not** yet identified CPU/GPU bottlenecks on a real PC.
+
+### Follow-up roofed-forest geometry check (single runs, not FPS)
+
+A Release GCC sandbox comparison on the **same seed 7137331 and first 25 nearby chunks** installed all chunks and then meshed their dirty sections once; it included neither a window nor GPU uploads:
+
+| Code | Generate+install all 25 | Slowest one install+relight | CPU mesh all dirty sections | Solid / cutout / blended vertices | Empty / nonempty sections |
+|---|---:|---:|---:|---:|---:|
+| Pre-fix `4d4f0f2` | 216 ms | 7.7 ms | 117 ms | 189,594 / 30,054 / 69,618 | 303 / 97 |
+| This branch (one local run) | 185 ms | 6.3 ms | 89 ms | 195,960 / 100,512 / 0 | 303 / 97 |
+
+There is normal timing variation; **do not treat those times as speedup or Windows FPS**. The relevant invariant is that 303/400 dirty sections contain no blocks: the frame upload budget previously spent two slots per frame on them; it now clears air immediately without allocating VBOs. Fancy leaves moved from sorted blended geometry to binary cutout/depth writes, and visible sections use conservative view-cone culling. Chunk installation still rebuilds 3×3 lighting synchronously, so occasional hitches are possible. The live F3 overlay now reports GPU renderer/version, FPS and averaged CPU tick/stream/mesh/draw/swap and worst-frame milliseconds. Neither that counter nor a one-frame screenshot replaces a native-1440p frame-time/VRAM benchmark.
 
 ## Native-1440p benchmark to implement and run on user's hardware
 

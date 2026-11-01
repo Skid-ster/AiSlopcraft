@@ -39,9 +39,9 @@ uint32_t biomeGrassColor(uint8_t b) {
         case Biome::Desert: case Biome::Savanna: case Biome::Mesa: return rgb(181,177,82);
         case Biome::Swamp: return rgb(97,128,70);
         case Biome::IcePlains: case Biome::ColdTaiga: return rgb(135,168,129);
-        case Biome::Jungle: return rgb(95,167,64);
-        case Biome::Forest: case Biome::RoofedForest: return rgb(101,160,69);
-        default: return rgb(133,180,77);
+        case Biome::Jungle: return rgb(113,188,72);
+        case Biome::Forest: case Biome::RoofedForest: return rgb(136,199,92);
+        default: return rgb(158,211,99);
     }
 }
 uint32_t biomeFoliageColor(uint8_t b) {

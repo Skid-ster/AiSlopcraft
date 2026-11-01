@@ -159,7 +159,7 @@ void World::relightAround(int cx,int cz) {
     flood(blockQueue,false);
 }
 
-std::optional<RayHit> World::raycast(Vec3f p,Vec3f dir,float reach,bool includeLiquids) {
+std::optional<RayHit> World::raycast(Vec3f p,Vec3f dir,float reach,bool includeLiquids) const {
     dir=dir.normalized();
     if (dir.lengthSq()<0.5f || reach<=0) return std::nullopt;
     int x=(int)std::floor(p.x),y=(int)std::floor(p.y),z=(int)std::floor(p.z);
@@ -175,7 +175,9 @@ std::optional<RayHit> World::raycast(Vec3f p,Vec3f dir,float reach,bool includeL
     float traveled=0;
     for (int steps=0;steps<1024;++steps) {
         float d=std::min({tx,ty,tz});
-        BlockState b=blockAt(x,y,z);
+        // Looking around must never synchronously generate a chunk on the
+        // render thread; a missing chunk simply has no selectable geometry.
+        BlockState b=peekBlock(x,y,z);
         if (b.id!=BlockID::Air && blockDef(b.id).layer!=RenderLayer::Invisible &&
             (includeLiquids || !blockDef(b.id).liquid)) {
             return RayHit{{x,y,z},face,traveled,b};

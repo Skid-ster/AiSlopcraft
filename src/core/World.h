@@ -45,7 +45,7 @@ public:
     uint8_t lightAt(int x,int y,int z) const;
     void relightAround(int cx,int cz);
     std::optional<RayHit> raycast(Vec3f origin, Vec3f direction, float reach,
-                                  bool includeLiquids=false);
+                                  bool includeLiquids=false) const; // never generates
     bool collides(const AABB& box);
     void tick(); // 20 Hz; capped scheduled updates
     void unloadFar(int centerX,int centerZ,int radius);

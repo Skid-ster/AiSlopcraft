@@ -109,7 +109,9 @@ GLuint Renderer::image(const std::filesystem::path& file,std::string& error) {
 bool Renderer::init(const std::filesystem::path& assets,std::string& error) {
     if(!gl_.load(error)) return false;
     const GLubyte* info=gl_.GetString(GL_VERSION);
-    driver_=info ? reinterpret_cast<const char*>(info) : "unknown GL version";
+    const GLubyte* gpu=gl_.GetString(GL_RENDERER);
+    driver_=std::string(gpu ? reinterpret_cast<const char*>(gpu) : "unknown GPU")+
+            " | OpenGL "+(info ? reinterpret_cast<const char*>(info) : "unknown");
     if(!tiles_.load((assets/"atlas.tsv").string(),error)) return false;
     worldProgram_=program(assets/"shaders/world.vert",assets/"shaders/world.frag",error);
     if(!worldProgram_) {shutdown();return false;}
@@ -125,6 +127,15 @@ bool Renderer::init(const std::filesystem::path& assets,std::string& error) {
     gl_.EnableVertexAttribArray(0);gl_.VertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,stride,(const void*)offsetof(UIQuadVertex,x));
     gl_.EnableVertexAttribArray(1);gl_.VertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,stride,(const void*)offsetof(UIQuadVertex,u));
     gl_.EnableVertexAttribArray(2);gl_.VertexAttribPointer(2,4,GL_FLOAT,GL_FALSE,stride,(const void*)offsetof(UIQuadVertex,r));
+    gl_.BindVertexArray(0);
+    gl_.GenVertexArrays(1,&selectionVao_);gl_.GenBuffers(1,&selectionVbo_);
+    gl_.BindVertexArray(selectionVao_);gl_.BindBuffer(GL_ARRAY_BUFFER,selectionVbo_);
+    GLsizei meshStride=(GLsizei)sizeof(MeshVertex);
+    gl_.EnableVertexAttribArray(0);gl_.VertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,meshStride,(const void*)offsetof(MeshVertex,x));
+    gl_.EnableVertexAttribArray(1);gl_.VertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,meshStride,(const void*)offsetof(MeshVertex,u));
+    gl_.EnableVertexAttribArray(2);gl_.VertexAttribPointer(2,3,GL_FLOAT,GL_FALSE,meshStride,(const void*)offsetof(MeshVertex,r));
+    gl_.EnableVertexAttribArray(3);gl_.VertexAttribPointer(3,1,GL_FLOAT,GL_FALSE,meshStride,(const void*)offsetof(MeshVertex,sky));
+    gl_.EnableVertexAttribArray(4);gl_.VertexAttribPointer(4,1,GL_FLOAT,GL_FALSE,meshStride,(const void*)offsetof(MeshVertex,block));
     gl_.BindVertexArray(0);
     // Decode all animation strips at startup; updates replace only a 16x16
     // atlas sub-rectangle at their 20-Hz tick cadence, not the entire atlas.
@@ -161,11 +172,13 @@ void Renderer::shutdown() {
     clearMeshes();animations_.clear();
     if(uiVbo_)gl_.DeleteBuffers(1,&uiVbo_);
     if(uiVao_)gl_.DeleteVertexArrays(1,&uiVao_);
+    if(selectionVbo_)gl_.DeleteBuffers(1,&selectionVbo_);
+    if(selectionVao_)gl_.DeleteVertexArrays(1,&selectionVao_);
     if(atlas_)gl_.DeleteTextures(1,&atlas_);
     if(font_)gl_.DeleteTextures(1,&font_);
     if(worldProgram_)gl_.DeleteProgram(worldProgram_);
     if(uiProgram_)gl_.DeleteProgram(uiProgram_);
-    uiVbo_=uiVao_=atlas_=font_=worldProgram_=uiProgram_=0;
+    uiVbo_=uiVao_=selectionVbo_=selectionVao_=atlas_=font_=worldProgram_=uiProgram_=0;
 }
 void Renderer::upload(int cx,int cz,int sy,const MeshData& mesh) {
     if(sy<0||sy>=SectionCount) return;
@@ -193,6 +206,11 @@ void Renderer::upload(int cx,int cz,int sy,const MeshData& mesh) {
         gpu.count[i]=(GLsizei)vertices.size();
     }
     gl_.BindVertexArray(0);
+}
+void Renderer::clearSection(int cx,int cz,int sy) {
+    if(sy<0||sy>=SectionCount) return;
+    auto it=meshes_.find(chunkKey(cx,cz));
+    if(it!=meshes_.end())destroySection(it->second[sy]);
 }
 void Renderer::clearMeshes() {
     for(auto& [key,sections]:meshes_) {
@@ -235,6 +253,8 @@ void Renderer::drawWorld(const World& world,Vec3f eye,Vec3f direction,
     gl_.ClearColor(sky.x,sky.y,sky.z,1.f);
     gl_.Clear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
     gl_.Enable(GL_DEPTH_TEST);
+    gl_.Enable(GL_CULL_FACE);
+    gl_.CullFace(GL_BACK);
     gl_.UseProgram(worldProgram_);
     Mat4 projection=perspective(fov,(float)width/height,0.05f,
                                 (float)renderDistance*16+48.f);
@@ -252,21 +272,34 @@ void Renderer::drawWorld(const World& world,Vec3f eye,Vec3f direction,
     gl_.BindTexture(GL_TEXTURE_2D,atlas_);
     struct Draw {int cx,cz;const GPUSection* section;float distSq;};
     std::vector<Draw> visible;
+    // Conservative section-sphere test against the diagonal view cone.
+    // Previously all 16 vertical sections were drawn, including caves far
+    // below an above-ground player and sections behind a tilted camera.
+    float tanVertical=std::tan(fov*PI/360.f);
+    float coneCos=std::cos(std::atan(std::hypot(tanVertical*(float)width/height,
+                                               tanVertical))+0.12f);
     for(const auto& [key,sections]:meshes_) {
         int cx=(int32_t)(key>>32),cz=(int32_t)key;
         float dx=cx*16.f+8.f-eye.x,dz=cz*16.f+8.f-eye.z;
-        float dsq=dx*dx+dz*dz;
+        float horizontalSq=dx*dx+dz*dz;
         if(std::abs(dx)>renderDistance*16.f+12||std::abs(dz)>renderDistance*16.f+12)continue;
-        float d=std::sqrt(dsq);
-        if(d>32 && (dx*direction.x+dz*direction.z)<-d*0.45f)continue;
-        for(const auto& section:sections)
-            if(section.count[0]||section.count[1]||section.count[2])
-                visible.push_back({cx,cz,&section,dsq});
+        for(int sy=0;sy<SectionCount;++sy) {
+            const auto& section=sections[sy];
+            if(!section.count[0]&&!section.count[1]&&!section.count[2])continue;
+            float dy=sy*16.f+8.f-eye.y;
+            float dSq=horizontalSq+dy*dy;
+            float along=dx*direction.x+dy*direction.y+dz*direction.z;
+            if(dSq>24.f*24.f && along < std::sqrt(dSq)*coneCos-14.f)continue;
+            visible.push_back({cx,cz,&section,dSq});
+        }
     }
+    gl_.Disable(GL_BLEND); // solid and binary-alpha cutouts write opaque depth
     for(int layer=0;layer<3;++layer) {
         if(layer==2) {
             std::sort(visible.begin(),visible.end(),[](const Draw& a,const Draw& b){return a.distSq>b.distSq;});
-            gl_.DepthMask(GL_FALSE);
+            gl_.Enable(GL_BLEND);
+            gl_.Disable(GL_CULL_FACE); // water/glass must remain visible from inside
+            gl_.DepthMask(GL_FALSE); // only water/glass/portal are blended
         }
         gl_.Uniform1f(alphaLoc,layer==2?0.01f:0.40f);
         for(const auto& d:visible) {
@@ -277,6 +310,41 @@ void Renderer::drawWorld(const World& world,Vec3f eye,Vec3f direction,
         }
     }
     gl_.DepthMask(GL_TRUE);gl_.BindVertexArray(0);
+}
+void Renderer::drawSelection(const RayHit& hit) {
+    if(!selectionVao_)return;
+    AABB bounds;
+    if(!blockOutline(hit.block.id,hit.block.meta,hit.pos.x,hit.pos.y,hit.pos.z,bounds))
+        bounds=AABB::fromOriginSize({(float)hit.pos.x,(float)hit.pos.y,(float)hit.pos.z},
+                                    {1,1,1});
+    bounds=bounds.expanded(0.004f); // keep edges above the block's depth
+    const auto& a=bounds.min;const auto& b=bounds.max;
+    const std::array<Vec3f,8> corners{{{a.x,a.y,a.z},{b.x,a.y,a.z},
+        {a.x,b.y,a.z},{b.x,b.y,a.z},{a.x,a.y,b.z},{b.x,a.y,b.z},
+        {a.x,b.y,b.z},{b.x,b.y,b.z}}};
+    static constexpr int edges[12][2]={{0,1},{1,3},{3,2},{2,0},
+        {4,5},{5,7},{7,6},{6,4},{0,4},{1,5},{2,6},{3,7}};
+    int white=std::max(0,tiles_.lookup("white"));
+    float u=(white%tiles_.columns+0.5f)/tiles_.columns;
+    float v=(white/tiles_.columns+0.5f)/tiles_.rows;
+    std::array<MeshVertex,24> lines{};
+    for(int i=0;i<12;++i)for(int j=0;j<2;++j) {
+        const auto& p=corners[edges[i][j]];
+        lines[i*2+j]={p.x,p.y,p.z,u,v,0.08f,0.08f,0.08f,1,1};
+    }
+    // drawWorld has set the view matrix and lighting on this program.
+    gl_.UseProgram(worldProgram_);
+    gl_.Uniform3f(gl_.GetUniformLocation(worldProgram_,"uChunkOrigin"),0,0,0);
+    gl_.Uniform1f(gl_.GetUniformLocation(worldProgram_,"uAlphaCutoff"),0.4f);
+    gl_.BindTexture(GL_TEXTURE_2D,atlas_);
+    gl_.Disable(GL_BLEND);
+    gl_.DepthMask(GL_FALSE);
+    gl_.BindVertexArray(selectionVao_);
+    gl_.BindBuffer(GL_ARRAY_BUFFER,selectionVbo_);
+    gl_.BufferData(GL_ARRAY_BUFFER,(GLsizeiptr)sizeof(lines),lines.data(),GL_STREAM_DRAW);
+    gl_.DrawArrays(GL_LINES,0,(GLsizei)lines.size());
+    gl_.BindVertexArray(0);
+    gl_.DepthMask(GL_TRUE);
 }
 void Renderer::uiBegin(int width,int height) {
     uiWidth_=std::max(1,width);uiHeight_=std::max(1,height);
@@ -301,6 +369,15 @@ void Renderer::uiRect(float x,float y,float w,float h,uint32_t color,float alpha
 }
 void Renderer::uiSprite(const std::string& tile,float x,float y,float size,
                         uint32_t color,float alpha) {
+    // The world shader supplies biome tint to grayscale vegetation; UI icons
+    // need a representative grass/foliage tint too, or they look grey.
+    if(color==0xffffffu) {
+        if(tile.starts_with("leaves_"))color=0x78b456;
+        else if(tile=="grass_top" || tile=="tallgrass" || tile=="fern" ||
+                tile=="vine" || tile=="reeds" || tile=="waterlily" ||
+                tile.starts_with("double_plant_grass") ||
+                tile.starts_with("double_plant_fern"))color=0x80bb62;
+    }
     int idx=tiles_.lookup(tile);
     if(idx<0) idx=std::max(0,tiles_.lookup("missing"));
     float u0=(float)(idx%tiles_.columns)/tiles_.columns;
@@ -323,6 +400,8 @@ void Renderer::uiText(const std::string& text,float x,float y,float scale,uint32
 }
 void Renderer::uiDraw() {
     gl_.Disable(GL_DEPTH_TEST);
+    gl_.Disable(GL_CULL_FACE); // screen-space quads have clockwise winding
+    gl_.Enable(GL_BLEND);
     gl_.UseProgram(uiProgram_);
     gl_.Uniform2f(gl_.GetUniformLocation(uiProgram_,"uScreen"),(float)uiWidth_,(float)uiHeight_);
     gl_.Uniform1i(gl_.GetUniformLocation(uiProgram_,"uTex"),0);

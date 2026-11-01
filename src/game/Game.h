@@ -26,6 +26,7 @@ public:
     // Requires a working desktop OpenGL context. Captures title, world and
     // creative catalogue frames without saving the temporary world.
     int visualSmoke(const std::filesystem::path& directory);
+    int interactionSmoke(); // GL/SDL integration: synthetic click, mine, place, eat
 private:
     enum class Screen {Title,Playing,Pause,Options,Inventory,Creative,Crafting,Furnace,Chest,Death};
     SDL_Window* window_=nullptr;
@@ -41,11 +42,14 @@ private:
     bool screenshotRequested_=false,screenshotOk_=false,createCreative_=false,vsync_=true;
     bool visualSmoke_=false;
     std::filesystem::path screenshotPath_;
-    float fov_=70.f,sensitivity_=0.13f,miningProgress_=0;
+    float fov_=70.f,sensitivity_=0.13f,miningProgress_=0,miningDuration_=0;
     int width_=1280,height_=720,renderDistance_=4,frames_=0,creativePage_=0;
     float mouseX_=0,mouseY_=0;
     double fps_=0,autosaveTimer_=0;
-    std::string seedText_="7137331",message_;
+    double tickMs_=0,chunkMs_=0,meshMs_=0,drawMs_=0,swapMs_=0,maxFrameMs_=0;
+    double drawAccumMs_=0,swapAccumMs_=0;
+    std::string seedText_="123",message_,interactionHint_;
+    uint64_t interactionHintUntil_=0;
     std::optional<RayHit> target_;
     Vec3i miningPos_{INT32_MIN,0,0};
     ItemStack cursor_{};
@@ -80,6 +84,9 @@ private:
     void meshBudget();
     void buildTitleMeshes();
     void logicTick();
+    void updateTarget();
+    void mineStep(float elapsed);
+    void hint(const std::string& text);
     void interact();
     void placeOrUse();
     void breakTarget();

@@ -19,10 +19,12 @@ public:
     const TileCatalog& tiles() const { return tiles_; }
     const std::string& driver() const { return driver_; }
     void upload(int cx,int cz,int sectionY,const MeshData& mesh);
+    void clearSection(int cx,int cz,int sectionY); // no VBO for all-air sections
     void removeUnloaded(const World& world);
     void clearMeshes();
     void drawWorld(const World& world,Vec3f eye,Vec3f direction,
                    int width,int height,float fov,int renderDistance);
+    void drawSelection(const RayHit& hit); // outlined block within reach
     void uiBegin(int width,int height);
     void uiRect(float x,float y,float w,float h,uint32_t color,float alpha=1);
     void uiSprite(const std::string& tile,float x,float y,float size,
@@ -41,6 +43,7 @@ private:
     TileCatalog tiles_;
     std::string driver_;
     GLuint atlas_=0,font_=0,worldProgram_=0,uiProgram_=0,uiVao_=0,uiVbo_=0;
+    GLuint selectionVao_=0,selectionVbo_=0;
     std::unordered_map<uint64_t,std::array<GPUSection,SectionCount>> meshes_;
     std::vector<UIQuadVertex> uiAtlas_,uiFont_;
     int uiWidth_=1,uiHeight_=1;

@@ -54,7 +54,7 @@ bool Game::startup(std::string& error) {
     if(!renderer_.init(assetDir_,error)) return false;
     std::string audioError;
     if(!audio_.init(assetDir_,audioError))std::cerr<<audioError<<'\n';
-    titleWorld_=std::make_unique<World>(7137331);
+    titleWorld_=std::make_unique<World>(123); // open plains + nearby forest, no spawn canopy
     titleWorld_->setTime(6000);
     // One 3x3 menu scene, no background generation before the app starts.
     for(int z=-1;z<=1;++z)for(int x=-1;x<=1;++x)
@@ -122,6 +122,74 @@ int Game::visualSmoke(const std::filesystem::path& directory) {
              <<". This is not a gameplay, reference-parity or GPU FPS test.\n";
     return 0;
 }
+int Game::interactionSmoke() {
+    visualSmoke_=true; // disposable world; never write user saves or options
+    std::string error;
+    if(!startup(error)) {
+        std::cerr<<"INTERACTION SMOKE FAILED: "<<error<<'\n';
+        shutdown();return 1;
+    }
+    world_=std::make_unique<World>(998,WorldType::Flat);
+    world_->ensureChunk(0,0);
+    player_=Player{};
+    player_.position={8.5f,4.f,8.5f};
+    player_.yaw=0;player_.pitch=0;player_.creative=true;
+    player_.inventory.set(0,{ItemID::Stone,64,0});
+    screen_=Screen::Playing;
+    capture(true);
+    bool passed=captured_;
+    auto click=[&](Uint8 button,bool release) {
+        SDL_PumpEvents();
+        SDL_FlushEvents(SDL_EVENT_FIRST,SDL_EVENT_LAST);
+        SDL_Event down{};down.type=SDL_EVENT_MOUSE_BUTTON_DOWN;
+        down.button.button=button;down.button.x=width_/2.f;down.button.y=height_/2.f;
+        bool queued=SDL_PushEvent(&down);
+        if(release) {
+            SDL_Event up{};up.type=SDL_EVENT_MOUSE_BUTTON_UP;
+            up.button.button=button;up.button.x=down.button.x;up.button.y=down.button.y;
+            queued=SDL_PushEvent(&up) && queued;
+        }
+        events();return queued;
+    };
+    if(passed) {
+        passed=world_->setBlock(8,5,6,{BlockID::Stone,0}) && click(SDL_BUTTON_LEFT,true) &&
+               world_->peekBlock(8,5,6).id==BlockID::Air;
+        if(!passed)error="a short left click did not mine stone in creative mode";
+    }
+    if(passed) {
+        passed=world_->setBlock(8,5,5,{BlockID::Stone,0}) && click(SDL_BUTTON_RIGHT,true) &&
+               world_->peekBlock(8,5,6).id==BlockID::Stone;
+        if(!passed)error="a right click did not place the selected stone block";
+    }
+    if(passed) {
+        world_->setBlock(8,5,6,{BlockID::Leaves,0});
+        player_.creative=false;player_.inventory.set(0,{});
+        passed=click(SDL_BUTTON_LEFT,false) &&
+               world_->peekBlock(8,5,6).id==BlockID::Leaves && miningProgress_>0;
+        for(int i=0;i<120 && passed && world_->peekBlock(8,5,6).id!=BlockID::Air;++i)
+            logicTick();
+        passed=passed && world_->peekBlock(8,5,6).id==BlockID::Air;
+        SDL_Event up{};up.type=SDL_EVENT_MOUSE_BUTTON_UP;up.button.button=SDL_BUTTON_LEFT;
+        SDL_PushEvent(&up);events();
+        if(!passed)error="holding left click did not mine leaves in survival";
+    }
+    if(passed) {
+        player_.pitch=80;player_.hunger=12;
+        player_.inventory.set(0,{ItemID::Apple,2,0});
+        passed=click(SDL_BUTTON_RIGHT,true) && player_.hunger>12 &&
+               player_.inventory.at(0).count==1;
+        if(!passed)error="right click without a target did not eat selected food";
+    }
+    world_.reset();
+    shutdown();
+    if(!passed) {
+        std::cerr<<"INTERACTION SMOKE FAILED: "<<error<<'\n';return 1;
+    }
+    std::cout<<"INTERACTION SMOKE PASS: short-click mine, place, hold-to-mine, "
+             <<"eat without target on "<<renderer_.driver()
+             <<". This is not a Windows input or FPS measurement.\n";
+    return 0;
+}
 int Game::run() {
     std::string error;
     if(!startup(error)) {
@@ -129,8 +197,12 @@ int Game::run() {
         shutdown();return 1;
     }
     auto previous=Clock::now(),secondStart=previous;
-    double accumulator=0;
+    double accumulator=0,tickAccum=0,chunkAccum=0,meshAccum=0,maxFrame=0;
+    auto ms=[](Clock::time_point a,Clock::time_point b) {
+        return std::chrono::duration<double,std::milli>(b-a).count();
+    };
     while(running_) {
+        auto loopStart=Clock::now();
         events();
         auto now=Clock::now();
         double elapsed=std::chrono::duration<double>(now-previous).count();previous=now;
@@ -145,11 +217,27 @@ int Game::run() {
             accumulator-=0.05;++ticks;
         }
         if(ticks==5) accumulator=0; // avoid spiral of death on a slow frame
-        if(world_) {streamChunks();meshBudget();}
+        auto afterTick=Clock::now();
+        if(world_)streamChunks();
+        auto afterStream=Clock::now();
+        if(world_)meshBudget();
+        auto afterMesh=Clock::now();
         frame();
+        auto afterFrame=Clock::now();
+        tickAccum+=ms(now,afterTick);
+        chunkAccum+=ms(afterTick,afterStream);
+        meshAccum+=ms(afterStream,afterMesh);
+        maxFrame=std::max(maxFrame,ms(loopStart,afterFrame));
         ++frames_;
         double secs=std::chrono::duration<double>(now-secondStart).count();
-        if(secs>=1) {fps_=frames_/secs;frames_=0;secondStart=now;}
+        if(secs>=1) {
+            fps_=frames_/secs;
+            tickMs_=tickAccum/frames_;chunkMs_=chunkAccum/frames_;
+            meshMs_=meshAccum/frames_;drawMs_=drawAccumMs_/frames_;
+            swapMs_=swapAccumMs_/frames_;maxFrameMs_=maxFrame;
+            frames_=0;tickAccum=chunkAccum=meshAccum=maxFrame=0;
+            drawAccumMs_=swapAccumMs_=0;secondStart=now;
+        }
     }
     shutdown();return 0;
 }
@@ -182,6 +270,7 @@ void Game::saveSettings() const {
 void Game::capture(bool enabled) {
     if(!window_)return;
     if(enabled && !SDL_SetWindowRelativeMouseMode(window_,true)) {
+        captured_=false;
         message_=std::string("Mouse capture failed: ")+SDL_GetError();return;
     }
     if(!enabled) SDL_SetWindowRelativeMouseMode(window_,false);
@@ -213,11 +302,11 @@ void Game::startWorld(bool newWorld) {
     }
     if(!world_) {
         if(!newWorld && std::filesystem::exists(saveFile_)) {screen_=Screen::Title;return;}
-        int64_t seed=7137331;
+        int64_t seed=123;
         auto begin=seedText_.data(),end=begin+seedText_.size();
         auto [ptr,ec]=std::from_chars(begin,end,seed);
         if(ec!=std::errc{} || ptr!=end) {
-            message_="Invalid seed; using fixed seed 7137331";seed=7137331;
+            message_="Invalid seed; using default seed 123";seed=123;
         }
         if(newWorld) {
             // Never overwrite an older world's save when [N] is pressed.
@@ -361,8 +450,13 @@ void Game::meshBudget() {
         (void)key;
         int dist=(ch->cx-cx)*(ch->cx-cx)+(ch->cz-cz)*(ch->cz-cz);
         if(dist>(renderDistance_+1)*(renderDistance_+1)*2)continue;
-        for(int sy=0;sy<SectionCount;++sy)
-            if(ch->dirty[sy])ready.push_back({ch->cx,ch->cz,sy,dist});
+        for(int sy=0;sy<SectionCount;++sy) {
+            if(!ch->dirty[sy])continue;
+            if(!ch->sectionHasBlocks(sy)) {
+                renderer_.clearSection(ch->cx,ch->cz,sy);
+                ch->dirty[sy]=false;
+            } else ready.push_back({ch->cx,ch->cz,sy,dist});
+        }
     }
     std::sort(ready.begin(),ready.end(),[&](const Candidate& a,const Candidate& b){
         if(a.dist!=b.dist)return a.dist<b.dist;
@@ -370,15 +464,16 @@ void Game::meshBudget() {
         int vb=std::abs(b.sy*16-(int)player_.position.y);
         return va<vb;
     });
-    int budget=2;
+    int budget=2; // all air was already cleared, count real VBO builds
     for(const auto& job:ready) {
-        if(!budget--)break;
+        if(budget<=0)break;
         Chunk* c=world_->findChunk(job.cx,job.cz);
         if(!c||!c->dirty[job.sy])continue;
         MeshData mesh=meshSection(*world_,job.cx,job.cz,job.sy,renderer_.tiles());
         if(mesh.missingTiles)message_="Atlas missing "+std::to_string(mesh.missingTiles)+" tile references";
         renderer_.upload(job.cx,job.cz,job.sy,mesh);
         c->dirty[job.sy]=false;
+        --budget;
     }
 }
 void Game::logicTick() {
@@ -396,22 +491,44 @@ void Game::logicTick() {
     player_.tick(*world_,input);
     world_->tick();
     for(auto& [key,f] : furnaces_) { (void)key;f.tick(); }
-    target_=world_->raycast(player_.eye(),player_.lookDirection(),player_.creative?5.f:4.5f);
-    if(mouseLeft_ && captured_ && target_) {
-        if(target_->pos!=miningPos_) {miningPos_=target_->pos;miningProgress_=0;}
-        const auto& s=player_.inventory.at((size_t)player_.selected);
-        const ItemDef& item=itemDef(s.id);
-        int tier=item.tier==4?0:item.tier;
-        float seconds=player_.creative?0.05f :
-            breakTime(target_->block.id,target_->block.meta,item.tool,tier,
-                      player_.onGround,false);
-        if(item.tier==4 && seconds>0 && canHarvest(target_->block.id,target_->block.meta,item.tool,0))
-            seconds*=2.f/12.f;
-        if(seconds>=0 && (miningProgress_+=0.05f)>=seconds) {
-            breakTarget();miningProgress_=0;
-        }
-    } else {miningProgress_=0;miningPos_.x=INT32_MIN;}
+    updateTarget();
+    if(mouseLeft_ && captured_)mineStep(0.05f);
+    else {miningProgress_=0;miningPos_.x=INT32_MIN;}
     if(player_.dead) {screen_=Screen::Death;capture(false);audio_.play("hurt");}
+}
+void Game::hint(const std::string& text) {
+    interactionHint_=text;
+    interactionHintUntil_=SDL_GetTicks()+3500;
+}
+void Game::updateTarget() {
+    if(world_)target_=world_->raycast(player_.eye(),player_.lookDirection(),
+                                     player_.creative?5.f:4.5f);
+    else target_.reset();
+    if(target_ && interactionHint_.starts_with("Aim at"))interactionHintUntil_=0;
+}
+void Game::mineStep(float elapsed) {
+    if(!world_||player_.dead||!target_) {
+        miningProgress_=0;miningPos_.x=INT32_MIN;return;
+    }
+    bool newTarget=target_->pos!=miningPos_;
+    if(newTarget) {miningPos_=target_->pos;miningProgress_=0;}
+    const auto& s=player_.inventory.at((size_t)player_.selected);
+    const ItemDef& item=itemDef(s.id);
+    int tier=item.tier==4?0:item.tier;
+    float seconds=player_.creative?0.05f :
+        breakTime(target_->block.id,target_->block.meta,item.tool,tier,
+                  player_.onGround,false);
+    if(item.tier==4 && seconds>0 && canHarvest(target_->block.id,target_->block.meta,item.tool,0))
+        seconds*=2.f/12.f;
+    miningDuration_=seconds;
+    if(seconds<0) {
+        miningProgress_=0;
+        if(newTarget)hint("This block cannot be mined in survival");
+        return;
+    }
+    if((miningProgress_+=elapsed)>=seconds) {
+        breakTarget();miningProgress_=0;miningPos_.x=INT32_MIN;
+    }
 }
 void Game::breakTarget() {
     if(!world_||!target_)return;
@@ -448,7 +565,11 @@ void Game::placeOrUse() {
             audio_.play("splash");return;
         }
     }
-    if(!target_)return;
+    if(!target_) {
+        if(!selected.empty() && player_.eat(slot))audio_.play("pickup");
+        else hint("Aim at a block within reach (4.5 m)");
+        return;
+    }
     Vec3i p=target_->pos;
     uint16_t id=target_->block.id;
     if(id==BlockID::CraftingTable) {
@@ -466,7 +587,7 @@ void Game::placeOrUse() {
         world_->setBlock(p.x,p.y,p.z,{id,(uint8_t)(target_->block.meta^4)});
         audio_.play("click");return;
     }
-    if(selected.empty())return;
+    if(selected.empty()) {hint("Select a block in the hotbar to place");return;}
     if(player_.eat(slot)) {audio_.play("pickup");return;}
     uint16_t place=blockIdForItem(selected.id);
     if(selected.id==ItemID::WoodenDoorItem)place=BlockID::WoodenDoor;
@@ -480,10 +601,12 @@ void Game::placeOrUse() {
     if(selected.id==ItemID::NetherWart)place=BlockID::NetherWart;
     if(selected.id==ItemID::WaterBucket)place=BlockID::Water;
     if(selected.id==ItemID::LavaBucket)place=BlockID::Lava;
-    if(!place)return;
+    if(!place) {hint("This item has no place/use action yet");return;}
     Vec3i dest=p+dirOffset(target_->face);
     if(dest.y<0||dest.y>=WorldHeight ||
-       !isAirLike(world_->blockAt(dest.x,dest.y,dest.z).id))return;
+       !isAirLike(world_->blockAt(dest.x,dest.y,dest.z).id)) {
+        hint("Cannot place: the adjacent space is occupied");return;
+    }
     if((place==BlockID::WoodenDoor||place==BlockID::IronDoor) &&
        (dest.y+1>=WorldHeight || !isAirLike(world_->blockAt(dest.x,dest.y+1,dest.z).id)))return;
     if((place==BlockID::Wheat||place==BlockID::Carrots||place==BlockID::Potatoes) &&
@@ -500,7 +623,9 @@ void Game::placeOrUse() {
         meta&=7;if(target_->face==Down)meta|=8;
     }
     if(blockCollision(place,meta,dest.x,dest.y,dest.z,shape) &&
-       shape.intersects(player_.bounds()))return;
+       shape.intersects(player_.bounds())) {
+        hint("Cannot place a block inside yourself");return;
+    }
     if(world_->setBlock(dest.x,dest.y,dest.z,{place,meta})) {
         if(!player_.creative) {
             if(selected.id==ItemID::WaterBucket||selected.id==ItemID::LavaBucket)
@@ -524,6 +649,11 @@ void Game::events() {
                 break;
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                 SDL_GetWindowSizeInPixels(window_,&width_,&height_);break;
+            case SDL_EVENT_WINDOW_FOCUS_LOST:
+                // Never continue mining after alt-tab or an unfocused window.
+                if(captured_)capture(false);
+                mouseLeft_=false;miningProgress_=0;miningPos_.x=INT32_MIN;
+                break;
             case SDL_EVENT_KEY_DOWN:
                 if(!e.key.repeat)key(e.key.scancode);
                 break;
@@ -543,7 +673,9 @@ void Game::events() {
                             e.button.y*height_/std::max(1,h));break;
             }
             case SDL_EVENT_MOUSE_BUTTON_UP:
-                if(e.button.button==SDL_BUTTON_LEFT)mouseLeft_=false;
+                if(e.button.button==SDL_BUTTON_LEFT) {
+                    mouseLeft_=false;miningProgress_=0;miningPos_.x=INT32_MIN;
+                }
                 break;
             case SDL_EVENT_MOUSE_WHEEL:
                 if(e.wheel.y!=0 && screen_==Screen::Playing)
@@ -635,9 +767,18 @@ void Game::key(SDL_Scancode k) {
 void Game::mouseButton(int button,float x,float y) {
     mouseX_=x;mouseY_=y;
     if(screen_==Screen::Playing) {
-        if(!captured_) {capture(true);return;}
-        if(button==SDL_BUTTON_LEFT)mouseLeft_=true;
-        if(button==SDL_BUTTON_RIGHT)placeOrUse();
+        if(!captured_)capture(true);
+        if(!captured_)return;
+        if(button==SDL_BUTTON_LEFT) {
+            mouseLeft_=true;
+            updateTarget(); // don't wait up to 50 ms for the next logic tick
+            if(!target_)hint("Aim at a block within reach (4.5 m)");
+            else mineStep(0.05f); // even a click shorter than one tick counts
+        }
+        if(button==SDL_BUTTON_RIGHT) {
+            updateTarget(); // previously used a stale target after mouse movement
+            placeOrUse();
+        }
         return;
     }
     if(screen_==Screen::Inventory||screen_==Screen::Creative||
@@ -668,9 +809,11 @@ void Game::mouseButton(int button,float x,float y) {
 void Game::interact() { placeOrUse(); }
 void Game::frame() {
     if(!window_)return;
+    auto renderStart=Clock::now();
     if(world_ && screen_!=Screen::Title) {
         renderer_.drawWorld(*world_,player_.eye(),player_.lookDirection(),
                             width_,height_,fov_,renderDistance_);
+        if(screen_==Screen::Playing && target_)renderer_.drawSelection(*target_);
     }else if(titleWorld_) {
         float surface=(float)titleWorld_->generator().heightAt(8,8);
         Vec3f eye{8.f,surface+12.f,21.f};
@@ -697,7 +840,11 @@ void Game::frame() {
         if(screenshotOk_) message_="Screenshot: "+path.string();
         else {message_="Screenshot failed: "+err;std::cerr<<message_<<'\n';}
     }
+    auto beforeSwap=Clock::now();
     SDL_GL_SwapWindow(window_);
+    auto afterSwap=Clock::now();
+    drawAccumMs_+=std::chrono::duration<double,std::milli>(beforeSwap-renderStart).count();
+    swapAccumMs_+=std::chrono::duration<double,std::milli>(afterSwap-beforeSwap).count();
 }
 
 } // namespace vox

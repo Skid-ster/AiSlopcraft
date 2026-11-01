@@ -111,11 +111,17 @@ int main(int argc,char* argv[]) {
             vox::Game game;
             return game.visualSmoke(argv[2]);
         }
+        if(flag=="--interaction-smoke") {
+            if(argc!=2) {std::cerr<<"Usage: aislopcraft --interaction-smoke\n";return 2;}
+            vox::Game game;
+            return game.interactionSmoke();
+        }
         if(flag=="--help") {
             std::cout<<"AiSlopcraft (unofficial 1.7.3-inspired native sandbox)\n"
                 <<"  aislopcraft             Open the SDL3/OpenGL desktop game\n"
                 <<"  aislopcraft --selftest  Headless startup/core smoke test\n"
                 <<"  aislopcraft --visual-smoke <dir>  Capture GL title/world/creative frames (display required)\n"
+                <<"  aislopcraft --interaction-smoke  Exercise SDL click/mine/place/eat (display required)\n"
                 <<"  aislopcraft --benchmark CPU-only workloads (NOT 1440p FPS)\n";
             return 0;
         }

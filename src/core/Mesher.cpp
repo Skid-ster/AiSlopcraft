@@ -135,13 +135,18 @@ struct Builder {
     void cross(uint16_t id,uint8_t meta,RenderLayer l,int x,int y,int z,
                int wx,int wy,int wz,uint8_t biome,float minY=0,float maxY=1) {
         std::string tile=blockTile(id,meta,North,wx,wy,wz);
+        // Only the grassy/fern varieties are biome-coloured. Tinting the
+        // complete red/pink/yellow flower tile turned its petals muddy brown.
+        bool tint=blockTint(id)!=TintType::None &&
+                  (id!=BlockID::DoublePlant ||
+                   tile.find("double_plant_grass")==0 || tile.find("double_plant_fern")==0);
         for(int side=0;side<2;++side) {
             Vec3f a=side?Vec3f{x+0.12f,y+minY,z+0.88f}:Vec3f{x+0.12f,y+minY,z+0.12f};
             Vec3f b=side?Vec3f{x+0.88f,y+minY,z+0.12f}:Vec3f{x+0.88f,y+minY,z+0.88f};
             Quad q{{a,b,Vec3f{b.x,y+maxY,b.z},Vec3f{a.x,y+maxY,a.z}}};
-            quad(l,q,tile,wx,wy,wz,North,biome,blockTint(id)!=TintType::None);
+            quad(l,q,tile,wx,wy,wz,North,biome,tint);
             Quad back{{q.p[1],q.p[0],q.p[3],q.p[2]}};
-            quad(l,back,tile,wx,wy,wz,South,biome,blockTint(id)!=TintType::None);
+            quad(l,back,tile,wx,wy,wz,South,biome,tint);
         }
     }
 };

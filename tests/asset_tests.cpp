@@ -2,8 +2,10 @@
 #include "core/Items.h"
 #include "core/Mesher.h"
 #include "core/World.h"
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -30,6 +32,31 @@ int main() {
         require(tiles.load((root/"atlas.tsv").string(),err),err);
         png(root/"atlas.png",tiles.columns*16,tiles.rows*16);
         png(root/"font_atlas.png",256,96);
+        int aw=0,ah=0,channels=0;
+        std::unique_ptr<stbi_uc,decltype(&stbi_image_free)> rgba(
+            stbi_load((root/"atlas.png").string().c_str(),&aw,&ah,&channels,4),
+            &stbi_image_free);
+        require((bool)rgba,"Cannot audit atlas pixels");
+        auto neutralTintedTile=[&](const char* name,int minCoverage,int maxCoverage) {
+            int id=tiles.lookup(name);
+            require(id>=0,std::string("Missing tinted tile: ")+name);
+            long red=0,green=0,blue=0;
+            int covered=0;
+            for(int y=0;y<16;++y)for(int x=0;x<16;++x) {
+                size_t p=((size_t)((id/tiles.columns)*16+y)*aw+
+                          (id%tiles.columns)*16+x)*4;
+                if(rgba.get()[p+3]<128)continue;
+                ++covered;red+=rgba.get()[p];green+=rgba.get()[p+1];blue+=rgba.get()[p+2];
+            }
+            require(covered>=minCoverage&&covered<=maxCoverage,
+                    std::string("Wrong cutout density in ")+name);
+            require(red/covered>=195 && std::abs(red-green)<=covered*2 &&
+                    std::abs(red-blue)<=covered*2,
+                    std::string("Biome-tinted tile is dark or already green: ")+name);
+        };
+        neutralTintedTile("grass_top",256,256);
+        neutralTintedTile("leaves_oak",190,240);
+        neutralTintedTile("tallgrass",18,85);
         std::size_t tested=0;
         for(int id=1;id<BlockID::BlockIDCount;++id) {
             if(std::string(blockName((uint16_t)id))=="air") continue;
