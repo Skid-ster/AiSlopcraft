@@ -35,6 +35,8 @@ private:
     void close();
     void capture(bool enabled);
     void edit(uint8_t button);
+    void handle(const SDL_Event& event);
+    void events();
     void draw();
 };
 
@@ -109,6 +111,39 @@ void StudyGame::edit(uint8_t button) {
     target_=raycast(world_,player_.eye(),player_.direction());
     if(debug_)std::cout<<"Edit "<<edits_<<" at "<<c.x<<","<<c.y<<","<<c.z<<'\n';
 }
+void StudyGame::handle(const SDL_Event& e) {
+    switch(e.type) {
+        case SDL_EVENT_QUIT:running_=false;break;
+        case SDL_EVENT_WINDOW_FOCUS_LOST:paused_=true;capture(false);break;
+        case SDL_EVENT_KEY_DOWN:
+            if(e.key.repeat)break;
+            if(e.key.scancode==SDL_SCANCODE_ESCAPE){paused_=true;capture(false);}
+            else if(e.key.scancode==SDL_SCANCODE_F3)debug_=!debug_;
+            else if(e.key.scancode==SDL_SCANCODE_F2)shot_=true;
+            else if(e.key.scancode==SDL_SCANCODE_F7)guiScale_=guiScale_%4+1;
+            else if(e.key.scancode>=SDL_SCANCODE_1 && e.key.scancode<=SDL_SCANCODE_9)
+                slot_=static_cast<int>(e.key.scancode-SDL_SCANCODE_1);
+            break;
+        case SDL_EVENT_MOUSE_MOTION:
+            if(captured_ && !paused_) {
+                player_.yaw+=e.motion.xrel*.0023f;
+                player_.pitch=std::clamp(player_.pitch-e.motion.yrel*.0023f,-1.54f,1.54f);
+            }
+            break;
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+            if(!captured_){paused_=false;capture(true);break;}
+            if(!paused_)edit(e.button.button);
+            break;
+        case SDL_EVENT_MOUSE_WHEEL:
+            slot_=(slot_+9-(e.wheel.y>0?1:(e.wheel.y<0?-1:0)))%9;
+            break;
+        default:break;
+    }
+}
+void StudyGame::events() {
+    SDL_Event e;
+    while(SDL_PollEvent(&e))handle(e);
+}
 void StudyGame::draw() {
     SDL_GetWindowSizeInPixels(window_,&width_,&height_);
     auto drawStart=Clock::now();
@@ -136,36 +171,7 @@ int StudyGame::run() {
     int frames=0;
     while(running_) {
         const auto frameStart=Clock::now();
-        SDL_Event e;
-        while(SDL_PollEvent(&e)) {
-            switch(e.type) {
-                case SDL_EVENT_QUIT:running_=false;break;
-                case SDL_EVENT_WINDOW_FOCUS_LOST:paused_=true;capture(false);break;
-                case SDL_EVENT_KEY_DOWN:
-                    if(e.key.repeat)break;
-                    if(e.key.scancode==SDL_SCANCODE_ESCAPE){paused_=true;capture(false);}
-                    else if(e.key.scancode==SDL_SCANCODE_F3)debug_=!debug_;
-                    else if(e.key.scancode==SDL_SCANCODE_F2)shot_=true;
-                    else if(e.key.scancode==SDL_SCANCODE_F7)guiScale_=guiScale_%4+1;
-                    else if(e.key.scancode>=SDL_SCANCODE_1 && e.key.scancode<=SDL_SCANCODE_9)
-                        slot_=static_cast<int>(e.key.scancode-SDL_SCANCODE_1);
-                    break;
-                case SDL_EVENT_MOUSE_MOTION:
-                    if(captured_ && !paused_) {
-                        player_.yaw+=e.motion.xrel*.0023f;
-                        player_.pitch=std::clamp(player_.pitch-e.motion.yrel*.0023f,-1.54f,1.54f);
-                    }
-                    break;
-                case SDL_EVENT_MOUSE_BUTTON_DOWN:
-                    if(!captured_){paused_=false;capture(true);break;}
-                    if(!paused_)edit(e.button.button);
-                    break;
-                case SDL_EVENT_MOUSE_WHEEL:
-                    slot_=(slot_+9-(e.wheel.y>0?1:(e.wheel.y<0?-1:0)))%9;
-                    break;
-                default:break;
-            }
-        }
+        events();
         auto now=Clock::now();
         accumulator+=std::min(.15f,std::chrono::duration<float>(now-previous).count());
         previous=now;
@@ -207,12 +213,38 @@ int StudyGame::smoke(const std::filesystem::path& directory) {
     renderer_.draw(player_,target_,slot_,width_,height_,guiScale_,false,false,0,0,0,0,0,0);
     bool ok=renderer_.capture(before,width_,height_,error);
     if(ok && target_) {
-        // Route through the same edit/mesh path used by physical mouse events.
-        Cell c=target_->cell;Block was=world_.get(c);
-        edit(SDL_BUTTON_LEFT);
-        ok=world_.get(c)==Block::Air && edits_==1;
+        const Cell base=target_->cell;
+        const Cell normal=target_->normal;
+        const Cell placed{base.x+normal.x,base.y+normal.y,base.z+normal.z};
+        const Block original=world_.get(base);
+        auto click=[&](uint8_t button) {
+            SDL_PumpEvents();SDL_FlushEvents(SDL_EVENT_FIRST,SDL_EVENT_LAST);
+            SDL_Event event{};event.type=SDL_EVENT_MOUSE_BUTTON_DOWN;
+            event.button.button=button;event.button.x=width_/2.f;event.button.y=height_/2.f;
+            bool queued=SDL_PushEvent(&event);
+            events(); // EXACTLY the interactive window's event dispatch path.
+            return queued;
+        };
+        SDL_PumpEvents();SDL_FlushEvents(SDL_EVENT_FIRST,SDL_EVENT_LAST);
+        SDL_Event esc{};esc.type=SDL_EVENT_KEY_DOWN;esc.key.scancode=SDL_SCANCODE_ESCAPE;
+        ok=SDL_PushEvent(&esc);events();
+        if(ok)ok=paused_ && !captured_ && World::inside(placed);
+        if(!ok)error="Escape did not release mouse or target is outside study";
         if(ok){
-            renderer_.draw(player_,target_,slot_,width_,height_,guiScale_,false,false,0,0,0,0,editMs_,edits_);
+            ok=click(SDL_BUTTON_LEFT) && captured_ && !paused_ && edits_==0 &&
+               world_.get(base)==original;
+            if(!ok)error="first click after Escape must only recapture, not mine";
+        }
+        // Relative-mode recapture can synthesize a warp motion on some drivers.
+        // Flush it so these synthetic button tests keep their known camera pose.
+        player_.yaw=0;player_.pitch=-.48f;
+        if(ok){
+            ok=click(SDL_BUTTON_RIGHT) && world_.get(placed)==Block::Grass && edits_==1;
+            if(!ok)error="SDL right button did not place the selected block";
+        }
+        if(ok){
+            renderer_.draw(player_,target_,slot_,width_,height_,guiScale_,false,false,
+                           0,0,0,0,editMs_,edits_);
             ok=renderer_.capture(after,width_,height_,error);
         }
         if(ok){
@@ -220,7 +252,7 @@ int StudyGame::smoke(const std::filesystem::path& directory) {
             std::string b((std::istreambuf_iterator<char>(lhs)),{});
             std::string a((std::istreambuf_iterator<char>(rhs)),{});
             ok=b!=a && !b.empty() && !a.empty();
-            if(!ok)error="rendered PNG did not change after the edit";
+            if(!ok)error="rendered PNG did not change after the SDL place event";
         }
         if(ok){
             int w=0,h=0,channels=0;
@@ -230,11 +262,11 @@ int StudyGame::smoke(const std::filesystem::path& directory) {
             else {
                 size_t sky=0,green=0,hud=0;
                 for(int y=0;y<h;++y)for(int x=0;x<w;++x){
-                    const auto* p=pixels+(static_cast<size_t>(y)*w+x)*4;
-                    if(std::abs(int(p[0])-138)<18 && std::abs(int(p[1])-189)<18 &&
-                       std::abs(int(p[2])-240)<18)++sky;
-                    if(int(p[1])>int(p[0])+20 && int(p[1])>int(p[2])+25)++green;
-                    if(y>h-60 && p[0]<80 && p[1]<80 && p[2]<80)++hud;
+                    const auto* pixel=pixels+(static_cast<size_t>(y)*w+x)*4;
+                    if(std::abs(int(pixel[0])-138)<18 && std::abs(int(pixel[1])-189)<18 &&
+                       std::abs(int(pixel[2])-240)<18)++sky;
+                    if(int(pixel[1])>int(pixel[0])+20 && int(pixel[1])>int(pixel[2])+25)++green;
+                    if(y>h-60 && pixel[0]<80 && pixel[1]<80 && pixel[2]<80)++hud;
                 }
                 std::cout<<"Rendered pixel groups: sky="<<sky<<" vegetation="<<green
                          <<" dark HUD="<<hud<<'\n';
@@ -244,14 +276,17 @@ int StudyGame::smoke(const std::filesystem::path& directory) {
             }
             if(pixels)stbi_image_free(pixels);
         }
-        // Place it back in memory to assert the reverse edit/mesh path.
-        if(ok){ok=world_.set(c,was);renderer_.rebuildAround(world_,c);}
+        if(ok){
+            ok=click(SDL_BUTTON_LEFT) && world_.get(placed)==Block::Air &&
+               world_.get(base)==original && edits_==2;
+            if(!ok)error="SDL left button did not mine the placed block";
+        }
     }else if(ok){error="initial crosshair has no target within 4.5 blocks";ok=false;}
     close();
     if(!ok){std::cerr<<"Rebuild GL smoke failed: "<<error<<'\n';return 1;}
-    std::cout<<"REBUILD GL SMOKE PASS: captured two DIFFERENT "<<width_<<"x"<<height_
-             <<" software/desktop GL frames around a creative edit; headless input, "
-             <<"Windows physical controls, visual parity and FPS NOT verified.\n";
+    std::cout<<"REBUILD GL SMOKE PASS: two DIFFERENT "<<width_<<"x"<<height_
+             <<" GL frames; SDL-synthetic Escape/recapture/place/mine dispatch passed. "
+             <<"Windows physical input, visual parity and target-PC FPS NOT verified.\n";
     return 0;
 }
 } // namespace
