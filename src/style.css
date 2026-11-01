@@ -774,3 +774,8 @@ html, body {
 }
 .title-main { width: min(700px, 90vw); line-height: 0; -webkit-text-stroke: 0; text-shadow: none; }
 .title-main img { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+/* A local-only, optional resource pack import; no copyrighted artwork is bundled. */
+.title-button-row { gap: 6px; margin-top: 24px; }
+.pack-controls { text-align: center; color: white; font-size: 9px; text-shadow: 1px 1px #222; }
+.pack-controls .btn { width: 50%; font-size: 10px; min-height: 24px; }
+#pack-status { margin-top: 5px; line-height: 1.4; min-height: 2.8em; overflow-wrap: anywhere; }

@@ -69,6 +69,8 @@ const game = {
     setVolume: () => {},
   },
   player,
+  importResourcePack: async () => ({ count: 5, saved: true }),
+  resetResourcePack: () => calls.push(['resetResourcePack']),
   atlasCanvas: document.createElement('canvas'),
   itemIconsCanvas: document.createElement('canvas'),
   start: () => calls.push(['game.start']),
@@ -82,6 +84,10 @@ let ui;
 let threw = null;
 try {
   ui = new UI(game);
+
+  check('resource pack import control is present', !!btn('btn-pack') && !!btn('pack-file'));
+  btn('btn-pack-reset').click();
+  check('resource pack reset is wired', calls.some(call => call[0] === 'resetResourcePack'));
 
   // ---------- title: Options ----------
   btn('btn-options').click();

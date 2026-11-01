@@ -55,3 +55,21 @@ npm run build
 - `src/textures.js`, `src/audio.js`, `src/sky.js` — procedural visuals, WebAudio, and sky cycle
 
 Not affiliated with Mojang or Microsoft. Made for fun.
+
+### Optional Java 1.7 block textures
+
+From the title screen, **Import block textures...** accepts a local Java 1.7-era
+resource-pack ZIP or client JAR containing `assets/minecraft/textures/blocks/`.
+Only supported block sprites are imported; the archive is processed in the
+browser and is not uploaded. A derived 256×256 atlas is saved in browser local
+storage where available. **Reset textures** removes it and restores the bundled
+art. Use only assets you have the right to use.
+
+This is a partial resource-pack importer: missing sprites fall back to the
+bundled art. It does not import item, entity, GUI, sky, colormap or sound assets;
+animated textures, including water and lava, use their first frame, and biome
+colouring is approximated. Chest faces and redstone wire retain their bundled
+art because their Minecraft layouts require special handling. All other
+project block-atlas tiles are mapped or explicitly aliased; missing pack files
+still fall back to the bundled art. The importer does not change gameplay to
+Java release 1.7.3.
