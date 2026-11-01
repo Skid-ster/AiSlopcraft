@@ -279,14 +279,14 @@ export class WorldGen {
   placeTree(world, x, y, z, rng) {
     const height = 4 + rng.nextInt(3);
     // canopy radius by height
-    const base = y + height - 3;
-    for (let dy = -2; dy <= 1; dy++) {
-      const radius = dy >= 0 ? 1 : 2;
+    const top = y + height;
+    for (let dy = -3; dy <= 0; dy++) {
+      const radius = dy >= -1 ? 1 : 2;
       for (let dx = -radius; dx <= radius; dx++) {
         for (let dz = -radius; dz <= radius; dz++) {
-          if (dx === 0 && dz === 0 && dy <= 0) continue;
+          if (dx === 0 && dz === 0 && dy < 0) continue;
           if (Math.abs(dx) === radius && Math.abs(dz) === radius && rng.next() < 0.5) continue;
-          const by = base + dy + (dy > 0 ? 1 : 0);
+          const by = top + dy;
           if (world.getBlockGen(x + dx, by, z + dz) === AIR) {
             world.setBlockGen(x + dx, by, z + dz, LEAVES);
           }

@@ -1,3 +1,5 @@
+const playerPreview = new URL('./player-preview.svg', import.meta.url).href;
+const logo = new URL('./logo.svg', import.meta.url).href;
 // UI: title screen, hotbar, hearts, armor, inventory, crafting table, furnace, chest,
 // pause, death screen, F3 debug, hover tooltips, shift-click & 3D isometric icons.
 import {
@@ -15,7 +17,12 @@ function canStack(a, b) {
   return !!a && !!b && a.id === b.id && (a.damage || 0) === (b.damage || 0) && stackLimit(a) > 1;
 }
 
-const ARMOR_HINTS = ['⛑', '👕', '👖', '👢'];
+const ARMOR_HINTS = [
+  '<path d="M4 8V5l2-2h6l2 2v3l-2 1v3H6V9z"/><path d="M7 7h1m2 0h1"/>',
+  '<path d="M5 3h3l1 2 1-2h3l3 3-2 3-1-1v6H5V8L4 9 2 6z"/>',
+  '<path d="M5 3h8v5l-1 6H9V9H8v5H5L4 8z"/>',
+  '<path d="M4 3h4v7H6v3H2v-3h2zm6 0h4v7h2v3h-4v-3h-2z"/>',
+].map(path => `<svg viewBox="0 0 18 18" aria-hidden="true" fill="none" stroke="#555" stroke-width="1.3" stroke-linejoin="miter">${path}</svg>`);
 
 export class UI {
   constructor(game) {
@@ -36,6 +43,7 @@ export class UI {
 
     this.buildTitle();
     this.buildHud();
+    this.buildLoading();
     this.buildPanels();
     this.buildDebug();
     this.buildTooltip();
@@ -65,13 +73,17 @@ export class UI {
     div.id = 'title-screen';
     div.innerHTML = `
       <div class="title-logo">
-        <div class="title-main">AiSlopcraft</div>
+        <div class="title-main"><img src="${logo}" alt="AiSlopcraft"></div>
         <div class="title-sub">Minecraft Beta 1.7.3</div>
         <div class="splash">${this.splash}</div>
       </div>
-      <button class="btn btn-big" id="btn-singleplayer">Singleplayer</button>
-      <button class="btn" id="btn-options">Options...</button>
-      <div class="title-foot">Minecraft Beta 1.7.3 Clone · Procedural WebGL + WebAudio · Not affiliated with Mojang</div>
+      <div class="title-buttons">
+        <button class="btn" id="btn-singleplayer">Singleplayer</button>
+        <button class="btn" disabled title="Multiplayer is not supported yet">Multiplayer</button>
+        <div class="title-button-row"><button class="btn" id="btn-options">Options...</button></div>
+      </div>
+      <div class="title-foot">AiSlopcraft · Beta-inspired</div>
+      <div class="title-disclaimer">Not affiliated with Mojang</div>
     `;
     this.root.appendChild(div);
     div.querySelector('#btn-singleplayer').addEventListener('click', () => {
@@ -94,6 +106,19 @@ export class UI {
       this.optionsMenu = null;
       this.game.saveSettings?.();
     });
+  }
+
+  buildLoading() {
+    const screen = document.createElement('div');
+    screen.id = 'loading-screen'; screen.className = 'screen loading-screen';
+    screen.style.display = 'none';
+    screen.innerHTML = '<div>Loading world</div><div>Building terrain</div>';
+    this.root.appendChild(screen);
+  }
+
+  showLoading(show) {
+    const screen = document.getElementById('loading-screen');
+    if (screen) screen.style.display = show ? 'flex' : 'none';
   }
 
   // ---------- HUD ----------
@@ -224,8 +249,8 @@ export class UI {
       <div class="panel inv-panel">
         <div class="inv-top-row">
           <div class="armor-section" id="armor-section">
-            <div class="inv-title">Armor</div>
-            <div class="armor-grid" id="armor-grid"></div>
+            <div class="armor-layout"><div class="armor-grid" id="armor-grid"></div>
+              <div class="player-preview"><img src="${playerPreview}" alt="Player preview"></div></div>
           </div>
           <div class="craft-section">
             <div class="inv-title" id="craft-title">Crafting</div>
@@ -236,7 +261,7 @@ export class UI {
             </div>
           </div>
         </div>
-        <div class="inv-title">Inventory <span class="inv-hint">(Shift-click to quick move)</span></div>
+        <div class="inv-title inventory-label">Inventory</div>
         <div class="inv-main" id="inv-main"></div>
         <div class="inv-hotbar" id="inv-hotbar"></div>
       </div>

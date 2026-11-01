@@ -103,12 +103,25 @@ export class FirstPersonArm {
 
   buildArmMesh() {
     const arm = new THREE.Group();
-    // Keep the skin and sleeve as two clean, adjoining sections. The previous
-    // dimensions overlapped by 7 cm, so whichever side faced the camera could
-    // show a shirt-colored patch over the hand (or a skin patch on the sleeve).
-    const sleeve = makeShadedBox(arm, 0.19, 0.22, 0.19, 0, -0.09, 0, 0x00a8a8);
-    const cuff = makeShadedBox(arm, 0.192, 0.025, 0.192, 0, -0.1875, 0, 0x008f91);
-    const hand = makeShadedBox(arm, 0.17, 0.33, 0.17, 0, -0.365, 0, 0xd8a57c);
+    // Adjoining segments use one pixelated skin texture; their geometry does
+    // not overlap, preventing seams or z-fighting in the overlay pass.
+    let skinTexture = null;
+    if (typeof document !== 'undefined') {
+      const skin = document.createElement('canvas');
+      skin.width = skin.height = 16;
+      const ctx = skin.getContext('2d');
+      ctx.fillStyle = '#b98b76'; ctx.fillRect(0, 0, 16, 16);
+      for (const [x,y,w,h,c] of [[1,1,4,3,'#c79880'],[8,1,3,5,'#ac7c68'],[3,6,3,4,'#b2806c'],[11,9,4,4,'#c2937b'],[5,12,3,3,'#a87864']]) {
+        ctx.fillStyle = c; ctx.fillRect(x,y,w,h);
+      }
+      skinTexture = new THREE.CanvasTexture(skin);
+      skinTexture.magFilter = skinTexture.minFilter = THREE.NearestFilter;
+      skinTexture.generateMipmaps = false; skinTexture.colorSpace = THREE.SRGBColorSpace;
+    }
+    const sleeve = makeShadedBox(arm, 0.19, 0.22, 0.19, 0, -0.09, 0, 0xffffff);
+    const cuff = makeShadedBox(arm, 0.192, 0.025, 0.192, 0, -0.1875, 0, 0xffffff);
+    const hand = makeShadedBox(arm, 0.17, 0.33, 0.17, 0, -0.365, 0, 0xffffff);
+    for (const part of [sleeve, cuff, hand]) part.material.map = skinTexture;
     hand.name = 'hand';
     sleeve.name = 'sleeve';
     cuff.name = 'cuff';

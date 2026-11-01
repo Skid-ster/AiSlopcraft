@@ -134,35 +134,14 @@ export class Sky {
     c.width = 128; c.height = 128;
     const ctx = c.getContext('2d');
     ctx.clearRect(0, 0, 128, 128);
-    const cell = 4;
-    const n = 128 / cell;
-    const rand = (() => {
-      let s = 98765;
-      return () => {
-        s = (s * 1103515245 + 12345) & 0x7fffffff;
-        return s / 0x7fffffff;
-      };
-    })();
-    const grid = [];
-    for (let y = 0; y < n; y++) {
-      grid[y] = [];
-      for (let x = 0; x < n; x++) grid[y][x] = rand() > 0.72;
-    }
-    const g2 = grid.map(r => r.slice());
-    for (let y = 0; y < n; y++) {
-      for (let x = 0; x < n; x++) {
-        let count = 0;
-        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-          count += grid[(y + dy + n) % n][(x + dx + n) % n] ? 1 : 0;
-        }
-        g2[y][x] = count >= 5;
-      }
-    }
+    // Sparse, broad rectangular cloud bands rather than a dense field of flecks.
+    let seed = 98765;
+    const rand = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
     ctx.fillStyle = 'rgba(255,255,255,0.95)';
-    for (let y = 0; y < n; y++) {
-      for (let x = 0; x < n; x++) {
-        if (g2[y][x]) ctx.fillRect(x * cell, y * cell, cell, cell);
-      }
+    for (let i = 0; i < 12; i++) {
+      const x = Math.floor(rand() * 32) * 4, y = Math.floor(rand() * 32) * 4;
+      const w = (3 + Math.floor(rand() * 7)) * 4, h = (1 + Math.floor(rand() * 2)) * 4;
+      for (const dx of [-128, 0, 128]) for (const dy of [-128, 0, 128]) ctx.fillRect(x + dx, y + dy, w, h);
     }
     const t = new THREE.CanvasTexture(c);
     t.magFilter = THREE.NearestFilter;
