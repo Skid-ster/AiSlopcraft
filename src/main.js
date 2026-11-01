@@ -4,6 +4,7 @@ import { World } from './world/world.js';
 import { CH, WORLD_H, SEA_LEVEL } from './world/chunk.js';
 import { buildChunkMesh } from './world/mesher.js';
 import { buildAtlas, buildItemIcons, buildEmissionAtlas } from './world/textures.js';
+import { extractBlockSprites, paintBlockSprites } from './world/resource-pack.js';
 import {
   AIR, WATER, WATER_FLOW, LAVA, TORCH, CRAFTING_TABLE, FURNACE, SAND, GRAVEL, LEAVES, GRASS, DIRT,
   LOG, GLASS, getBlock, breakTime, canHarvest, ITEMS, itemName, isBlock, STONE, COBBLE,
@@ -47,6 +48,9 @@ window.addEventListener('resize', () => {
 
 // ---- textures and shared lighting ----
 const atlasCanvas = buildAtlas();
+const defaultAtlas = document.createElement('canvas');
+defaultAtlas.width = defaultAtlas.height = 256;
+defaultAtlas.getContext('2d').drawImage(atlasCanvas, 0, 0);
 const atlasTex = new THREE.CanvasTexture(atlasCanvas);
 atlasTex.magFilter = THREE.NearestFilter;
 atlasTex.minFilter = THREE.NearestFilter;
@@ -72,6 +76,16 @@ waterTex.wrapS = waterTex.wrapT = THREE.RepeatWrapping;
 waterTex.colorSpace = THREE.SRGBColorSpace;
 
 const lighting = new Lighting({ atlasTexture: atlasTex, emissionTexture: buildEmissionAtlas(atlasCanvas) });
+let atlasGeneration = 0;
+function refreshAtlas() {
+  atlasTex.needsUpdate = true;
+  const updated = buildEmissionAtlas(atlasCanvas);
+  const emission = lighting.emissionTexture;
+  emission.image.getContext('2d').drawImage(updated.image, 0, 0);
+  emission.needsUpdate = true;
+  updated.dispose();
+}
+
 const solidMat = lighting.createMaterial({ name: 'Terrain', voxel: true, map: atlasTex, emissionMap: true });
 const cutoutMat = lighting.createMaterial({ name: 'TerrainCutout', voxel: true, map: atlasTex, emissionMap: true, cutout: true, doubleSide: true });
 const waterMat = lighting.createMaterial({ name: 'Water', voxel: true, map: waterTex, water: true, transparent: true, opacity: 0.78, doubleSide: true, depthWrite: false });
@@ -109,6 +123,28 @@ vehicles.load(savedGame?.vehicles);
 const game = {
   world, player, audio, sky, mobs, renderer, lighting, fluids, redstone, vehicles,
   atlasCanvas,
+  async importResourcePack(file) {
+    if (file.size > 32 * 1024 * 1024) throw new Error('Pack is too large (maximum 32 MB).');
+    const generation = ++atlasGeneration;
+    const sprites = extractBlockSprites(new Uint8Array(await file.arrayBuffer()));
+    const staged = document.createElement('canvas'); staged.width = staged.height = 256;
+    staged.getContext('2d').drawImage(defaultAtlas, 0, 0);
+    const count = await paintBlockSprites(staged, sprites);
+    if (generation !== atlasGeneration) throw new Error('Import cancelled.');
+    atlasCanvas.getContext('2d').clearRect(0, 0, 256, 256);
+    atlasCanvas.getContext('2d').drawImage(staged, 0, 0);
+    refreshAtlas();
+    let saved = true;
+    try { localStorage.setItem('aislopcraft:block-atlas', atlasCanvas.toDataURL('image/png')); } catch { saved = false; }
+    return { count, saved };
+  },
+  resetResourcePack() {
+    atlasGeneration++;
+    atlasCanvas.getContext('2d').clearRect(0, 0, 256, 256);
+    atlasCanvas.getContext('2d').drawImage(defaultAtlas, 0, 0);
+    refreshAtlas();
+    try { localStorage.removeItem('aislopcraft:block-atlas'); } catch {}
+  },
   itemIconsCanvas: buildItemIcons(),
   settings,
   renderDistance: settings.renderDistance,
@@ -292,6 +328,22 @@ const game = {
 };
 const ui = new UI(game);
 game.ui = ui;
+// Restore the locally imported atlas, never upload the pack to a server.
+try {
+  const savedAtlas = localStorage.getItem('aislopcraft:block-atlas');
+  if (savedAtlas?.startsWith('data:image/png;base64,') && savedAtlas.length < 2_000_000) {
+    const img = new Image();
+    const generation = atlasGeneration;
+    img.onload = () => {
+      if (generation !== atlasGeneration) return;
+      if (img.width !== 256 || img.height !== 256) return;
+      atlasCanvas.getContext('2d').clearRect(0, 0, 256, 256);
+      atlasCanvas.getContext('2d').drawImage(img, 0, 0);
+      refreshAtlas(); ui._iconCache.clear();
+    };
+    img.src = savedAtlas;
+  }
+} catch {}
 game.applySettings();
 if (Number.isFinite(savedGame?.timeOfDay)) sky.time = ((savedGame.timeOfDay % 1) + 1) % 1;
 let saveClock = 0;
