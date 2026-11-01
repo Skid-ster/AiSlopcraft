@@ -168,3 +168,24 @@ jobs:
             visual-smoke.log
             build/Testing/Temporary/LastTest.log
           if-no-files-found: warn
+
+  windows_vs2026:
+    name: windows-2025-vs2026 / CMD build helper / CTest
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 55
+    steps:
+      - name: Checkout (pinned actions/checkout v4)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Build and test with detected Visual Studio 2026 MSVC
+        shell: cmd
+        run: call build-windows.cmd
+
+      - name: Assert three named tests were discovered
+        shell: pwsh
+        run: |
+          $output = ctest --test-dir build/Release -C Release -N
+          $output | Out-String | Write-Host
+          if ($LASTEXITCODE -ne 0 -or (($output | Out-String) -notmatch '(?m)^Total Tests:\s*3\s*$')) {
+            throw 'Expected three CTests on Visual Studio 2026'
+          }

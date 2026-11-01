@@ -17,7 +17,7 @@ An **unofficial, independently implemented** C++20 voxel-sandbox project targeti
 
 ### Windows (primary target; Release build/CTest passed in CI; graphical window not tested)
 
-Requires Windows 10/11, Visual Studio 2022 with C++ workload/MSVC and Windows SDK, CMake ≥3.20, a GPU/driver providing OpenGL ≥3.3, and internet for the **pinned** SDL3 3.4.18 archive. SDL3 is built from source on a clean checkout if not installed. A **prebuilt CI artifact** contains the executable and assets, not the CMake/source files; clone the source repository if you want to compile it.
+Requires Windows 10/11, **Visual Studio or Build Tools with the MSVC C++ workload and a Windows SDK** (2022 or 2026), CMake ≥3.20, a GPU/driver providing OpenGL ≥3.3, and internet for the **pinned** SDL3 3.4.18 archive. SDL3 is built from source on a clean checkout if not installed. A **prebuilt CI artifact** contains the executable and assets, not the CMake/source files; clone the source repository if you want to compile it.
 
 From **Command Prompt in the source repository root**, use the included [`build-windows.cmd`](build-windows.cmd):
 
@@ -26,17 +26,9 @@ build-windows.cmd
 build\Release\aislopcraft.exe
 ```
 
-The script configures x64, compiles Release, runs the three CTests and the headless self-test, and stops on failure. It does not start a graphical window while building. It can be invoked from any working directory, but launch the resulting game from the repository root to keep local saves there. Equivalent manual build commands from the repository root:
+The helper finds the installed MSVC toolchain (including Visual Studio/Build Tools 2022 or 2026) using `vswhere` or an already initialized x64 Developer Command Prompt; it selects Ninja if present or NMake otherwise. **It does not require a version-specific Visual Studio CMake generator.** It configures a fresh *single-configuration* Release tree at `build/Release/`, ignoring a previously failed Visual Studio configure in `build/`; compiles, runs the three CTests and the headless self-test, and stops on failure. It does not start a graphical window while building. It can be invoked from any working directory, but launch the resulting game from the repository root to keep local saves there. If the MSVC C++ workload is missing, the script reports that directly rather than claiming a particular Visual Studio year must be installed.
 
-```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-cmake --build build --config Release --parallel 4
-ctest --test-dir build -C Release --output-on-failure
-.\build\Release\aislopcraft.exe --selftest
-.\build\Release\aislopcraft.exe
-```
-
-Build Debug by changing `--config Release` to `--config Debug`. Keep the copied `build/Release/assets/` folder beside the executable. If distributing, copy the executable **and** `assets/` together; builds/saves are not committed.
+For a **manual IDE-generator build** instead, select the generator matching your installed version: `Visual Studio 17 2022` requires CMake ≥3.21, while `Visual Studio 18 2026` requires CMake ≥4.2 ([CMake generator documentation](https://cmake.org/cmake/help/latest/manual/cmake-generators.7.html)). Use a separate build directory for each generator—CMake cannot reuse a build tree created with a different generator. The helper builds Release; for a Debug configuration, configure a separate Debug tree manually. Keep the copied `build/Release/assets/` folder beside the executable. If distributing, copy the executable **and** `assets/` together; builds/saves are not committed.
 
 ### Linux (local headless build/tests passed; CI software-GL screenshots produced)
 
