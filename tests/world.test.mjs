@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { World } from '../src/world/world.js';
 import { buildChunkMesh } from '../src/world/mesher.js';
 import { CH } from '../src/world/chunk.js';
+import { WorldGen } from '../src/world/worldgen.js';
 import { matchRecipe, smeltResult } from '../src/ui/recipes.js';
 import { breakTime, canHarvest, STONE, DIAMOND_ORE, AIR, TORCH } from '../src/world/blocks.js';
 
@@ -19,6 +20,13 @@ for (let cz = -1; cz <= 1; cz++) for (let cx = -1; cx <= 1; cx++) world.generate
 
 const c0 = world.getChunk(0, 0);
 const idx = (x, y, z) => (y * CH + z) * CH + x;
+
+// Tree crowns surround the trunk top and have a leaf cap, with no missing layer.
+const treeBlocks = new Map();
+const treeWorld = { getBlockGen(x,y,z) { return treeBlocks.get(`${x},${y},${z}`) ?? AIR; }, setBlockGen(x,y,z,id) { treeBlocks.set(`${x},${y},${z}`,id); } };
+new WorldGen('tree-test').placeTree(treeWorld, 0, 20, 0, { nextInt: () => 0, next: () => 0.9 });
+check('tree canopy caps the trunk', treeWorld.getBlockGen(0, 24, 0) === 18 && treeWorld.getBlockGen(0, 23, 0) === 17);
+check('tree canopy has continuous upper and lower leaf layers', [21,22,23,24].every(y => treeWorld.getBlockGen(1,y,0) === 18));
 
 // terrain sanity
 let nonAir = 0, water = 0, logs = 0;

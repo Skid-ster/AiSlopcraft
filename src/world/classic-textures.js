@@ -36,7 +36,7 @@ export function applyClassicTextures(ctx) {
   };
   const grass = (x,y) => {
     const clump=hash(Math.floor(x/2),Math.floor(y/2),6);
-    return shade([116,171,64],grain(x,y,6)+(clump<.18?-10:clump>.8?8:0));
+    return shade([86,123,57],grain(x,y,6)+(clump<.18?-10:clump>.8?8:0));
   };
   put(TILES.stone,p=>fill(p,stone));
   put(TILES.dirt,p=>fill(p,dirt));
@@ -80,7 +80,7 @@ export function applyClassicTextures(ctx) {
     return shade(row===3||seam?[112,87,52]:row===0?[171,139,89]:[157,125,78],grain(x,y,32)+(row===2&&hash(x,y,33)<.17?-9:0));
   }));
   put(TILES.leaves,p=>{
-    fill(p,(x,y)=>shade([67,126,43],grain(x,y,34)+(hash(Math.floor(x/2),Math.floor(y/2),35)-.5)*30));
+    fill(p,(x,y)=>shade([50,88,40],grain(x,y,34)+(hash(Math.floor(x/2),Math.floor(y/2),35)-.5)*30));
     // Small irregular openings with leafy borders, not independent random dots.
     for(const [x,y] of [[1,2],[6,1],[11,3],[3,7],[8,6],[14,8],[5,12],[10,11],[1,14],[15,14]]) {
       p(x,y,[0,0,0],0); if(hash(x,y,8)>.35) p(x+1,y,[0,0,0],0);

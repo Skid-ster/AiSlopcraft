@@ -681,3 +681,96 @@ html, body {
   .mc-key-row { grid-template-columns: 1fr 140px; }
   .options-page { padding: 12px; }
 }
+
+/* Visual pass: restrained, pixel-sharp classic presentation. */
+@font-face {
+  font-family: 'Pixel UI';
+  src: url('./ui/fonts/PressStart2P-Regular.ttf') format('truetype');
+  font-display: swap;
+}
+#ui { font-family: 'Pixel UI', monospace; }
+.title-screen {
+  background: rgba(0,0,0,.28);
+  backdrop-filter: blur(3px);
+  gap: 0;
+}
+.title-logo { margin: 0 0 60px; }
+.title-main {
+  font-family: Impact, 'Arial Black', sans-serif;
+  text-transform: uppercase;
+  font-size: clamp(46px, 7vw, 90px);
+  letter-spacing: 1px;
+  color: #c5c5c5;
+  -webkit-text-stroke: 2px #171717;
+  text-shadow: 0 3px #fff, 0 6px #555, 0 10px #222, 4px 13px #111, 5px 15px #000;
+}
+.title-sub { font-size: 10px; margin-top: 15px; letter-spacing: 0; color: #ddd; }
+.splash { font-size: 12px; right: -42px; bottom: -13px; }
+.title-buttons { width: min(400px, 88vw); display: flex; flex-direction: column; gap: 10px; }
+.title-buttons .btn { width: 100%; min-width: 0; }
+.title-button-row { margin-top: 52px; display: flex; justify-content: center; }
+.title-button-row .btn { width: 50%; }
+.title-foot, .title-disclaimer { position: absolute; bottom: 9px; font-size: 9px; color: white; text-shadow: 2px 2px #333; }
+.title-foot { left: 10px; }
+.title-disclaimer { right: 10px; }
+.btn { min-width: 340px; padding: 10px 12px; font-size: 12px; font-weight: normal; border-radius: 0; }
+.btn-big { min-width: 400px; font-size: 12px; padding: 12px; }
+.btn:disabled { color: #888; background: linear-gradient(#606060,#555); cursor: not-allowed; text-shadow: 2px 2px #333; }
+.btn:disabled:hover { color: #888; background: linear-gradient(#606060,#555); }
+.loading-screen {
+  z-index: 100; gap: 28px; color: white; font-size: 15px;
+  text-shadow: 2px 2px #3f3f3f;
+  background: linear-gradient(rgba(0,0,0,.68),rgba(0,0,0,.68)), url('./ui/dirt.svg') repeat;
+  background-size: auto, 64px 64px;
+  image-rendering: pixelated;
+}
+.crosshair { font-size: 0; width: 20px; height: 20px; mix-blend-mode: difference; }
+.crosshair::before, .crosshair::after { content: ''; position: absolute; background: #fff; }
+.crosshair::before { left: 9px; top: 2px; width: 2px; height: 16px; }
+.crosshair::after { left: 2px; top: 9px; width: 16px; height: 2px; }
+.hotbar { bottom: 0; gap: 0; padding: 3px; border: 2px solid #161616; box-shadow: inset 0 2px #777; background: rgba(32,32,32,.75); }
+.hotbar-slot { width: 48px; height: 48px; background: rgba(78,78,78,.52); border: 2px solid; border-color: #383838 #777 #777 #383838; }
+.hotbar-slot.selected { outline: 2px solid #fff; box-shadow: 0 0 0 4px #333; background: rgba(140,140,140,.72); }
+.status-bars { bottom: 56px; width: 440px; }
+.hearts { gap: 0; }
+.heart { display: inline-block; width: 22px; height: 22px; font-size: 0; text-shadow: none; background-size: 100% 100%; image-rendering: pixelated; }
+.heart.full { background-image: url('./ui/heart-full.svg'); }
+.heart.half { opacity: 1; background-image: url('./ui/heart-half.svg'); }
+.heart.empty { background-image: url('./ui/heart-empty.svg'); }
+.armor-bar { position: absolute; left: 0; bottom: 23px; }
+.water-bar { bottom: 82px; transform: translateX(-220px); }
+.held-name { bottom: 108px; font-size: 12px; }
+.hint { font-size: 9px; line-height: 1.5; }
+.panel-screen { background: rgba(0,0,0,.55); }
+.panel { box-shadow: none; padding: 12px 14px; }
+.inv-top-row { gap: 22px; align-items: flex-start; margin-bottom: 8px; }
+.armor-layout { display: flex; gap: 2px; }
+.armor-grid { grid-template-columns: 44px; gap: 0; }
+.player-preview { width: 124px; height: 176px; background: #080808; border: 2px solid; border-color: #555 #fff #fff #555; display: flex; align-items: center; justify-content: center; }
+.player-preview img { width: 96px; height: 144px; image-rendering: pixelated; }
+.inv-title { font-size: 12px; font-weight: normal; margin: 8px 0; }
+.inventory-label { font-size: 0; height: 0; margin: 0; }
+.craft-area { gap: 10px; }
+.craft-arrow { font-family: monospace; font-size: 32px; color: #888; }
+.craft-out { width: 44px; height: 44px; }
+.slot-placeholder { font-family: monospace; font-size: 21px; }
+.slot .count { font-size: 11px; }
+.pause-inner h2, .mc-title { font-size: 17px; }
+.mc-btn, .mc-slider { font-size: 10px; }
+.slot-placeholder svg { width: 28px; height: 28px; image-rendering: pixelated; }
+.splash { transform: rotate(-16deg); }
+@media (max-width: 520px) {
+  .title-main { font-size: clamp(35px, 10vw, 52px); }
+  .title-sub { font-size: 8px; }
+  .title-logo { margin-bottom: 46px; }
+  .title-foot { left: 8px; right: auto; text-align: left; font-size: 7px; }
+  .title-disclaimer { right: 8px; font-size: 7px; }
+  .hotbar { transform: translateX(-50%) scale(.78); transform-origin: bottom center; bottom: 0; }
+  .hotbar-slot { width: 48px; height: 48px; }
+  .status-bars { width: 344px; max-width: 94vw; bottom: 44px; }
+  .heart { width: 17px; height: 17px; }
+  .inv-panel { transform: scale(.76); max-width: none; max-height: none; overflow: visible; }
+  .mc-btn, .mc-slider { font-size: 9px; }
+}
+.title-main { width: min(700px, 90vw); line-height: 0; -webkit-text-stroke: 0; text-shadow: none; }
+.title-main img { display: block; width: 100%; height: auto; image-rendering: pixelated; }

@@ -246,33 +246,48 @@ const game = {
     location.reload();
   },
   start() {
-    if (this.started) return;
-    this.started = true;
-    const spawn = this.prepareSpawn();
-    player.respawn(spawn.y, spawn.x, spawn.z);
-    const saved = readSave()?.player;
-    if (saved && Array.isArray(saved.pos) && saved.pos.length === 3 && saved.pos.every(Number.isFinite)) {
-      player.pos.fromArray(saved.pos); player.yaw = Number(saved.yaw) || 0; player.pitch = Number(saved.pitch) || 0;
-      player.health = Math.max(1, Math.min(player.maxHealth, Number(saved.health) || player.maxHealth));
-      if (Array.isArray(saved.inventory) && saved.inventory.length === 36) player.inventory = saved.inventory;
-      if (Array.isArray(saved.armor) && saved.armor.length === 4) player.armor = saved.armor;
-      player.hotbarIndex = Math.max(0, Math.min(8, Number(saved.hotbarIndex) || 0));
-      if (saved.stats && typeof saved.stats === 'object') Object.assign(player.stats, saved.stats);
-      camera.position.set(player.pos.x, player.pos.y + 1.62, player.pos.z);
-    }
-    updateChunks(true);
-    processChunkQueue();
-    if (mobs.mobs.length === 0) mobs.spawnInitial(player);
-    if (!loadedItems) {
-      loadedItems = true;
-      if (Array.isArray(savedGame?.items)) for (const item of savedGame.items.slice(0, 4096)) {
-        if (!item || !Number.isInteger(item.id) || !Number.isFinite(item.count) || item.count <= 0 || !Array.isArray(item.pos) || item.pos.length !== 3 || !item.pos.every(Number.isFinite)) continue;
-        spawnItem(item.pos[0] - 0.5, item.pos[1] - 0.3, item.pos[2] - 0.5, item.id, item.count, item.damage || 0);
-        const entity = itemEntities[itemEntities.length - 1];
-        entity.vy = Number.isFinite(item.vy) ? item.vy : 0;
-        entity.age = Number.isFinite(item.age) ? Math.max(0, item.age) : 0;
+    if (this.started || this.loading) return;
+    this.loading = true;
+    ui.showLoading(true);
+    // Give the loading screen a frame to paint before synchronous spawn setup.
+    requestAnimationFrame(() => setTimeout(() => {
+      try {
+        this.started = true;
+        const spawn = this.prepareSpawn();
+        player.respawn(spawn.y, spawn.x, spawn.z);
+        const saved = readSave()?.player;
+        if (saved && Array.isArray(saved.pos) && saved.pos.length === 3 && saved.pos.every(Number.isFinite)) {
+          player.pos.fromArray(saved.pos); player.yaw = Number(saved.yaw) || 0; player.pitch = Number(saved.pitch) || 0;
+          player.health = Math.max(1, Math.min(player.maxHealth, Number(saved.health) || player.maxHealth));
+          if (Array.isArray(saved.inventory) && saved.inventory.length === 36) player.inventory = saved.inventory;
+          if (Array.isArray(saved.armor) && saved.armor.length === 4) player.armor = saved.armor;
+          player.hotbarIndex = Math.max(0, Math.min(8, Number(saved.hotbarIndex) || 0));
+          if (saved.stats && typeof saved.stats === 'object') Object.assign(player.stats, saved.stats);
+          camera.position.set(player.pos.x, player.pos.y + 1.62, player.pos.z);
+        }
+        updateChunks(true);
+        processChunkQueue();
+        if (mobs.mobs.length === 0) mobs.spawnInitial(player);
+        if (!loadedItems) {
+          loadedItems = true;
+          if (Array.isArray(savedGame?.items)) for (const item of savedGame.items.slice(0, 4096)) {
+            if (!item || !Number.isInteger(item.id) || !Number.isFinite(item.count) || item.count <= 0 || !Array.isArray(item.pos) || item.pos.length !== 3 || !item.pos.every(Number.isFinite)) continue;
+            spawnItem(item.pos[0] - 0.5, item.pos[1] - 0.3, item.pos[2] - 0.5, item.id, item.count, item.damage || 0);
+            const entity = itemEntities[itemEntities.length - 1];
+            entity.vy = Number.isFinite(item.vy) ? item.vy : 0;
+            entity.age = Number.isFinite(item.age) ? Math.max(0, item.age) : 0;
+          }
+        }
+      } catch (error) {
+        this.started = false;
+        ui.setMode('title');
+        document.querySelector('.title-sub').textContent = 'Could not load world. Please retry.';
+        console.error('World loading failed:', error);
+      } finally {
+        this.loading = false;
+        ui.showLoading(false);
       }
-    }
+    }, 0));
   },
 };
 const ui = new UI(game);

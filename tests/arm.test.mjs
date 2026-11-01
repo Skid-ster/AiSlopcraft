@@ -26,8 +26,8 @@ function sameBaseHue(mesh, hex) {
   const ratios = pairs.filter(([, base]) => base >= 1e-6).map(([actual, base]) => actual / base);
   return Math.max(...ratios) - Math.min(...ratios) < 1e-5;
 }
-assert.ok(sameBaseHue(hand, 0xd8a57c), 'all hand faces retain the skin base hue');
-assert.ok(sameBaseHue(sleeve, 0x00a8a8), 'all sleeve faces retain the shirt base hue');
+assert.ok(sameBaseHue(hand, 0xffffff), 'hand faces preserve neutral shading for the skin texture');
+assert.ok(sameBaseHue(sleeve, 0xffffff), 'forearm faces preserve neutral shading for the skin texture');
 
 const failingRenderer = {
   autoClear: true,
