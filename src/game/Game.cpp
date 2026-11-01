@@ -90,17 +90,22 @@ int Game::visualSmoke(const std::filesystem::path& directory) {
     screenshotPath_=directory/"title.png";
     screenshotRequested_=true;
     frame();
-    bool titleOkay=screenshotOk_;
+    bool titleOkay=screenshotOk_,targetOkay=false;
     if(titleOkay) {
         createCreative_=true; // show the starter item art in the HUD frame
         startWorld(true);
         if(world_ && screen_==Screen::Playing) {
+            player_.pitch=-40; // exercise the in-reach selection outline in GL
+            updateTarget();
+            targetOkay=target_.has_value();
+            if(!targetOkay)
+                std::cerr<<"VISUAL SMOKE FAILED: expected visible spawn terrain target\n";
             screenshotPath_=directory/"world.png";
             screenshotRequested_=true;
             frame();
         } else screenshotOk_=false;
     }
-    bool worldOkay=screenshotOk_ && titleOkay;
+    bool worldOkay=screenshotOk_ && titleOkay && targetOkay;
     bool paletteOkay=false;
     if(worldOkay) {
         screen_=Screen::Creative;

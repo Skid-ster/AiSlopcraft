@@ -133,6 +133,19 @@ void Game::drawHud() {
             floorMod16((int)std::floor(player_.position.x))])+"  SEED: "+std::to_string(world_->seed()));
         line("TICKS: "+std::to_string(world_->time()%24000)+"  MODE: "+
             (player_.creative?"CREATIVE":"SURVIVAL")+(player_.flying?" / FLY":""));
+        int keyCount=0;
+        const bool* keys=SDL_GetKeyboardState(&keyCount);
+        std::string movement;
+        const SDL_Scancode movementKeys[]={SDL_SCANCODE_W,SDL_SCANCODE_A,
+                                           SDL_SCANCODE_S,SDL_SCANCODE_D};
+        const char movementLabels[]="WASD";
+        for(int i=0;i<4;++i)
+            if((int)movementKeys[i]<keyCount && keys[movementKeys[i]])
+                movement+=movementLabels[i];
+        line("INPUT: "+std::string(captured_?"MOUSE CAPTURED":"CLICK TO CAPTURE")+
+             "  LMB: "+(mouseLeft_?"DOWN":"UP")+"  TARGET: "+
+             (target_?blockDef(target_->block.id).displayName:"NONE")+
+             "  WASD: "+(movement.empty()?"NONE":movement));
         line("GL: "+renderer_.driver());
     }
     if(!message_.empty())renderer_.uiText(message_,12,height_-size-83*s,0.8f,0xf5d89b);
