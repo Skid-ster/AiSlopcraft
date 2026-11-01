@@ -1,11 +1,13 @@
 // Procedural 16x16 pixel-art texture atlas mimicking Minecraft Beta 1.7.3 textures.
 import * as THREE from 'three';
 import { TILES } from './blocks.js';
+import { applyClassicTextures } from './classic-textures.js';
 
 const TS = 16;
 const COLS = 16;
 
 function px(ctx, x, y, r, g, b, a = 255) {
+  if (a === 0) { ctx.clearRect(x, y, 1, 1); return; }
   ctx.fillStyle = `rgba(${r | 0},${g | 0},${b | 0},${a / 255})`;
   ctx.fillRect(x, y, 1, 1);
 }
@@ -50,7 +52,10 @@ export function buildAtlas() {
 
   const put = (tile, drawFn) => {
     const ox = (tile % COLS) * TS, oy = Math.floor(tile / COLS) * TS;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(ox, oy, TS, TS); ctx.clip();
     drawFn(ox, oy, tileRand(tile * 7919 + 17));
+    ctx.restore();
   };
 
   // --- terrain ---
@@ -543,6 +548,11 @@ export function buildAtlas() {
     for (let y = 3; y < 7; y++) for (let x = 6; x < 10; x++) px(ctx, ox + x, oy + y, 242, 180 + rnd() * 60, 52);
     px(ctx, ox + 7, oy + 2, 255, 220, 120); px(ctx, ox + 8, oy + 2, 255, 210, 100);
   });
+  put(TILES.redstone_torch_off, (ox, oy) => {
+    for (let x = 0; x < TS; x++) for (let y = 0; y < TS; y++) px(ctx, ox + x, oy + y, 0, 0, 0, 0);
+    for (let y = 6; y < 16; y++) { px(ctx, ox + 7, oy + y, 100, 70, 48); px(ctx, ox + 8, oy + y, 120, 86, 56); }
+    for (let y = 3; y < 7; y++) for (let x = 6; x < 10; x++) px(ctx, ox + x, oy + y, 72, 24, 22);
+  });
   put(TILES.ladder, (ox, oy, rnd) => {
     for (let x = 0; x < TS; x++) for (let y = 0; y < TS; y++) px(ctx, ox + x, oy + y, 0, 0, 0, 0);
     for (let y = 0; y < TS; y++) {
@@ -680,6 +690,18 @@ export function buildAtlas() {
     for (let y = 2; y < 7; y++) for (let x = 3; x < 7; x++) px(ctx, ox + x, oy + y, 0, 0, 0, 0);
     for (let y = 2; y < 7; y++) for (let x = 9; x < 13; x++) px(ctx, ox + x, oy + y, 0, 0, 0, 0);
   });
+  put(TILES.redstone_wire, (ox, oy) => {
+    for (let y = 0; y < TS; y++) for (let x = 0; x < TS; x++) {
+      if ((x >= 6 && x <= 9) || (y >= 6 && y <= 9)) px(ctx, ox+x, oy+y, 190, 26, 20);
+    }
+  });
+  put(TILES.lever, (ox, oy) => {
+    for (let y = 0; y < TS; y++) for (let x = 0; x < TS; x++) px(ctx, ox+x, oy+y, 130, 110, 80);
+  });
+  put(TILES.repeater, (ox, oy) => {
+    for (let y = 0; y < TS; y++) for (let x = 0; x < TS; x++) px(ctx, ox+x, oy+y, 155, 155, 155);
+    for (let y = 3; y < 13; y++) for (let x = 7; x < 9; x++) px(ctx, ox+x, oy+y, 180, 30, 20);
+  });
   for (let stage = 0; stage < 8; stage++) {
     put(TILES.crops0 + stage, (ox, oy, rnd) => {
       for (let y = 0; y < TS; y++) for (let x = 0; x < TS; x++) px(ctx, ox + x, oy + y, 0, 0, 0, 0);
@@ -698,6 +720,10 @@ export function buildAtlas() {
       }
     });
   }
+  put(TILES.bed_foot, (ox, oy, rnd) => {
+    noiseFill(ctx, ox, oy, [172, 42, 38], 8, rnd);
+    for (let x = 0; x < TS; x++) { px(ctx, ox+x, oy, 132, 28, 26); px(ctx, ox+x, oy+15, 132, 28, 26); }
+  });
   put(TILES.bed_top, (ox, oy, rnd) => {
     noiseFill(ctx, ox, oy, [172, 42, 38], 8, rnd);
     for (let y = 0; y < 5; y++) for (let x = 1; x < 15; x++) px(ctx, ox + x, oy + y, 236, 236, 238);
@@ -769,6 +795,7 @@ export function buildAtlas() {
   });
   put(TILES.cake_bottom, (ox, oy, rnd) => noiseFill(ctx, ox, oy, [184, 124, 62], 8, rnd));
 
+  applyClassicTextures(ctx);
   return canvas;
 }
 
@@ -811,7 +838,9 @@ export function buildItemIcons() {
   const ctx = canvas.getContext('2d');
   const draw = (idx, fn) => {
     const ox = (idx % 16) * 16, oy = Math.floor(idx / 16) * 16;
+    ctx.save(); ctx.beginPath(); ctx.rect(ox, oy, 16, 16); ctx.clip();
     fn(ox, oy, tileRand(idx * 31 + 7));
+    ctx.restore();
   };
 
   const rect = (ox, oy, x, y, w, h, r, g, b, a = 255) => {
@@ -1085,25 +1114,26 @@ export function buildItemIcons() {
   // swords at idx 40 + mat*1 ... we generate all tool icons in one loop:
   // layout: row-major idx = 40 + mat*5 + kind where kind 0=sword,1=shovel,2=pickaxe,3=axe,4=hoe
   for (let mat = 0; mat < 5; mat++) {
+    const baseIcon = mat === 4 ? 99 : 40 + mat * 5;
     const c = toolMats[mat];
     const cd = c.map(v => Math.max(0, v - 30));
     const cl = c.map(v => Math.min(255, v + 30));
     // sword
-    draw(40 + mat * 5 + 0, (ox, oy) => {
+    draw(baseIcon + 0, (ox, oy) => {
       for (let i = 0; i < 7; i++) rect(ox, oy, 9 - i, 3 + i, 3, 3, c[0], c[1], c[2]);
       rect(ox, oy, 9, 2, 3, 3, cl[0], cl[1], cl[2]);
       rect(ox, oy, 2, 11, 5, 2, 122, 92, 52);
       rect(ox, oy, 4, 9, 3, 2, 98, 74, 42);
     });
     // shovel
-    draw(40 + mat * 5 + 1, (ox, oy) => {
+    draw(baseIcon + 1, (ox, oy) => {
       drawHandle(ox, oy, 'diag');
       rect(ox, oy, 8, 2, 5, 5, c[0], c[1], c[2]);
       rect(ox, oy, 9, 1, 3, 1, cl[0], cl[1], cl[2]);
       rect(ox, oy, 10, 6, 3, 1, cd[0], cd[1], cd[2]);
     });
     // pickaxe
-    draw(40 + mat * 5 + 2, (ox, oy) => {
+    draw(baseIcon + 2, (ox, oy) => {
       drawHandle(ox, oy, 'diag');
       rect(ox, oy, 4, 2, 9, 2, c[0], c[1], c[2]);
       rect(ox, oy, 3, 3, 2, 2, c[0], c[1], c[2]);
@@ -1111,14 +1141,14 @@ export function buildItemIcons() {
       rect(ox, oy, 4, 2, 9, 1, cl[0], cl[1], cl[2]);
     });
     // axe
-    draw(40 + mat * 5 + 3, (ox, oy) => {
+    draw(baseIcon + 3, (ox, oy) => {
       drawHandle(ox, oy, 'diag');
       rect(ox, oy, 6, 2, 5, 4, c[0], c[1], c[2]);
       rect(ox, oy, 5, 3, 2, 3, c[0], c[1], c[2]);
       rect(ox, oy, 6, 2, 5, 1, cl[0], cl[1], cl[2]);
     });
     // hoe
-    draw(40 + mat * 5 + 4, (ox, oy) => {
+    draw(baseIcon + 4, (ox, oy) => {
       drawHandle(ox, oy, 'diag');
       rect(ox, oy, 8, 2, 6, 2, c[0], c[1], c[2]);
       rect(ox, oy, 12, 4, 2, 2, c[0], c[1], c[2]);
@@ -1294,6 +1324,16 @@ export function buildItemIcons() {
     rect(ox, oy, 2, 9, 12, 4, 142, 142, 142);
     rect(ox, oy, 5, 6, 2, 3, 222, 36, 36); rect(ox, oy, 9, 6, 2, 3, 222, 36, 36);
     rect(ox, oy, 4, 10, 8, 1, 182, 32, 32);
+  });
+  // Distinct variants, rather than reusing the plain cart icon.
+  for (const [idx, chest] of [[104, true], [105, false]]) draw(idx, (ox, oy) => {
+    rect(ox, oy, 3, 2, 10, 7, ...(chest ? [160, 115, 55] : [125, 125, 125]));
+    rect(ox, oy, 3, 2, 10, 1, ...(chest ? [91, 63, 32] : [175, 175, 175]));
+    if (chest) { rect(ox, oy, 3, 5, 10, 1, 80, 55, 30); rect(ox, oy, 7, 4, 2, 3, 216, 212, 192); }
+    else { rect(ox, oy, 5, 4, 6, 3, 52, 52, 52); rect(ox, oy, 5, 7, 6, 1, 189, 189, 189); }
+    rect(ox, oy, 2, 8, 12, 4, 154, 154, 154);
+    rect(ox, oy, 3, 9, 10, 2, 118, 118, 118);
+    rect(ox, oy, 3, 12, 3, 2, 76, 76, 76); rect(ox, oy, 10, 12, 3, 2, 76, 76, 76);
   });
   return canvas;
 }

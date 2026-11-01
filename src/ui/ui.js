@@ -1,13 +1,14 @@
 // UI: title screen, hotbar, hearts, armor, inventory, crafting table, furnace, chest,
 // pause, death screen, F3 debug, hover tooltips, shift-click & 3D isometric icons.
 import {
-  ITEMS, itemName, getBlock, isBlock, TILES, WOOD_DOOR, IRON_DOOR,
+  ITEMS, itemName, getBlock, isBlock, itemStackLimit, TILES, WOOD_DOOR, IRON_DOOR,
 } from '../world/blocks.js';
 import { matchRecipe, smeltResult } from './recipes.js';
-import { FUEL_TIMES } from './furnace.js';
+import { FUEL_TIMES, interactWithFurnaceSlot } from './furnace.js';
+import { OptionsMenu } from './options.js';
 
 function stackLimit(stack) {
-  return ITEMS[stack.id]?.durability ? 1 : 64;
+  return itemStackLimit(stack.id);
 }
 
 function canStack(a, b) {
@@ -31,6 +32,7 @@ export class UI {
     this._mouseX = 0;
     this._mouseY = 0;
     this._hoveredStack = null;
+    this.optionsMenu = null;
 
     this.buildTitle();
     this.buildHud();
@@ -87,126 +89,10 @@ export class UI {
   }
 
   showOptions() {
-    if (document.getElementById('options-screen')) return;
-    const div = document.createElement('div');
-    div.className = 'screen options-screen';
-    div.id = 'options-screen';
-    const bobbing = this.game.player.viewBobbing !== false;
-    const keepInv = this.game.keepInventory !== false;
-    const shaderStyle = this.game.shaderStyle || 'classic';
-    const brightness = Math.round((this.game.brightness ?? 1) * 100);
-    const shaderDescriptions = {
-      classic: 'Classic pixel lighting with smooth voxel light.',
-      vibrant: 'Richer colors and a little extra contrast.',
-      cinematic: 'Soft sun shadows with a gentle, warm film grade.',
-      shader: 'Sun shadows, animated water reflections, and emissive blocks.',
-    };
-    div.innerHTML = `
-      <div class="panel options-panel">
-        <header class="options-heading">
-          <div class="options-eyebrow">WORLD CONFIGURATION</div>
-          <h2>Settings</h2>
-          <p>Make your world feel just right.</p>
-        </header>
-        <section class="settings-section">
-          <div class="settings-section-title"><span class="settings-icon">✦</span><div><b>Graphics</b><small>Shape the look of your world</small></div></div>
-          <label class="setting-card shader-setting" for="opt-shader">
-            <span class="setting-copy"><b>Shader style</b><small id="opt-shader-desc">${shaderDescriptions[shaderStyle] || shaderDescriptions.classic}</small></span>
-            <select id="opt-shader" aria-label="Shader style">
-              <option value="classic" ${shaderStyle === 'classic' ? 'selected' : ''}>Classic</option>
-              <option value="vibrant" ${shaderStyle === 'vibrant' ? 'selected' : ''}>Vibrant</option>
-              <option value="cinematic" ${shaderStyle === 'cinematic' ? 'selected' : ''}>Cinematic</option>
-              <option value="shader" ${shaderStyle === 'shader' ? 'selected' : ''}>Shader Lite</option>
-            </select>
-          </label>
-          <div class="setting-card range-setting">
-            <label for="opt-brightness"><span class="setting-copy"><b>Brightness</b><small>Lift dark caves without washing out daylight</small></span><span class="setting-value"><strong id="opt-bright">${brightness}</strong><small>%</small></span></label>
-            <input type="range" min="50" max="150" value="${brightness}" id="opt-brightness" aria-label="Brightness">
-          </div>
-          <div class="setting-card range-setting">
-            <label for="opt-render"><span class="setting-copy"><b>Render distance</b><small>How far the landscape is drawn</small></span><span class="setting-value"><strong id="opt-rd">${this.game.renderDistance}</strong><small>chunks</small></span></label>
-            <input type="range" min="2" max="12" value="${this.game.renderDistance}" id="opt-render" aria-label="Render distance">
-            <div class="range-ends"><span>Near · faster</span><span>Far · richer view</span></div>
-          </div>
-        </section>
-        <section class="settings-section">
-          <div class="settings-section-title"><span class="settings-icon">♫</span><div><b>Audio & controls</b><small>Fine-tune your adventure</small></div></div>
-          <div class="setting-card range-setting">
-            <label for="opt-volume"><span class="setting-copy"><b>Sound volume</b><small>Game sounds and ambience</small></span><span class="setting-value"><strong id="opt-vol">${Math.round(this.game.audio.volume * 100)}</strong><small>%</small></span></label>
-            <input type="range" min="0" max="100" value="${Math.round(this.game.audio.volume * 100)}" id="opt-volume" aria-label="Sound volume">
-          </div>
-          <div class="setting-card range-setting">
-            <label for="opt-sens-in"><span class="setting-copy"><b>Mouse sensitivity</b><small>How quickly the camera turns</small></span><span class="setting-value"><strong id="opt-sens">${Math.round(this.game.player.sensitivity * 10000)}</strong><small>%</small></span></label>
-            <input type="range" min="5" max="80" value="${Math.round(this.game.player.sensitivity * 10000)}" id="opt-sens-in" aria-label="Mouse sensitivity">
-          </div>
-          <div class="options-toggles">
-            <button class="toggle-card" id="opt-bob"><span><b>View bobbing</b><small>Subtle movement while walking</small></span><i>${bobbing ? 'ON' : 'OFF'}</i></button>
-            <button class="toggle-card" id="opt-keepinv"><span><b>Keep inventory</b><small>Keep items when you fall</small></span><i>${keepInv ? 'ON' : 'OFF'}</i></button>
-          </div>
-        </section>
-        <footer class="options-footer">
-          ${this.game.resetWorld ? '<button class="btn btn-danger" id="opt-reset">Reset saved world</button>' : ''}
-          <button class="btn options-done" id="opt-done">Done <span>↵</span></button>
-        </footer>
-      </div>
-    `;
-    this.root.appendChild(div);
-    div.querySelector('#opt-shader').addEventListener('change', e => {
-      this.game.audio.click();
-      this.game.setShaderStyle?.(e.target.value);
-      div.querySelector('#opt-shader-desc').textContent = shaderDescriptions[e.target.value] || shaderDescriptions.classic;
+    if (this.optionsMenu) return;
+    this.optionsMenu = new OptionsMenu(this.game, () => {
+      this.optionsMenu = null;
       this.game.saveSettings?.();
-    });
-    div.querySelector('#opt-brightness').addEventListener('input', e => {
-      this.game.setBrightness?.(+e.target.value / 100);
-      div.querySelector('#opt-bright').textContent = e.target.value;
-      this.game.saveSettings?.();
-    });
-    div.querySelector('#opt-render').addEventListener('input', e => {
-      this.game.renderDistance = +e.target.value;
-      div.querySelector('#opt-rd').textContent = e.target.value;
-      this.game.onRenderDistanceChange?.();
-      this.game.saveSettings?.();
-    });
-    div.querySelector('#opt-volume').addEventListener('input', e => {
-      this.game.audio.setVolume(+e.target.value / 100);
-      div.querySelector('#opt-vol').textContent = e.target.value;
-      this.game.saveSettings?.();
-    });
-    div.querySelector('#opt-sens-in').addEventListener('input', e => {
-      this.game.player.sensitivity = +e.target.value / 10000;
-      div.querySelector('#opt-sens').textContent = e.target.value;
-      this.game.saveSettings?.();
-    });
-    div.querySelector('#opt-bob').addEventListener('click', e => {
-      this.game.audio.click();
-      this.game.player.viewBobbing = !(this.game.player.viewBobbing !== false);
-      e.target.querySelector('i').textContent = this.game.player.viewBobbing ? 'ON' : 'OFF';
-      this.game.saveSettings?.();
-    });
-    div.querySelector('#opt-keepinv').addEventListener('click', e => {
-      this.game.audio.click();
-      this.game.keepInventory = !(this.game.keepInventory !== false);
-      e.target.querySelector('i').textContent = this.game.keepInventory ? 'ON' : 'OFF';
-      this.game.saveSettings?.();
-    });
-    const resetBtn = div.querySelector('#opt-reset');
-    if (resetBtn) {
-      resetBtn.addEventListener('click', () => {
-        this.game.audio.click();
-        if (resetBtn.dataset.confirm !== '1') {
-          resetBtn.dataset.confirm = '1';
-          resetBtn.textContent = 'Click again to confirm reset';
-          return;
-        }
-        div.remove();
-        this.game.resetWorld?.();
-      });
-    }
-    div.querySelector('#opt-done').addEventListener('click', () => {
-      this.game.audio.click();
-      this.game.saveSettings?.();
-      div.remove();
     });
   }
 
@@ -566,7 +452,21 @@ export class UI {
     const player = this.game.player;
     const audio = this.game.audio;
 
-    if (type === 'inv') {
+    if (type === 'chest' && this.game.openChestData?.slots) {
+      const slots = this.game.openChestData.slots;
+      const stack = slots[index];
+      if (e.shiftKey && stack) {
+        const moved = this._transferToRange(stack, player.inventory, 0, 36);
+        stack.count -= moved;
+        if (stack.count <= 0) slots[index] = null;
+      } else {
+        const holder = { input: stack };
+        const result = interactWithFurnaceSlot(holder, 'input', player.cursorStack, e.button);
+        slots[index] = holder.input;
+        player.cursorStack = result.cursorStack;
+      }
+      this.showSlotTooltip(slots[index]);
+    } else if (type === 'inv') {
       if (e.shiftKey) {
         this._handleShiftClickInv(index);
         this.refresh();
@@ -682,7 +582,8 @@ export class UI {
             const s = this.craftSlots[i];
             if (s) {
               s.count--;
-              if (s.count <= 0) this.craftSlots[i] = null;
+              if (s.count <= 0) this.craftSlots[i] = s.id === 335 ? { id: 325, count: 1, damage: 0 } : null;
+              else if (s.id === 335) this.returnStack({ id: 325, count: 1, damage: 0 });
             }
           }
           craftedAny = true;
@@ -701,7 +602,8 @@ export class UI {
               const s = this.craftSlots[i];
               if (s) {
                 s.count--;
-                if (s.count <= 0) this.craftSlots[i] = null;
+                if (s.count <= 0) this.craftSlots[i] = s.id === 335 ? { id: 325, count: 1, damage: 0 } : null;
+                else if (s.id === 335) this.returnStack({ id: 325, count: 1, damage: 0 });
               }
             }
             audio.pop();
@@ -713,7 +615,7 @@ export class UI {
   }
 
   onKey(e) {
-    if (e.code === 'KeyE') {
+    if (e.code === (this.game.settings?.keys ? this.game.settings.keys.inventory : 'KeyE')) {
       if (this.mode === 'game') {
         e.preventDefault();
         this.setMode('inventory');
@@ -722,16 +624,12 @@ export class UI {
         this.setMode('game');
       }
     }
-    if (e.code === 'KeyQ' && this.mode === 'game' && !this.game.player.dead) {
+    if (e.code === (this.game.settings?.keys ? this.game.settings.keys.drop : 'KeyQ') && this.mode === 'game' && !this.game.player.dead) {
       e.preventDefault();
       this.game.dropHeld?.(e.ctrlKey || e.metaKey);
     }
     if (e.code === 'Escape') {
-      const optScreen = document.getElementById('options-screen');
-      if (optScreen) {
-        optScreen.remove();
-        return;
-      }
+      if (this.optionsMenu) return;
       if (this.mode === 'game') {
         this.setMode('pause');
       } else if (this.mode !== 'title' && this.mode !== 'death') {
@@ -1075,7 +973,8 @@ export class UI {
   }
 
   update() {
-    if (this.mode !== 'title') {
+    if (this.mode !== 'title' && performance.now() - (this._lastHudUpdate || 0) >= 100) {
+      this._lastHudUpdate = performance.now();
       this.refresh();
     }
     const splash = this.splashEl || (this.splashEl = document.querySelector('.splash'));
@@ -1138,8 +1037,8 @@ export const ITEM_ICON_INDEX = {
   348: 91, 367: 90, // glowstone dust, rotten flesh
   323: 61,  // sign
   328: 62,  // minecart
-  342: 62,  // storage minecart
-  343: 62,  // powered minecart
+  342: 104, // storage minecart
+  343: 105, // powered minecart
   329: 63,  // saddle
   345: 64,  // compass
   346: 65,  // fishing rod
@@ -1160,7 +1059,7 @@ const toolMap = {
   283: [4, 0], 284: [4, 1], 285: [4, 2], 286: [4, 3], 294: [4, 4],
 };
 for (const [id, [m, k]] of Object.entries(toolMap)) {
-  ITEM_ICON_INDEX[+id] = 40 + m * 5 + k;
+  ITEM_ICON_INDEX[+id] = m === 4 ? 99 + k : 40 + m * 5 + k;
 }
 
 const SPLASHES = [

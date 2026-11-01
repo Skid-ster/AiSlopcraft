@@ -108,6 +108,8 @@ const spiderWorld = new FakeWorld();
 spiderWorld.fillFloor(-2, 5, -2, 2);
 for (let y = 1; y < 6; y++) spiderWorld.setBlock(1, y, 0, STONE);
 const spider = new Mob('spider', 0.5, 1.001, 0.5);
+check('spider has eight distinct hinged legs', spider.parts.legs.length === 8 && new Set(spider.parts.legs).size === 8 && spider.parts.legs.every(leg => leg.isGroup && leg.children.length === 1));
+check('humanoid limbs rotate around joint groups', chaser.parts.legs.every(leg => leg.isGroup && leg.children[0].position.y < 0));
 const spiderTarget = { ...player, pos: new THREE.Vector3(4, 1.001, 0.5) };
 spider.update(0.05, spiderWorld, spiderTarget, [], {}, audio, 0.5);
 spider.update(0.05, spiderWorld, spiderTarget, [], {}, audio, 0.5);

@@ -38,6 +38,7 @@ export const MOSSY_COBBLE = 48;
 export const OBSIDIAN = 49;
 export const TORCH = 50;
 export const CHEST = 54;
+export const REDSTONE_WIRE = 55;
 export const DIAMOND_ORE = 56;
 export const DIAMOND_BLOCK = 57;
 export const CRAFTING_TABLE = 58;
@@ -65,6 +66,7 @@ export const SLOW_SAND = 88; // soul sand
 export const GLOWSTONE = 89;
 export const JACK_O_LANTERN = 91;
 export const CAKE_BLOCK = 92;
+export const REDSTONE_REPEATER = 93;
 export const STONE_BRICK = 98;
 export const WOOL_BASE = 150; // +0..15 (kept clear of classic block ids)
 
@@ -96,7 +98,7 @@ export const TILES = {
   crops4: 103, crops5: 104, crops6: 105, crops7: 106,
   bed_top: 107, bed_side: 108, bed_end: 109,
   farmland_wet: 110, jack_o_lantern: 111,
-  cake_top: 112, cake_side: 113, cake_bottom: 114,
+  cake_top: 112, cake_side: 113, cake_bottom: 114, redstone_wire: 115, lever: 116, repeater: 117, bed_foot: 118, redstone_torch_off: 119, door_wood_bottom: 120, door_iron_bottom: 121,
 };
 
 // Face order: +Y, -Y, +Z, -Z, +X, -X
@@ -192,6 +194,7 @@ def(TORCH, 'Torch', {
   bounds: [0.35, 0.0, 0.35, 0.65, 0.65, 0.65],
 });
 def(CHEST, 'Chest', { tiles: faces(TILES.chest_top, TILES.chest_top, TILES.chest_side, TILES.chest_front), hardness: 2.5, tool: 'axe' });
+def(REDSTONE_WIRE, 'Redstone Wire', { solid: false, opaque: false, tiles: faces(TILES.redstone_wire, TILES.redstone_wire, TILES.redstone_wire), hardness: 0, render: 'flat', drops: 331, bounds: [0, 0, 0, 1, 0.08, 1] });
 def(DIAMOND_ORE, 'Diamond Ore', { tiles: faces(TILES.diamond_ore, TILES.diamond_ore, TILES.diamond_ore), hardness: 3.0, tool: 'pickaxe', minTier: 2, drops: 264 });
 def(DIAMOND_BLOCK, 'Diamond Block', { tiles: faces(TILES.diamond_block, TILES.diamond_block, TILES.diamond_block), hardness: 5, tool: 'pickaxe', minTier: 2 });
 def(CRAFTING_TABLE, 'Crafting Table', { tiles: faces(TILES.crafting_top, TILES.planks, TILES.crafting_side, TILES.crafting_front), hardness: 2.5, tool: 'axe' });
@@ -220,6 +223,7 @@ def(RAIL, 'Rail', {
   hardness: 0.7, tool: 'pickaxe', render: 'flat',
   bounds: [0.0, 0.0, 0.0, 1.0, 0.125, 1.0],
 });
+def(LEVER, 'Lever', { solid: false, opaque: false, tiles: faces(TILES.lever, TILES.lever, TILES.lever), hardness: 0.5, render: 'torch', bounds: [0.3, 0, 0.3, 0.7, 0.65, 0.7] });
 def(IRON_DOOR, 'Iron Door', {
   opaque: false, tiles: faces(TILES.iron_block, TILES.iron_block, TILES.door_iron, TILES.door_iron),
   hardness: 5.0, tool: 'pickaxe', minTier: 1, render: 'door', bounds: [0, 0, 0, 1, 1, 0.2],
@@ -257,6 +261,7 @@ def(CAKE_BLOCK, 'Cake', {
   opaque: false, tiles: faces(TILES.cake_top, TILES.cake_bottom, TILES.cake_side),
   hardness: 0.5, drops: 0, render: 'slab', bounds: [0.0625, 0, 0.0625, 0.9375, 0.5, 0.9375],
 });
+def(REDSTONE_REPEATER, 'Redstone Repeater', { solid: false, opaque: false, tiles: faces(TILES.repeater, TILES.repeater, TILES.repeater), hardness: 0, render: 'flat', drops: 356, bounds: [0, 0, 0, 1, 0.125, 1] });
 def(STONE_BRICK, 'Stone Bricks', { tiles: faces(TILES.stone_brick, TILES.stone_brick, TILES.stone_brick), hardness: 2, tool: 'pickaxe' });
 
 const WOOL_COLORS = [
@@ -346,7 +351,7 @@ export const ITEMS = {
   328: { name: 'Minecart', maxStack: 1 },
   329: { name: 'Saddle', maxStack: 1 },
   330: { name: 'Iron Door', places: IRON_DOOR },
-  331: { name: 'Redstone' },
+  331: { name: 'Redstone', places: REDSTONE_WIRE },
   332: { name: 'Snowball', maxStack: 16, throwable: true },
   333: { name: 'Boat', maxStack: 1 },
   334: { name: 'Leather' },
@@ -370,8 +375,8 @@ export const ITEMS = {
   353: { name: 'Sugar' },
   354: { name: 'Cake', places: CAKE_BLOCK, maxStack: 1 },
   355: { name: 'Bed', places: BED_BLOCK, maxStack: 1 },
-  356: { name: 'Redstone Repeater' },
-  357: { name: 'Cookie', food: 1 },
+  356: { name: 'Redstone Repeater', places: REDSTONE_REPEATER },
+  357: { name: 'Cookie', food: 2, maxStack: 8 },
   358: { name: 'Map' },
   359: { name: 'Shears', tool: 'shears', durability: 238 },
   360: { name: 'Melon', food: 2 },
@@ -429,4 +434,10 @@ export function canHarvest(blockId, heldId) {
   if (heldId == null || !ITEMS[heldId]) return false;
   const it = ITEMS[heldId];
   return it.tool === 'pickaxe' && (it.tier || 0) >= (b.minTier || 0);
+}
+
+// Durability and declared stack limits both apply consistently in every inventory.
+export function itemStackLimit(id) {
+  const item = ITEMS[id];
+  return item?.durability ? 1 : (item?.maxStack || (item?.food ? 1 : 64));
 }

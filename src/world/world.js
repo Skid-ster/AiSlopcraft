@@ -2,7 +2,7 @@
 import { Chunk, CH, WORLD_H, SEA_LEVEL } from './chunk.js';
 import { WorldGen } from './worldgen.js';
 import { AIR, WATER, LAVA, ICE, getBlock, LEAVES, WOOD_DOOR, IRON_DOOR } from './blocks.js';
-import { WorldLighting, lightOpacity } from './lighting.js';
+import { WorldLighting, lightOpacity, lightEmission } from './lighting.js';
 
 export class World {
   constructor(seed, scene) {
@@ -12,10 +12,38 @@ export class World {
     this.chunks = new Map(); // "cx,cz" -> Chunk
     this.edits = new Map();  // player block edits "x,y,z" -> id
     this.metaEdits = new Map(); // player block metadata "x,y,z" -> meta
+    this.editsByChunk = new Map(); // avoid scanning the entire save on every chunk load
     this.lighting = new WorldLighting(this);
+    this.blockListeners = new Set();
+    this.chunkListeners = new Set();
+    this.unloadListeners = new Set();
+  }
+
+  onBlockChange(fn) { this.blockListeners.add(fn); return () => this.blockListeners.delete(fn); }
+  onChunkLoad(fn) { this.chunkListeners.add(fn); return () => this.chunkListeners.delete(fn); }
+  onChunkUnload(fn) { this.unloadListeners.add(fn); return () => this.unloadListeners.delete(fn); }
+  unloadChunk(cx, cz) {
+    const k = this.key(cx, cz), chunk = this.chunks.get(k);
+    if (!chunk) return false;
+    chunk.dispose(this.scene);
+    this.chunks.delete(k);
+    this.lighting.chunkRemoved(chunk);
+    for (const listener of this.unloadListeners) listener(cx, cz);
+    return true;
   }
 
   key(cx, cz) { return cx + ',' + cz; }
+
+  recordEdit(x, y, z, id, meta = 0) {
+    if (![x, y, z, id, meta].every(Number.isInteger) || y < 0 || y >= WORLD_H || id < 0 || id > 255 || meta < 0 || meta > 255) return false;
+    const key = `${x},${y},${z}`;
+    this.edits.set(key, id);
+    if (meta) this.metaEdits.set(key, meta); else this.metaEdits.delete(key);
+    const chunkKey = this.key(Math.floor(x / CH), Math.floor(z / CH));
+    if (!this.editsByChunk.has(chunkKey)) this.editsByChunk.set(chunkKey, new Set());
+    this.editsByChunk.get(chunkKey).add(key);
+    return true;
+  }
 
   getChunk(cx, cz) {
     return this.chunks.get(this.key(cx, cz)) || null;
@@ -36,18 +64,20 @@ export class World {
     const wasDecorated = c.decorated;
     if (!c.generated) this.gen.fillChunk(c);
     this.gen.decorate(this, c);
-    if (!wasDecorated && this.edits.size > 0) {
+    if (!wasDecorated) {
       const x0 = cx * CH, z0 = cz * CH;
-      for (const [k, id] of this.edits) {
-        const [x, y, z] = k.split(',').map(Number);
-        if (x >= x0 && x < x0 + CH && z >= z0 && z < z0 + CH) {
-          c.set(x - x0, y, z - z0, id, this.metaEdits.get(k) || 0);
-        }
+      for (const key of this.editsByChunk.get(this.key(cx, cz)) || []) {
+        const [x, y, z] = key.split(',').map(Number);
+        const id = this.edits.get(key);
+        if (id !== undefined) c.set(x - x0, y, z - z0, id, this.metaEdits.get(key) || 0);
       }
     }
     // Light only after all cross-border decoration and saved edits are present.
     // Existing neighbors receive incremental updates through the same queues.
-    if (!wasDecorated) this.lighting.addChunk(c);
+    if (!wasDecorated) {
+      this.lighting.addChunk(c);
+      for (const listener of this.chunkListeners) listener(cx, cz);
+    }
     return c;
   }
 
@@ -109,16 +139,16 @@ export class World {
     const lx = x - cx * CH, lz = z - cz * CH;
     const previousId = c.get(lx, y, lz), previousMeta = c.getMeta(lx, y, lz);
     c.setMeta(lx, y, lz, meta);
-    if (c.lightingReady && lightOpacity(previousId, previousMeta) !== lightOpacity(previousId, meta)) {
+    if (c.lightingReady && (lightOpacity(previousId, previousMeta) !== lightOpacity(previousId, meta) || lightEmission(previousId, previousMeta) !== lightEmission(previousId, meta))) {
       this.lighting.blockChanged(x, y, z, previousId, previousMeta);
     }
-    const k = x + ',' + y + ',' + z;
-    if (meta) this.metaEdits.set(k, meta);
-    else this.metaEdits.delete(k);
+    // Metadata edits on naturally generated blocks must survive reload too.
+    this.recordEdit(x, y, z, previousId, meta);
     if (lx === 0) this.markDirty(cx - 1, cz);
     if (lx === CH - 1) this.markDirty(cx + 1, cz);
     if (lz === 0) this.markDirty(cx, cz - 1);
     if (lz === CH - 1) this.markDirty(cx, cz + 1);
+    for (const listener of this.blockListeners) listener(x, y, z, previousId, previousId, previousMeta, meta);
     return true;
   }
 
@@ -141,10 +171,7 @@ export class World {
     const prevId = c.get(lx, y, lz), prevMeta = c.getMeta(lx, y, lz);
     if (prevId === id && prevMeta === meta) return true;
     c.set(lx, y, lz, id, meta);
-    const k = x + ',' + y + ',' + z;
-    this.edits.set(k, id);
-    if (meta) this.metaEdits.set(k, meta);
-    else this.metaEdits.delete(k);
+    this.recordEdit(x, y, z, id, meta);
 
     if (lx === 0) this.markDirty(cx - 1, cz);
     if (lx === CH - 1) this.markDirty(cx + 1, cz);
@@ -152,6 +179,7 @@ export class World {
     if (lz === CH - 1) this.markDirty(cx, cz + 1);
 
     this.lighting.blockChanged(x, y, z, prevId, prevMeta);
+    for (const listener of this.blockListeners) listener(x, y, z, prevId, id, prevMeta, meta);
     return true;
   }
 

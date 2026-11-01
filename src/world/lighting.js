@@ -2,7 +2,7 @@
 // 0..15 channels. Removal uses a flood-fill of stale light followed by a re-add
 // pass from surviving sources, so breaking a torch never leaves a bright ghost.
 import { CH, WORLD_H } from './chunk.js';
-import { AIR, WATER, WATER_FLOW, ICE, LEAVES, WOOD_DOOR, IRON_DOOR, getBlock } from './blocks.js';
+import { AIR, WATER, WATER_FLOW, ICE, LEAVES, WOOD_DOOR, IRON_DOOR, REDSTONE_TORCH, getBlock } from './blocks.js';
 
 const DIRS = [[0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1], [1, 0, 0], [-1, 0, 0]];
 const idx = (x, y, z) => (y * CH + z) * CH + x;
@@ -14,6 +14,10 @@ export function lightFilter(id, meta = 0) {
   if (id === LEAVES) return 1;
   if ((id === WOOD_DOOR || id === IRON_DOOR) && (meta & 4) === 0) return 15;
   return 0;
+}
+
+export function lightEmission(id, meta = 0) {
+  return id === REDSTONE_TORCH && (meta & 8) ? 0 : (getBlock(id).light || 0);
 }
 
 export function lightOpacity(id, meta = 0) {
@@ -74,7 +78,7 @@ export class WorldLighting {
         else if (filter > 0) light = Math.max(0, light - filter);
         chunk.skyLight[i] = light;
         if (light > 0) skyQ.push(x0 + x, y, z0 + z, light);
-        const emission = getBlock(id).light || 0;
+        const emission = lightEmission(id, chunk.meta[i]);
         chunk.blockLight[i] = emission;
         if (emission > 0) blockQ.push(x0 + x, y, z0 + z, emission);
       }
@@ -154,7 +158,7 @@ export class WorldLighting {
     }
     const c = this.cell(x, y, z);
     if (!c) return;
-    const emission = getBlock(c.chunk.blocks[c.i]).light || 0;
+    const emission = lightEmission(c.chunk.blocks[c.i], c.chunk.meta[c.i]);
     if (emission > 0) blockQ.push(x, y, z, emission);
     const above = this.get(x, y + 1, z, true);
     if (above > 0) skyQ.push(x, y + 1, z, above);
@@ -166,8 +170,8 @@ export class WorldLighting {
     const id = c.chunk.blocks[c.i], meta = c.chunk.meta[c.i];
     const oldOpacity = lightOpacity(previousId, previousMeta);
     const newOpacity = lightOpacity(id, meta);
-    const oldEmission = getBlock(previousId).light || 0;
-    const emission = getBlock(id).light || 0;
+    const oldEmission = lightEmission(previousId, previousMeta);
+    const emission = lightEmission(id, meta);
     const skyQ = [], blockQ = [];
     this.depth++;
     for (const sky of [true, false]) {

@@ -2,7 +2,6 @@
 import * as THREE from 'three';
 import { getBlock, AIR, WATER, LAVA, LEAVES, LOG, CACTUS, ICE, ITEMS } from '../world/blocks.js';
 import { WORLD_H } from '../world/chunk.js';
-import { buildMobTexture } from '../world/textures.js';
 
 export const MOB_DEFS = {
   pig: { w: 0.9, h: 0.9, hp: 10, speed: 1.4, hostile: false, drops: [[319, 1, 2]] },
@@ -32,27 +31,62 @@ function boxGeo(w, h, d) {
   return boxGeoCache.get(key);
 }
 
+let sharedMobTexture;
+function mobTexture() {
+  if (sharedMobTexture) return sharedMobTexture;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 16;
+  const ctx = canvas.getContext('2d');
+  // Neutral pixel noise is tinted per part by the shared lighting material.
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+    const v = 224 + ((x * 37 + y * 67 + x * y * 13) % 32);
+    ctx.fillStyle = `rgb(${v},${v},${v})`; ctx.fillRect(x, y, 1, 1);
+  }
+  sharedMobTexture = new THREE.CanvasTexture(canvas);
+  sharedMobTexture.magFilter = THREE.NearestFilter;
+  sharedMobTexture.minFilter = THREE.NearestFilter;
+  sharedMobTexture.generateMipmaps = false;
+  sharedMobTexture.colorSpace = THREE.SRGBColorSpace;
+  return sharedMobTexture;
+}
+
 function buildMobModel(type, texture) {
   const group = new THREE.Group();
   const parts = { legs: [], arms: [] };
-  const textured = new THREE.MeshBasicMaterial({ map: texture });
   const add = (name, w, h, d, x, y, z, color = 0xffffff, material = null) => {
-    const mat = material || new THREE.MeshBasicMaterial({ color });
+    const isSkin = /^(body|head|leg|arm|wing)/.test(name);
+    const mat = material || new THREE.MeshBasicMaterial({ color, map: isSkin ? texture : null });
     const mesh = new THREE.Mesh(boxGeo(w, h, d), mat);
-    mesh.position.set(x, y, z);
     mesh.name = name;
-    group.add(mesh);
-    if (name.startsWith('leg')) parts.legs.push(mesh);
-    if (name.startsWith('arm')) parts.arms.push(mesh);
+    if (name.startsWith('leg') || name.startsWith('arm')) {
+      const joint = new THREE.Group();
+      // Spider legs hinge at the body; other limbs hinge at their top.
+      if (type === 'spider') {
+        joint.position.set(x > 0 ? x - w / 2 : x + w / 2, y, z);
+        mesh.position.x = x - joint.position.x;
+      } else {
+        joint.position.set(x, y + h / 2, z);
+        mesh.position.y = -h / 2;
+      }
+      joint.add(mesh);
+      group.add(joint);
+      if (name.startsWith('leg')) parts.legs.push(joint);
+      else parts.arms.push(joint);
+    } else {
+      mesh.position.set(x, y, z);
+      group.add(mesh);
+    }
     if (name === 'head') parts.head = mesh;
     return mesh;
   };
 
   switch (type) {
     case 'pig':
-      add('body', 1.0, 0.8, 1.4, 0, 0.55, 0, 0xffffff, textured);
-      add('head', 0.72, 0.72, 0.72, 0, 0.76, -0.78, 0xffffff, textured);
+      add('body', 1.0, 0.8, 1.4, 0, 0.55, 0, 0xde848c);
+      add('head', 0.72, 0.72, 0.72, 0, 0.76, -0.78, 0xde848c);
       add('snout', 0.38, 0.28, 0.24, 0, 0.61, -1.23, 0xd88b91);
+      add('nostril1', 0.07, 0.07, 0.012, -0.09, 0.63, -1.355, 0x773c43);
+      add('nostril2', 0.07, 0.07, 0.012, 0.09, 0.63, -1.355, 0x773c43);
       add('eye1', 0.1, 0.1, 0.03, -0.18, 0.82, -1.14, 0x1a1a1a);
       add('eye2', 0.1, 0.1, 0.03, 0.18, 0.82, -1.14, 0x1a1a1a);
       add('leg1', 0.25, 0.42, 0.25, -0.3, 0.2, -0.48, 0xc97880);
@@ -72,6 +106,10 @@ function buildMobModel(type, texture) {
         add(name, 0.24, 0.58, 0.24, x, 0.29, z, coat);
       }
       if (type === 'cow') {
+        add('muzzle', 0.4, 0.23, 0.10, 0, 0.68, -1.135, 0xc29288);
+        add('patch1', 0.015, 0.28, 0.38, -0.482, 0.78, -0.22, 0x382a21);
+        add('patch2', 0.015, 0.30, 0.36, 0.482, 0.65, 0.23, 0x382a21);
+        add('patch3', 0.28, 0.015, 0.34, -0.15, 1.052, 0.18, 0x382a21);
         add('horn1', 0.1, 0.22, 0.1, -0.22, 1.22, -0.82, 0xe2d7bc);
         add('horn2', 0.1, 0.22, 0.1, 0.22, 1.22, -0.82, 0xe2d7bc);
       }
@@ -84,6 +122,8 @@ function buildMobModel(type, texture) {
       add('eye2', 0.07, 0.07, 0.03, 0.1, 0.73, -0.55, 0x1a1a1a);
       add('beak', 0.22, 0.12, 0.2, 0, 0.61, -0.62, 0xe8902a);
       add('comb', 0.16, 0.12, 0.12, 0, 0.92, -0.4, 0xc93432);
+      add('wing1', 0.12, 0.30, 0.42, -0.29, 0.38, 0, 0xe4e4e4);
+      add('wing2', 0.12, 0.30, 0.42, 0.29, 0.38, 0, 0xe4e4e4);
       add('leg1', 0.1, 0.26, 0.1, -0.12, 0.13, 0, 0xe8902a);
       add('leg2', 0.1, 0.26, 0.1, 0.12, 0.13, 0, 0xe8902a);
       break;
@@ -114,6 +154,7 @@ function buildMobModel(type, texture) {
       add('head', 0.48, 0.48, 0.48, 0, 1.68, 0, skin);
       add('eye1', 0.1, 0.1, 0.03, -0.12, 1.72, -0.25, 0x1a1a1a);
       add('eye2', 0.1, 0.1, 0.03, 0.12, 1.72, -0.25, 0x1a1a1a);
+      if (!zombie) for (let i = 0; i < 3; i++) add(`rib${i}`, 0.36, 0.035, 0.025, 0, 1.2 - i * 0.16, -0.165, 0x666666);
       if (!zombie) add('bow', 0.06, 0.8, 0.06, 0.57, 1.05, -0.24, 0x6b4c2a);
       break;
     }
@@ -127,7 +168,6 @@ function buildMobModel(type, texture) {
         const z = -0.48 + i * 0.32;
         add(`legL${i}`, 0.7, 0.08, 0.08, -0.64, 0.34, z, dark);
         add(`legR${i}`, 0.7, 0.08, 0.08, 0.64, 0.34, z, dark);
-        parts.legs.push(group.children[group.children.length - 2], group.children[group.children.length - 1]);
       }
       break;
     }
@@ -282,10 +322,9 @@ export class Mob {
     this.killed = false;
     this.dead = false;
 
-    this.texture = new THREE.CanvasTexture(buildMobTexture(type));
-    this.texture.magFilter = THREE.NearestFilter;
-    this.texture.minFilter = THREE.NearestFilter;
-    this.texture.colorSpace = THREE.SRGBColorSpace;
+    // One shared, neutral pixel texture avoids generating and uploading a
+    // separate (mostly unused) skin for every spawned mob.
+    this.texture = mobTexture();
     const model = buildMobModel(type, this.texture);
     this.group = model.group;
     this.parts = model.parts;
@@ -522,10 +561,13 @@ export class Mob {
     this.sheared = !!sheared;
     if (this.sheared) this.woolTimer = 50;
     const body = this.group.getObjectByName('body');
-    if (body) {
-      body.scale.set(this.sheared ? 0.8 : 1, this.sheared ? 0.8 : 1, this.sheared ? 0.92 : 1);
-      body.userData.baseColor = this.sheared ? 0xd8be9e : 0xe8e8e8;
-      if (body.material?.userData) body.material.userData.baseColor = this.sheared ? 0xd8be9e : 0xe8e8e8;
+    if (body) body.scale.set(this.sheared ? 0.8 : 1, this.sheared ? 0.8 : 1, this.sheared ? 0.92 : 1);
+    for (const part of [body, ...this.parts.legs.map(leg => leg.children[0])]) {
+      if (!part?.material) continue;
+      const color = this.sheared ? 0xd8be9e : 0xe8e8e8;
+      part.userData.baseColor = color;
+      part.material.userData.baseColor = color;
+      part.material.userData.baseTint?.setHex(color);
     }
   }
 
@@ -624,7 +666,6 @@ export class Mob {
       for (const material of Array.isArray(object.material) ? object.material : [object.material]) materials.add(material);
     });
     for (const material of materials) material.dispose();
-    this.texture.dispose();
   }
 }
 
