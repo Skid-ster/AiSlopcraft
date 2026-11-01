@@ -9,7 +9,7 @@ Asset statuses: **NOT STARTED / IN PROGRESS / IMPLEMENTED / VERIFIED / BLOCKED**
 | Item tools/armor/food | IN PROGRESS | Distinct tool/armor/food silhouettes plus other icons. **109 rare names use provisional emblems**, listed individually in `assets/tiles/coverage.tsv`; these are not equivalent to finished art. Many block items display a 2D face instead of a true 3D icon. |
 | Biome-coloured foliage/grass | IN PROGRESS | Biome tints and a grass-side overlay in mesher; colormaps not release-accurate, no reference screenshot. |
 | Animated water/lava/fire/portal | IMPLEMENTED | Six original 8-frame 16×128 strips and manifest; renderer updates one 16×16 atlas subimage per tick interval. Pixel/GL output unverified. |
-| GUI/hotbar icons | IN PROGRESS | Font atlas, drawn buttons/slots, original heart/hunger sprites; basic GUI code, cannot compare rendered layouts in sandbox. |
+| GUI/hotbar/creative icons | IN PROGRESS | Font atlas, drawn buttons/slots, original heart/hunger sprites and 48-slot paged creative catalogue; basic GUI code, cannot compare rendered layouts in sandbox. |
 | Player, hand and mob skins/models | NOT STARTED | No 3D character models, UVs or per-mob skins. First-person hand is not rendered. |
 | Sky/clouds/sun/moon/weather/particles | IN PROGRESS | Time-dependent sky/fog colours exist; clouds, celestial sprites, precipitation and particles missing. |
 | Original sound effects | IMPLEMENTED | Nine short generated 22,050 Hz mono WAVs (step/place/break/pickup/hurt/UI/splash). WAV headers audited; SDL playback code compiled, audio not listened to in a desktop run. No music. |

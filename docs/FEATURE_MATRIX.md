@@ -19,7 +19,7 @@ Statuses: **NOT STARTED**, **IN PROGRESS**, **IMPLEMENTED**, **VERIFIED**, **BLO
 | Combat, armor/equipment, XP, death drops | IN PROGRESS | Damage/armor point field, hunger/XP counters and respawn. No attackable mob entities, armor durability, dropped-item physics or actual XP system. |
 | Fishing/brewing/enchanting/vehicles | NOT STARTED | Some registered items/blocks, no gameplay. |
 | Passive/hostile mobs/models/AI/bosses | NOT STARTED | No native mobs or mob art. |
-| GUI and input | IN PROGRESS | SDL3 code for title/new seed/options/HUD/inventory/crafting/furnace/chest/death, desktop compile only; **graphical launch blocked** in headless sandbox. Not visually verified or complete. |
+| GUI and input | IN PROGRESS | SDL3 code for title/new seed/options/HUD/inventory, 48-slot paged creative catalogue, crafting/furnace/chest/death. `voxcore_tests` validates every creative catalogue stack; GUI interaction itself awaits software-GL smoke/real desktop test. Not visually verified or complete. |
 | World/GUI rendering | IN PROGRESS | OpenGL 3.3 shaders, VBO mesher, face cull, simple AO, tinted grass overlay, pixel sampling/fog, animated atlas strips; CPU mesh test, no actual GL frame captured. |
 | Asset lookup/decoding | VERIFIED | `vox_asset_audit` decodes atlas/font/6 strips, checks 20,816 lookup calls and 9 WAV headers; **only existence/loading**, not visual accuracy. |
 | Original art/audio quality | IN PROGRESS | 460 tiles, 6 strips, 9 effects. `assets/previews/art-study.png` generated and visually inspected; 109 rare icons explicitly provisional, models/skins incomplete. |
@@ -31,4 +31,4 @@ Statuses: **NOT STARTED**, **IN PROGRESS**, **IMPLEMENTED**, **VERIFIED**, **BLO
 
 ## Recorded local validation (Linux x86_64 sandbox, Xeon @ 2.60 GHz, 2 vCPU)
 
-`cmake -S . -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=/home/user/deps/sdl3-install -DVOXCRAFT_FETCH_SDL3=OFF && cmake --build build/native -j2 && ctest --test-dir build/native --output-on-failure`: **3/3 tests passed** (33,632 core assertions, 20,816 tile lookups, headless binary smoke). `build/native/aislopcraft --selftest` also passed separately. `SDL_VIDEODRIVER=dummy build/native/aislopcraft` exited 1: OpenGL not configured/available in dummy driver. No GPU frames or user-PC FPS were measured.
+`cmake -S . -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=/home/user/deps/sdl3-install -DVOXCRAFT_FETCH_SDL3=OFF && cmake --build build/native -j2 && ctest --test-dir build/native --output-on-failure`: **3/3 tests passed** (34,941 core assertions including creative-catalogue validity, 20,816 tile lookups, headless binary smoke). `build/native/aislopcraft --selftest` also passed separately. `SDL_VIDEODRIVER=dummy build/native/aislopcraft` exited 1: OpenGL not configured/available in dummy driver. No GPU frames or user-PC FPS were measured.

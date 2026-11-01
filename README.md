@@ -10,7 +10,7 @@ An **unofficial, independently implemented** C++20 voxel-sandbox project targeti
 - Deterministic *1.7-inspired* overworld terrain, climate biomes, caves, simple ores/trees (including deterministic cross-chunk canopies), superflat/large-biomes/Amplified approximations; preliminary Nether/End terrain generation without portals/progression. **Not** Java seed-compatible.
 - 16×16×16 chunk sections, negative-coordinate floor division, CPU lighting rebuild and removal, block raycasting, basic gravity/fluids/crops. Fixed 20-Hz survival/creative physics, movement, food, health and falling damage (approximations).
 - Binary, CRC-protected atomic-replace edits/player save format (`docs/SAVE_FORMAT.md`), not Anvil. Save limitations include container contents/entities/weather/scheduled ticks.
-- SDL3/OpenGL 3.3 runtime code: face-culled sectional meshes, nearest-neighbor art atlas, grass-side tint overlay, animated water/lava/fire/portal tiles, time-of-day light/fog, original title/HUD/inventory/crafting/furnace/chest/options/death screens, mouse-look and keyboard controls, background chunk generator (one worker), per-frame upload budget, F2 screenshots. **Not yet visually verified** and many game features are missing.
+- SDL3/OpenGL 3.3 runtime code: face-culled sectional meshes, nearest-neighbor art atlas, grass-side tint overlay, animated water/lava/fire/portal tiles, time-of-day light/fog, original title/HUD/inventory/creative catalogue/crafting/furnace/chest/options/death screens, mouse-look and keyboard controls, background chunk generator (one worker), per-frame upload budget, F2 screenshots. **Not yet visually verified** and many game features are missing.
 - Original deterministic Python/Pillow asset authoring tool: 460 atlas names, six 8-frame strips, nine short WAV effects, licensed bitmap font atlas. 109 rare tile icons are marked **provisional** in `assets/tiles/coverage.tsv`; unique mob skins/models and full GUI artwork are not finished.
 
 ## Build and run
@@ -53,7 +53,8 @@ Core-only, explicitly without SDL3/OpenGL: `cmake -S . -B build/core -DVOXCRAFT_
 | Ctrl, Shift, Space | Sprint, sneak/descend, jump/swim/ascend |
 | Left hold / right click | Mine / interact, place, eat or use bucket |
 | 1–9 / mouse wheel | Select hotbar slot |
-| E | Inventory/crafting; crafting table opens 3×3 grid |
+| E | Survival inventory/2×2 crafting, or creative 48-item paged catalogue; crafting table opens 3×3 grid |
+| Creative catalogue: wheel, PgUp/PgDn, arrows; click / right-click / TRASH | Change page, take a full/one-item stack to cursor, explicitly discard cursor; many entries have no gameplay yet |
 | F (creative), G | Toggle flight / switch creative or survival |
 | Esc / O | Pause / options from pause |
 | Options: - +, [ ], V, M | Render distance, FOV, VSync, mute |
@@ -75,7 +76,7 @@ ctest --test-dir build/release --output-on-failure -V
 python3 tools/assetgen/generate.py
 ```
 
-`voxcore_tests` checks block/item IDs, recipes/smelting, inventory, RNG/terrain/negative chunk boundaries, fluid/lighting addition and removal, physics/damage, and save round trips/CRC/interrupted-temp handling. `vox_asset_audit` decodes images, checks 20,816 registry face/icon lookups, animations, WAV headers and one CPU mesh. `vox_startup_smoke` runs the app's *headless* CLI. A green CTest result does not prove gameplay visuals or Minecraft behavior. The new `--visual-smoke` command attempts actual OpenGL title and in-world PNGs; **it cannot run in this sandbox** and its Linux CI software-renderer check is pending. It is not a client comparison or target-PC benchmark. Original pixel-art study: `assets/previews/art-study.png` (an atlas QA sheet, **not** a game screenshot).
+`voxcore_tests` checks block/item IDs, recipes/smelting, inventory, RNG/terrain/negative chunk boundaries, fluid/lighting addition and removal, physics/damage, and save round trips/CRC/interrupted-temp handling. `vox_asset_audit` decodes images, checks 20,816 registry face/icon lookups, animations, WAV headers and one CPU mesh. `vox_startup_smoke` runs the app's *headless* CLI. A green CTest result does not prove gameplay visuals or Minecraft behavior. The new `--visual-smoke` command attempts actual OpenGL title, in-world and creative-menu PNGs; **it cannot run in this sandbox** and its Linux CI software-renderer check is pending. It is not a client comparison or target-PC benchmark. Original pixel-art study: `assets/previews/art-study.png` (an atlas QA sheet, **not** a game screenshot).
 
 The CPU-only benchmark reports one-chunk generation/mesh milliseconds and labels missing mob work; it is **not** the requested native-1440p seven-scene GPU benchmark. On a GPU-equipped PC, run at 2560×1440 and inspect F3, capture F2 screenshots and record frame-time distribution with an external profiler. See [performance plan](docs/PERFORMANCE.md). **No** performance result has been measured on the requested RTX 5060 Ti/i5-13400 machine.
 

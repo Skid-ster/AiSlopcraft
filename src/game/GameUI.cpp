@@ -112,12 +112,33 @@ void Game::drawInventory() {
     renderer_.uiRect(x,y,610*s,450*s,0x101d26,0.97f);
     renderer_.uiRect(x+4*s,y+4*s,602*s,442*s,0x8b9890,0.14f);
     std::string title=screen_==Screen::Inventory?"INVENTORY / 2x2 CRAFTING":
+        screen_==Screen::Creative?"CREATIVE CATALOGUE / ORIGINAL ART":
         screen_==Screen::Crafting?"CRAFTING TABLE / 3x3":
         screen_==Screen::Furnace?"FURNACE / SMELTING":"CHEST / STORAGE";
     renderer_.uiText(title,x+20*s,y+18*s,1.05f*s,0xf4e9c8);
-    renderer_.uiText("Left: take/place   Right: split/one   E / ESC: close",
-                      x+20*s,y+46*s,0.7f*s,0xc8d7d7);
-    if(screen_==Screen::Inventory||screen_==Screen::Crafting) {
+    renderer_.uiText(screen_==Screen::Creative?
+        "Click item: stack   Right: one   Wheel/PgUp/PgDn: page   E: close":
+        "Left: take/place   Right: split/one   E / ESC: close",
+        x+20*s,y+46*s,0.7f*s,0xc8d7d7);
+    if(screen_==Screen::Creative) {
+        const auto& items=creativeCatalog();
+        int pages=std::max(1,(int)((items.size()+47)/48));
+        creativePage_=std::clamp(creativePage_,0,pages-1);
+        for(int i=0;i<48;++i) {
+            size_t index=(size_t)creativePage_*48+(size_t)i;
+            if(index<items.size())
+                slot(x+(20+i%12*40)*s,y+(77+i/12*37)*s,items[index]);
+        }
+        renderer_.uiText("PAGE",x+528*s,y+80*s,0.7f*s,0xdce6ce);
+        renderer_.uiText(std::to_string(creativePage_+1)+"/"+std::to_string(pages),
+                         x+528*s,y+101*s,0.75f*s,0xf6dda1);
+        renderer_.uiRect(x+527*s,y+135*s,25*s,31*s,0x5c7774);
+        renderer_.uiRect(x+557*s,y+135*s,25*s,31*s,0x5c7774);
+        renderer_.uiText("<",x+532*s,y+139*s,1.1f*s);
+        renderer_.uiText(">",x+562*s,y+139*s,1.1f*s);
+        renderer_.uiRect(x+527*s,y+180*s,65*s,35*s,0x783f3f);
+        renderer_.uiText("TRASH",x+533*s,y+190*s,0.7f*s,0xffe9d3);
+    } else if(screen_==Screen::Inventory||screen_==Screen::Crafting) {
         int side=screen_==Screen::Crafting?3:2;
         renderer_.uiText("CRAFT",x+420*s,y+66*s,0.85f*s,0xcdd9c5);
         for(int i=0;i<side*side;++i) {
@@ -156,6 +177,9 @@ void Game::drawInventory() {
                                             mouseY_+8*s,0.8f*s);
     }
     if(!message_.empty())renderer_.uiText(message_,x+20*s,y+418*s,0.68f*s,0xf2cc91);
+    else if(screen_==Screen::Creative)
+        renderer_.uiText("Many listed items have no interaction yet.",
+                         x+20*s,y+418*s,0.68f*s,0xf2cc91);
 }
 void Game::drawPause() {
     float mid=height_/2.f,cx=width_/2.f;
@@ -230,6 +254,36 @@ void Game::inventoryClick(float px,float py,bool right) {
             player_.inventory.set((size_t)index,item);
             return;
         }
+    }
+    if(screen_==Screen::Creative) {
+        const auto& items=creativeCatalog();
+        int pages=std::max(1,(int)((items.size()+47)/48));
+        auto buttonHit=[&](float bx,float by,float w,float h) {
+            return px>=bx&&px<bx+w&&py>=by&&py<by+h;
+        };
+        if(buttonHit(x+527*s,y+135*s,25*s,31*s)) {
+            creativePage_=std::max(0,creativePage_-1);audio_.play("click");return;
+        }
+        if(buttonHit(x+557*s,y+135*s,25*s,31*s)) {
+            creativePage_=std::min(pages-1,creativePage_+1);audio_.play("click");return;
+        }
+        if(px>=x+527*s && px<x+592*s && py>=y+180*s && py<y+215*s) {
+            cursor_.clear();message_="Discarded cursor stack (creative only)";
+            audio_.play("click");return;
+        }
+        for(int i=0;i<48;++i) {
+            if(!inside(x+(20+i%12*40)*s,y+(77+i/12*37)*s))continue;
+            size_t index=(size_t)creativePage_*48+(size_t)i;
+            if(index>=items.size())return;
+            ItemStack item=items[index];
+            if(!cursor_.empty() && !cursor_.sameItem(item)) {
+                message_="Place or discard the held stack before choosing another";return;
+            }
+            if(right)item.count=1;
+            cursor_=item;message_=item.displayName()+" (catalogue; interaction may be incomplete)";
+            audio_.play("pickup");return;
+        }
+        return;
     }
     if(screen_==Screen::Inventory||screen_==Screen::Crafting) {
         int side=screen_==Screen::Crafting?3:2;

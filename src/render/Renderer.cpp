@@ -29,11 +29,12 @@ Mat4 multiply(const Mat4& a,const Mat4& b) {
         for(int k=0;k<4;++k) c.m[row+col*4]+=a.m[row+k*4]*b.m[k+col*4];
     return c;
 }
-Mat4 perspective(float degrees,float aspect,float near,float far) {
+Mat4 perspective(float degrees,float aspect,float nearPlane,float farPlane) {
     Mat4 m;float f=1.f/std::tan(degrees*PI/360.f);
     m.m[0]=f/aspect;m.m[5]=f;
-    m.m[10]=(far+near)/(near-far);m.m[11]=-1.f;
-    m.m[14]=2*far*near/(near-far);
+    // `near` and `far` are legacy Windows/MSVC keywords/macros.
+    m.m[10]=(farPlane+nearPlane)/(nearPlane-farPlane);m.m[11]=-1.f;
+    m.m[14]=2*farPlane*nearPlane/(nearPlane-farPlane);
     return m;
 }
 Mat4 lookAt(Vec3f eye,Vec3f direction) {

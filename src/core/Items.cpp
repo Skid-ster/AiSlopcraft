@@ -396,6 +396,41 @@ const ItemDef& itemDef(uint16_t id) {
 const char* itemName(uint16_t id) { return itemDef(id).name; }
 bool itemExists(uint16_t id) { return id < ItemID::ItemIDCount && itemDef(id).name[0] != '\0'; }
 
+const std::vector<ItemStack>& creativeCatalog() {
+    static const std::vector<ItemStack> entries=[] {
+        std::vector<ItemStack> result;
+        for(int id=1;id<ItemID::ItemIDCount;++id) {
+            if(!itemExists((uint16_t)id))continue;
+            int variants=1;
+            // Metadata-sensitive variants with separate original atlas tiles.
+            // Tools and armor always enter undamaged, not as 16 fake variants.
+            switch(id) {
+                case ItemID::Planks: case ItemID::Sapling: case ItemID::DoublePlant:
+                case ItemID::WoodenSlab: variants=6;break;
+                case ItemID::Log: case ItemID::Leaves: case ItemID::Stonebrick:
+                case ItemID::Fish: variants=4;break;
+                case ItemID::Dirt: case ItemID::Sandstone:
+                case ItemID::QuartzBlock: variants=3;break;
+                case ItemID::Sand: case ItemID::Log2: case ItemID::Leaves2:
+                case ItemID::Coal: case ItemID::CookedFish: variants=2;break;
+                case ItemID::StoneSlab: variants=8;break;
+                case ItemID::RedFlower: variants=9;break;
+                case ItemID::Wool: case ItemID::StainedGlass: case ItemID::StainedGlassPane:
+                case ItemID::StainedHardenedClay: case ItemID::Carpet:
+                case ItemID::Dye: variants=16;break;
+                default:break;
+            }
+            for(int meta=0;meta<variants;++meta) {
+                ItemStack entry{(uint16_t)id,1,(uint16_t)meta};
+                entry.count=(uint8_t)entry.maxStack();
+                result.push_back(entry);
+            }
+        }
+        return result;
+    }();
+    return entries;
+}
+
 // ---------------------------------------------------------------------------
 // ItemStack behavior
 // ---------------------------------------------------------------------------

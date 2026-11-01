@@ -115,7 +115,7 @@ int main(int argc,char* argv[]) {
             std::cout<<"AiSlopcraft (unofficial 1.7.3-inspired native sandbox)\n"
                 <<"  aislopcraft             Open the SDL3/OpenGL desktop game\n"
                 <<"  aislopcraft --selftest  Headless startup/core smoke test\n"
-                <<"  aislopcraft --visual-smoke <dir>  Capture GL title/world frames (display required)\n"
+                <<"  aislopcraft --visual-smoke <dir>  Capture GL title/world/creative frames (display required)\n"
                 <<"  aislopcraft --benchmark CPU-only workloads (NOT 1440p FPS)\n";
             return 0;
         }

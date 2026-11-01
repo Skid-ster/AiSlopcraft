@@ -26,7 +26,7 @@ A checked box means a *code milestone exists*, not that Java 1.7.3 parity is ach
 - [ ] Original art replace **109** provisional rare icons, mob skins/models, menus, sky/clouds/particles and sounds; record reference comparison evidence.
 
 ## D. Release engineering
-- [x] Add Windows+Linux GitHub Actions workflow with pinned action commits and SDL3 archive SHA, require all three named tests, upload binary assets/logs. A subsequent change adds a Linux Mesa/Xvfb software-GL *title/world screenshot attempt*, pending CI validation.
+- [x] Add Windows+Linux GitHub Actions workflow with pinned action commits and SDL3 archive SHA, require all three named tests, upload binary assets/logs. A subsequent change adds a Linux Mesa/Xvfb software-GL *title/world/creative screenshot attempt*, pending CI validation.
 - [ ] Run the clean-checkout Actions workflow and **inspect actual Windows/Linux results, software-GL PNGs and downloadable artifacts**; no CI/visual outcome should be claimed from workflow code alone.
 - [ ] Commit tested milestones on `arena/433092f5-aislopcraft`; push only this branch; open PR to `main`, report genuine links/check results. Do not merge/release without explicit authorization and successful checks.
 - [ ] Provide repeatable GPU benchmark on real 2560×1440 target PC (7 scenes, frame-time/RAM/VRAM percentiles) and compare against same settings/screenshots. This sandbox cannot supply target-PC data.

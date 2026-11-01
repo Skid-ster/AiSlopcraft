@@ -9,12 +9,14 @@
 #include "core/Save.h"
 #include "core/World.h"
 #include "core/WorldGen.h"
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -94,6 +96,22 @@ static void testInventoryRecipes() {
     CHECK(wear.damage(0) && wear.at(0).empty());
     CHECK(!wear.set(0,{ItemID::Stone,65,0}));
     CHECK(!wear.set(1,{ItemID::Stone,1,0}));
+    const auto& creative=creativeCatalog();
+    CHECK(creative.size()>250); // paginated, not just the nine starter blocks
+    std::set<std::pair<uint16_t,uint16_t>> unique;
+    for(const auto& item : creative) {
+        CHECK(itemExists(item.id) && item.count>0 && item.count==item.maxStack());
+        CHECK(item.meta<16 && unique.insert({item.id,item.meta}).second);
+        CHECK(wear.set(0,item)); // every catalogue entry is a valid inventory stack
+    }
+    auto has=[&](uint16_t id,uint16_t meta) {
+        return std::any_of(creative.begin(),creative.end(),[&](const ItemStack& s){
+            return s.id==id && s.meta==meta;
+        });
+    };
+    CHECK(has(ItemID::Wool,14) && has(ItemID::Dye,15));
+    CHECK(has(ItemID::Planks,5) && has(ItemID::Fish,3));
+    CHECK(!has(409,0) && !has(ItemID::DiamondPickaxe,1));
     std::array<ItemStack,9> grid{};
     grid[0]={ItemID::Log2,1,1};
     CHECK(craftResult(grid,2)->id==ItemID::Planks);

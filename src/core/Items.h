@@ -2,6 +2,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <vector>
 #include "Blocks.h" // ToolType, BlockID
 
 namespace vox {
@@ -175,6 +176,10 @@ struct ItemDef {
 const ItemDef& itemDef(uint16_t id);
 const char* itemName(uint16_t id);
 bool itemExists(uint16_t id);
+// Finite paged catalogue for the creative UI: existing registry entries and
+// selected 1.7 metadata variants only. Listing an item does not imply its
+// interaction (e.g. spawn eggs) has been implemented.
+const std::vector<ItemStack>& creativeCatalog();
 // Item id for a placeable block, or 0 for non-placeable items.
 uint16_t blockIdForItem(uint16_t itemId);
 // Texture tile for inventory / held rendering (1.7-style names, original art).

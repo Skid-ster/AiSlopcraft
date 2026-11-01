@@ -63,7 +63,13 @@ jobs:
       - name: Assert CTest discovered the full suite
         shell: bash
         run: |
-          ctest --test-dir build --config Release -N 2>&1 | tee test-discovery.txt
+          # Capture the exit code as well as the output: CTest itself may fail
+          # before any of the grep assertions can run.
+          if ! ctest --test-dir build --config Release -N 2>&1 | tee test-discovery.txt; then
+            echo '::error::CTest discovery command failed before test-count assertion'
+            while IFS= read -r line; do echo "::error::$line"; done < test-discovery.txt
+            exit 1
+          fi
           if ! grep -Eq '^Total Tests:[[:space:]]*3[[:space:]]*$' test-discovery.txt; then
             echo '::error::CTest did not discover exactly three tests'
             while IFS= read -r line; do echo "::error::$line"; done < test-discovery.txt
@@ -81,7 +87,7 @@ jobs:
         shell: bash
         run: ctest --test-dir build --config Release --output-on-failure | tee test-results.txt
 
-      - name: Render title and world on Mesa software OpenGL (Linux only)
+      - name: Render title, world and creative UI on Mesa software OpenGL (Linux only)
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -90,7 +96,7 @@ jobs:
             ./build/aislopcraft --visual-smoke visual-smoke
           python3 - <<'PY'
           import pathlib, struct
-          for name in ('title.png', 'world.png'):
+          for name in ('title.png', 'world.png', 'creative.png'):
               image = pathlib.Path('visual-smoke') / name
               data = image.read_bytes()
               assert len(data) > 5000, f'{image}: suspiciously small'

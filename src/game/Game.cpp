@@ -101,15 +101,24 @@ int Game::visualSmoke(const std::filesystem::path& directory) {
         } else screenshotOk_=false;
     }
     bool worldOkay=screenshotOk_ && titleOkay;
+    bool paletteOkay=false;
+    if(worldOkay) {
+        screen_=Screen::Creative;
+        capture(false);
+        screenshotPath_=directory/"creative.png";
+        screenshotRequested_=true;
+        frame();
+        paletteOkay=screenshotOk_;
+    }
     stopWorker();
     world_.reset(); // disposable smoke world: never write a user save
     shutdown();
-    if(!worldOkay) {
-        std::cerr<<"VISUAL SMOKE FAILED: title/world frame could not be captured\n";
+    if(!worldOkay || !paletteOkay) {
+        std::cerr<<"VISUAL SMOKE FAILED: title/world/creative frame could not be captured\n";
         return 1;
     }
     std::cout<<"VISUAL SMOKE PASS: OpenGL "<<renderer_.driver()
-             <<", title and one in-world frame captured to "<<directory.string()
+             <<", title, in-world and creative frames captured to "<<directory.string()
              <<". This is not a gameplay, reference-parity or GPU FPS test.\n";
     return 0;
 }
@@ -190,6 +199,7 @@ void Game::startWorld(bool newWorld) {
     target_.reset();
     miningProgress_=0;
     autosaveTimer_=0;
+    creativePage_=0;
     player_=Player{};
     world_.reset();
     std::string error;
@@ -536,8 +546,12 @@ void Game::events() {
                 if(e.button.button==SDL_BUTTON_LEFT)mouseLeft_=false;
                 break;
             case SDL_EVENT_MOUSE_WHEEL:
-                if(screen_==Screen::Playing)
-                    player_.selected=(player_.selected+9-(int)std::copysign(1.f,e.wheel.y))%9;
+                if(e.wheel.y!=0 && screen_==Screen::Playing)
+                    player_.selected=(player_.selected+9-(e.wheel.y>0?1:-1))%9;
+                else if(e.wheel.y!=0 && screen_==Screen::Creative) {
+                    int pages=std::max(1,(int)((creativeCatalog().size()+47)/48));
+                    creativePage_=std::clamp(creativePage_+(e.wheel.y>0?-1:1),0,pages-1);
+                }
                 break;
             case SDL_EVENT_TEXT_INPUT:
                 if(screen_==Screen::Title && seedText_.size()<18) {
@@ -592,14 +606,24 @@ void Game::key(SDL_Scancode k) {
         }
         return;
     }
-    if(screen_==Screen::Inventory||screen_==Screen::Crafting||
-       screen_==Screen::Furnace||screen_==Screen::Chest) {
+    if(screen_==Screen::Inventory||screen_==Screen::Creative||
+       screen_==Screen::Crafting||screen_==Screen::Furnace||screen_==Screen::Chest) {
         if(k==SDL_SCANCODE_ESCAPE||k==SDL_SCANCODE_E)closeInventory();
+        else if(screen_==Screen::Creative) {
+            int pages=std::max(1,(int)((creativeCatalog().size()+47)/48));
+            if(k==SDL_SCANCODE_PAGEUP)
+                creativePage_=std::max(0,creativePage_-1);
+            else if(k==SDL_SCANCODE_PAGEDOWN)
+                creativePage_=std::min(pages-1,creativePage_+1);
+        }
         return;
     }
     if(screen_==Screen::Playing) {
         if(k==SDL_SCANCODE_ESCAPE) {screen_=Screen::Pause;capture(false);mouseLeft_=false;}
-        else if(k==SDL_SCANCODE_E) {screen_=Screen::Inventory;capture(false);mouseLeft_=false;}
+        else if(k==SDL_SCANCODE_E) {
+            screen_=player_.creative?Screen::Creative:Screen::Inventory;
+            capture(false);mouseLeft_=false;
+        }
         else if(k==SDL_SCANCODE_F5)save();
         else if(k==SDL_SCANCODE_F && player_.creative)player_.flying=!player_.flying;
         else if(k==SDL_SCANCODE_G) {player_.creative=!player_.creative;message_=player_.creative?"Creative mode":"Survival mode";}
@@ -616,8 +640,8 @@ void Game::mouseButton(int button,float x,float y) {
         if(button==SDL_BUTTON_RIGHT)placeOrUse();
         return;
     }
-    if(screen_==Screen::Inventory||screen_==Screen::Crafting||
-       screen_==Screen::Furnace||screen_==Screen::Chest) {
+    if(screen_==Screen::Inventory||screen_==Screen::Creative||
+       screen_==Screen::Crafting||screen_==Screen::Furnace||screen_==Screen::Chest) {
         inventoryClick(x,y,button==SDL_BUTTON_RIGHT);return;
     }
     if(button!=SDL_BUTTON_LEFT)return;
@@ -659,8 +683,8 @@ void Game::frame() {
         case Screen::Playing:drawHud();break;
         case Screen::Pause:drawPause();break;
         case Screen::Options:drawOptions();break;
-        case Screen::Inventory:case Screen::Crafting:case Screen::Furnace:case Screen::Chest:
-            drawInventory();break;
+        case Screen::Inventory:case Screen::Creative:case Screen::Crafting:
+        case Screen::Furnace:case Screen::Chest:drawInventory();break;
         case Screen::Death:drawDeath();break;
     }
     renderer_.uiDraw();
