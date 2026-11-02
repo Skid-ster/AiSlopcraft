@@ -107,7 +107,7 @@ def main():
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(result)
     encoded = base64.b64encode(result).decode('ascii')
-    segments = [encoded[i:i + 5000] for i in range(0, len(encoded), 5000)]
+    segments = [encoded[i:i + 4000] for i in range(0, len(encoded), 4000)]
     if len(segments) > 20:
         raise ValueError('Thumbnail annotation budget exceeded')
     digest = hashlib.sha256(result).hexdigest()
