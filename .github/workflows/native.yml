@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      frame_probe:
+        description: 'Expose an opt-in tiny original-frame thumbnail in check annotations for visual QA'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -146,6 +151,11 @@ jobs:
           assert images[0] != images[1], 'Mine did not change the rendered frame'
           print('Rebuild: two distinct 1280x720 frame files; appearance not reviewed')
           PY
+
+      - name: Emit opt-in original-frame thumbnail for visual review
+        if: runner.os == 'Linux' && github.event_name == 'workflow_dispatch' && inputs.frame_probe
+        shell: bash
+        run: python3 tools/ci_frame_probe.py rebuild-smoke/before.png
 
       - name: Exercise click-to-mine, hold, place and food on SDL/Xvfb (Linux only)
         if: runner.os == 'Linux'
