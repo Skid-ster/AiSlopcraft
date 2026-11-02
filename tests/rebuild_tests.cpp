@@ -1,4 +1,5 @@
 #include "rebuild/Mesh.h"
+#include "rebuild/Palette.h"
 #include "rebuild/StudySave.h"
 #include "rebuild/World.h"
 #include <chrono>
@@ -28,6 +29,18 @@ int main() {
     }
     CHECK(leafCutouts>16 && leafOpaque>120);
     stbi_image_free(pixels);
+    CHECK(creativePalette.size()==9 && creativePalette[0]==Block::Grass &&
+          creativePalette[8]==Block::Flower);
+    for(Block block:creativePalette){
+        const Mesh held=buildHeldMesh(block);
+        CHECK(held.vertices.size()==(block==Block::Flower?12u:36u));
+        for(const auto& v:held.vertices){
+            CHECK(v.x>=-.5f && v.x<=.5f && v.y>=-.5f && v.y<=.5f &&
+                  v.z>=-.5f && v.z<=.5f && v.u>=0.f && v.u<=1.f &&
+                  v.v>=0.f && v.v<=1.f);
+        }
+    }
+    CHECK(buildHeldMesh(Block::Air).vertices.empty());
     World a,b;
     for(int x=-48;x<48;x+=7)for(int z=-48;z<48;z+=9)
         for(int y=0;y<25;++y)CHECK(a.get({x,y,z})==b.get({x,y,z}));
@@ -91,6 +104,17 @@ int main() {
     CHECK(p.feet.y>ground+.25f);
     for(int i=0;i<120;++i)p.tick(movement,Input{},1.f/60);
     CHECK(p.onGround && std::abs(p.feet.y-ground)<.1f);
+    Player flyer;flyer.flying=true;
+    const float takeoff=flyer.feet.y;
+    for(int i=0;i<30;++i)flyer.tick(movement,Input{.jump=true},1.f/60);
+    CHECK(flyer.feet.y>takeoff+2.f && !flyer.onGround);
+    for(int i=0;i<30;++i)flyer.tick(movement,Input{.descend=true},1.f/60);
+    CHECK(std::abs(flyer.feet.y-takeoff)<.15f);
+    for(int i=0;i<300;++i)flyer.tick(movement,Input{.jump=true},1.f/60);
+    CHECK(flyer.feet.y>20.f && flyer.feet.y<World::height-1.8f);
+    flyer.flying=false;
+    for(int i=0;i<300;++i)flyer.tick(movement,Input{},1.f/60);
+    CHECK(flyer.onGround && std::abs(flyer.feet.y-takeoff)<.15f);
 
     World blocked;
     CHECK(blocked.set({0,7,11},Block::Air)); // clear opening outcrop for a plain wall test

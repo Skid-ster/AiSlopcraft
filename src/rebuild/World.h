@@ -47,12 +47,14 @@ struct Hit {
 };
 std::optional<Hit> raycast(const World& world,Vec3 eye,Vec3 direction,float reach=4.5f);
 
-struct Input { bool forward=false,back=false,left=false,right=false,jump=false,sprint=false; };
+struct Input {
+    bool forward=false,back=false,left=false,right=false,jump=false,sprint=false,descend=false;
+};
 struct Player {
     Vec3 feet{0.5f,7,15.5f};
     float yaw=0, pitch=-0.23f; // radians; faces north across the meadow, near a mineable outcrop
     float verticalSpeed=0;
-    bool onGround=false;
+    bool onGround=false,flying=false; // flight is session-only, not in study-save v1
     Vec3 eye() const { return feet+Vec3{0,1.62f,0}; }
     Vec3 direction() const;
     void tick(const World& world,const Input& input,float dt);

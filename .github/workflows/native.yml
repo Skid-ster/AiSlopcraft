@@ -143,17 +143,26 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           from struct import unpack
-          images = [(Path('rebuild-smoke') / name).read_bytes() for name in ('before.png', 'after.png')]
+          images = [(Path('rebuild-smoke') / name).read_bytes()
+                    for name in ('before.png', 'after.png', 'hudless.png')]
           for image in images:
               assert len(image) > 5000, 'Rebuild capture suspiciously small'
               assert image[:8] == b'\x89PNG\r\n\x1a\n', 'Invalid rebuild PNG'
               assert unpack('>II', image[16:24]) == (1280, 720), 'Wrong rebuild frame dimensions'
-          assert images[0] != images[1], 'Mine did not change the rendered frame'
-          print('Rebuild: two distinct 1280x720 frame files; appearance not reviewed')
+          assert len(set(images)) == 3, 'Edit or F1 did not change the rendered frame'
+          print('Rebuild: three distinct 1280x720 frame files; appearance not reference-matched')
           PY
+          if ! xvfb-run -a -s '-screen 0 1280x720x24 +extension GLX +render -noreset' \
+            env LIBGL_ALWAYS_SOFTWARE=1 SDL_VIDEODRIVER=x11 \
+            ./build/aislopcraft-rebuild --smoke-fallback rebuild-fallback-smoke 2>&1 | tee rebuild-fallback-smoke.log; then
+            echo '::error::Rebuild no-pointer-lock mouse fallback failed'
+            tail -n 25 rebuild-fallback-smoke.log | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
+          test -s rebuild-fallback-smoke/hudless.png
 
-      - name: Emit opt-in original-frame thumbnail for visual review
-        if: runner.os == 'Linux' && github.event_name == 'workflow_dispatch' && inputs.frame_probe
+      - name: Emit temporary original-frame thumbnail for held-item visual QA
+        if: runner.os == 'Linux' && github.event_name == 'pull_request'
         shell: bash
         run: python3 tools/ci_frame_probe.py rebuild-smoke/before.png
 
@@ -179,7 +188,7 @@ jobs:
           else
             cp build/aislopcraft build/aislopcraft-rebuild package/
             cp -r build/assets package/
-            cp -r visual-smoke rebuild-smoke package/
+            cp -r visual-smoke rebuild-smoke rebuild-fallback-smoke package/
           fi
           cp README.md LICENSE package/
           cp -r docs package/
@@ -231,6 +240,7 @@ jobs:
           path: |
             visual-smoke/
             rebuild-smoke/
+            rebuild-fallback-smoke/
           if-no-files-found: error
 
       - name: Upload runnable bundle (not a graphical test)
@@ -251,6 +261,7 @@ jobs:
             test-results.txt
             visual-smoke.log
             rebuild-smoke.log
+            rebuild-fallback-smoke.log
             interaction-smoke.log
             build/Testing/Temporary/LastTest.log
           if-no-files-found: warn

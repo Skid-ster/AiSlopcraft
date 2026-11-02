@@ -12,6 +12,9 @@ struct Mesh {
 };
 // Chunk coordinates 0..5, independent of the legacy chunk/mesher types.
 Mesh buildMesh(const World& world,int cx,int cz);
+// Camera-space preview of one selected material. The same atlas UVs and
+// cube/flower geometry are shared with the world, without world neighbours.
+Mesh buildHeldMesh(Block block);
 // Indices in the original, one-row 16×16-pixel atlas.
 int tile(Block b,int face); // 0=down 1=up 2=north 3=south 4=west 5=east
 

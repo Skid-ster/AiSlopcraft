@@ -16,7 +16,7 @@ public:
     void rebuild(const World& world,int cx,int cz);
     void rebuildAround(const World& world,Cell edit);
     void draw(const Player& player,const std::optional<Hit>& target,int slot,
-              int width,int height,int guiScale,bool paused,bool debug,
+              int width,int height,int guiScale,bool paused,bool debug,bool hideHud,
               float fps,float frameMs,float drawMs,float swapMs,float editMs,int edits,
               const std::string& notice);
     bool capture(const std::filesystem::path& output,int width,int height,std::string& error);
@@ -28,6 +28,9 @@ private:
     std::array<GPUChunk,(World::side/World::chunk)*(World::side/World::chunk)> chunks_{};
     GLuint texture_=0,skyProgram_=0,worldProgram_=0,uiProgram_=0,lineProgram_=0;
     GLuint skyVao_=0,uiVao_=0,uiVbo_=0,lineVao_=0,lineVbo_=0;
+    GLuint heldVao_=0,heldVbo_=0;
+    GLsizei heldCount_=0;
+    int heldSlot_=-1;
     std::vector<UiVertex> ui_;
     std::string driver_;
     GLuint shader(GLenum type,const char* text,std::string& error);

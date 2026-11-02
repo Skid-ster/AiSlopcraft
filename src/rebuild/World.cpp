@@ -136,7 +136,7 @@ void Player::tick(const World& world,const Input& input,float dt) {
     float f=float(input.forward)-float(input.back),r=float(input.right)-float(input.left);
     float length=std::sqrt(f*f+r*r);
     if(length>0){f/=length;r/=length;}
-    const float speed=input.sprint?5.6f:4.3f;
+    const float speed=flying?(input.sprint?9.f:6.5f):(input.sprint?5.6f:4.3f);
     Vec3 motion{(f*std::sin(yaw)+r*std::cos(yaw))*speed*dt,0,
                 (-f*std::cos(yaw)+r*std::sin(yaw))*speed*dt};
     // Sliding in X/Z, with bounded substeps to avoid tunneling through a wall.
@@ -152,6 +152,20 @@ void Player::tick(const World& world,const Input& input,float dt) {
         }
     };
     axisMove(motion.x,true);axisMove(motion.z,false);
+    if(flying){
+        verticalSpeed=0;
+        const float rise=(float(input.jump)-float(input.descend))*
+                         (input.sprint?9.f:6.5f)*dt;
+        const int steps=std::max(1,int(std::ceil(std::abs(rise)/.10f)));
+        for(int i=0;i<steps;++i){
+            Vec3 trial=feet;trial.y+=rise/steps;
+            // Keep the camera in the finite study and its existing save bounds.
+            if(trial.y<1.f || trial.y>=World::height-1.81f || collides(world,trial))break;
+            feet=trial;
+        }
+        onGround=collides(world,feet+Vec3{0,-.055f,0});
+        return;
+    }
     if(input.jump && onGround){verticalSpeed=7.5f;onGround=false;}
     verticalSpeed=std::max(-30.f,verticalSpeed-21.f*dt);
     float vertical=verticalSpeed*dt;

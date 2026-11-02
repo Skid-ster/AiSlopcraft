@@ -1,4 +1,5 @@
 #include "StudyRenderer.h"
+#include "Palette.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -48,6 +49,23 @@ Mat camera(Vec3 eye,Vec3 forward) {
     m.m[1]=up.x;m.m[5]=up.y;m.m[9]=up.z;m.m[13]=-dot(up,eye);
     m.m[2]=-f.x;m.m[6]=-f.y;m.m[10]=-f.z;m.m[14]=dot(f,eye);
     m.m[15]=1;
+    return m;
+}
+Mat translated(float x,float y,float z){
+    Mat m;m.m[0]=m.m[5]=m.m[10]=m.m[15]=1;
+    m.m[12]=x;m.m[13]=y;m.m[14]=z;return m;
+}
+Mat scaled(float s){
+    Mat m;m.m[0]=m.m[5]=m.m[10]=s;m.m[15]=1;return m;
+}
+Mat rotatedY(float angle){
+    Mat m;const float c=std::cos(angle),s=std::sin(angle);
+    m.m[0]=m.m[10]=c;m.m[2]=-s;m.m[8]=s;m.m[5]=m.m[15]=1;
+    return m;
+}
+Mat rotatedX(float angle){
+    Mat m;const float c=std::cos(angle),s=std::sin(angle);
+    m.m[0]=m.m[15]=1;m.m[5]=m.m[10]=c;m.m[6]=s;m.m[9]=-s;
     return m;
 }
 // Fullscreen sky requires no textures and keeps its horizon color aligned
@@ -247,6 +265,12 @@ bool StudyRenderer::init(const std::filesystem::path& assets,std::string& error)
     gl_.BindVertexArray(lineVao_);gl_.BindBuffer(GL_ARRAY_BUFFER,lineVbo_);
     gl_.VertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,3*sizeof(float),reinterpret_cast<void*>(0));
     gl_.EnableVertexAttribArray(0);
+    gl_.GenVertexArrays(1,&heldVao_);gl_.GenBuffers(1,&heldVbo_);
+    gl_.BindVertexArray(heldVao_);gl_.BindBuffer(GL_ARRAY_BUFFER,heldVbo_);
+    gl_.VertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,sizeof(Vertex),reinterpret_cast<void*>(0));
+    gl_.VertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,sizeof(Vertex),reinterpret_cast<void*>(3*sizeof(float)));
+    gl_.VertexAttribPointer(2,1,GL_FLOAT,GL_FALSE,sizeof(Vertex),reinterpret_cast<void*>(5*sizeof(float)));
+    for(GLuint i=0;i<3;++i)gl_.EnableVertexAttribArray(i);
     gl_.BindVertexArray(0);
     gl_.Enable(GL_DEPTH_TEST);gl_.DepthFunc(GL_LEQUAL);
     if(gl_.GetError()!=GL_NO_ERROR){error="OpenGL setup failed";return false;}
@@ -263,12 +287,16 @@ void StudyRenderer::shutdown() {
     if(uiVbo_)gl_.DeleteBuffers(1,&uiVbo_);
     if(lineVao_)gl_.DeleteVertexArrays(1,&lineVao_);
     if(lineVbo_)gl_.DeleteBuffers(1,&lineVbo_);
+    if(heldVao_)gl_.DeleteVertexArrays(1,&heldVao_);
+    if(heldVbo_)gl_.DeleteBuffers(1,&heldVbo_);
     if(texture_)gl_.DeleteTextures(1,&texture_);
     if(skyProgram_)gl_.DeleteProgram(skyProgram_);
     if(worldProgram_)gl_.DeleteProgram(worldProgram_);
     if(uiProgram_)gl_.DeleteProgram(uiProgram_);
     if(lineProgram_)gl_.DeleteProgram(lineProgram_);
-    skyVao_=uiVao_=uiVbo_=lineVao_=lineVbo_=texture_=skyProgram_=worldProgram_=uiProgram_=lineProgram_=0;
+    skyVao_=uiVao_=uiVbo_=lineVao_=lineVbo_=heldVao_=heldVbo_=texture_=
+        skyProgram_=worldProgram_=uiProgram_=lineProgram_=0;
+    heldCount_=0;heldSlot_=-1;
 }
 void StudyRenderer::rebuild(const World& world,int cx,int cz) {
     constexpr int width=World::side/World::chunk;
@@ -325,11 +353,13 @@ void StudyRenderer::label(std::string text,float x,float y,int size,uint32_t col
     }
 }
 void StudyRenderer::draw(const Player& player,const std::optional<Hit>& target,int slot,
-                         int width,int height,int guiScale,bool paused,bool debug,
+                         int width,int height,int guiScale,bool paused,bool debug,bool hideHud,
                          float fps,float frameMs,float drawMs,float swapMs,float editMs,int edits,
                          const std::string& notice) {
     width=std::max(width,1);height=std::max(height,1);
-    Vec3 eye=player.eye();Mat mvp=multiply(projection(float(width)/height),camera(eye,player.direction()));
+    Vec3 eye=player.eye();
+    const Mat proj=projection(float(width)/height);
+    Mat mvp=multiply(proj,camera(eye,player.direction()));
     gl_.Viewport(0,0,width,height);
     gl_.ClearColor(.71f,.80f,.91f,1.f);gl_.Clear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
     gl_.Disable(GL_BLEND);gl_.Disable(GL_DEPTH_TEST);
@@ -352,7 +382,7 @@ void StudyRenderer::draw(const Player& player,const std::optional<Hit>& target,i
     gl_.Uniform1i(gl_.GetUniformLocation(worldProgram_,"uAtlas"),0);
     for(const auto& gpu:chunks_)if(gpu.count){gl_.BindVertexArray(gpu.vao);
         gl_.DrawArrays(GL_TRIANGLES,0,gpu.count);}
-    if(target){
+    if(target && !hideHud){
         const float x=float(target->cell.x),y=float(target->cell.y),z=float(target->cell.z);
         constexpr float e=.003f;
         const float xa=x-e,xb=x+1+e,ya=y-e,yb=y+1+e,za=z-e,zb=z+1+e;
@@ -370,9 +400,33 @@ void StudyRenderer::draw(const Player& player,const std::optional<Hit>& target,i
         gl_.BufferData(GL_ARRAY_BUFFER,sizeof(edges),edges.data(),GL_DYNAMIC_DRAW);
         gl_.DrawArrays(GL_LINES,0,24);
     }
+    if(!paused && !hideHud){
+        const int selected=std::clamp(slot,0,8);
+        if(heldSlot_!=selected){
+            const Mesh mesh=buildHeldMesh(creativePalette[static_cast<size_t>(selected)]);
+            heldSlot_=selected;heldCount_=static_cast<GLsizei>(mesh.vertices.size());
+            gl_.BindBuffer(GL_ARRAY_BUFFER,heldVbo_);
+            gl_.BufferData(GL_ARRAY_BUFFER,static_cast<GLsizeiptr>(mesh.vertices.size()*sizeof(Vertex)),
+                           mesh.vertices.data(),GL_DYNAMIC_DRAW);
+        }
+        // Render a genuine textured 3-D preview in camera space, not a HUD
+        // square pretending to be a held item. Do not let the world depth
+        // buffer obscure it; the held mesh still depth-tests against itself.
+        gl_.Clear(GL_DEPTH_BUFFER_BIT);
+        const Mat heldModel=multiply(translated(.84f,-.54f,-1.16f),
+                           multiply(rotatedY(.48f),multiply(rotatedX(.30f),scaled(.43f))));
+        const Mat heldMvp=multiply(proj,heldModel);
+        gl_.UseProgram(worldProgram_);
+        gl_.UniformMatrix4fv(gl_.GetUniformLocation(worldProgram_,"uMVP"),1,GL_FALSE,
+                             heldMvp.m.data());
+        gl_.Uniform3f(gl_.GetUniformLocation(worldProgram_,"uEye"),0,0,0);
+        gl_.BindVertexArray(heldVao_);
+        gl_.DrawArrays(GL_TRIANGLES,0,heldCount_);
+    }
     ui_.clear();
     const int maxScale=std::max(1,std::min(width/190,height/72));
     const int s=std::clamp(guiScale,1,maxScale);
+    if(!hideHud){
     const float barX=(width-182.f*s)/2.f,barY=height-25.f*s;
     // An ORIGINAL, opaque-edged 182×22 hotbar silhouette on a logical pixel grid.
     rect(barX,barY,182.f*s,22.f*s,0x171717,0.84f);
@@ -383,9 +437,7 @@ void StudyRenderer::draw(const Player& player,const std::optional<Hit>& target,i
         rect(x+1*s,barY+2*s,18*s,18*s,0x363636,.93f);
         rect(x+2*s,barY+3*s,16*s,16*s,0x777777,.55f);
         rect(x+3*s,barY+4*s,14*s,14*s,0x282828,.9f);
-        constexpr Block palette[]={Block::Grass,Block::Dirt,Block::Stone,Block::Log,
-                                   Block::Planks,Block::Cobble,Block::Sand,Block::Leaves,Block::Flower};
-        int iconTile=tile(palette[static_cast<size_t>(i)],1);
+        int iconTile=tile(creativePalette[static_cast<size_t>(i)],1);
         icon(iconTile,x+2*s,barY+2*s,16.f*s);
     }
     float selectedX=barX+(1+20*std::clamp(slot,0,8))*s;
@@ -409,12 +461,8 @@ void StudyRenderer::draw(const Player& player,const std::optional<Hit>& target,i
         rect(4*s,height-40*s,labelWidth,12*s,0x171717,.78f);
         label(help,8.f*s,height-37.f*s,s,0xffffff);
     }
-    if(paused){
-        rect(width/2.f-110*s,height/2.f-15*s,220*s,30*s,0x1b1b1b,.84f);
-        label("PAUSED - CLICK TO RESUME",width/2.f-83*s,height/2.f-3*s,s,0xffffff);
-    }
     if(debug){
-        rect(4*s,4*s,184*s,58*s,0x171717,.75f);
+        rect(4*s,4*s,184*s,67*s,0x171717,.75f);
         char line[80];std::snprintf(line,sizeof(line),"FPS %.0f FRAME %.1f MS",fps,frameMs);
         label(line,6.f*s,6.f*s,s,0xffffff);
         std::snprintf(line,sizeof(line),"DRAW %.1f SWAP %.1f MS",drawMs,swapMs);
@@ -427,6 +475,12 @@ void StudyRenderer::draw(const Player& player,const std::optional<Hit>& target,i
             label(line,6.f*s,42.f*s,s,0xffffff);}
         std::snprintf(line,sizeof(line),"EDITS %d",edits);
         label(line,6.f*s,51.f*s,s,0xffffff);
+        label(player.flying?"FLIGHT ON":"WALK MODE",6.f*s,60.f*s,s,0xffffff);
+    }
+    }
+    if(paused){
+        rect(width/2.f-110*s,height/2.f-15*s,220*s,30*s,0x1b1b1b,.84f);
+        label("PAUSED - CLICK TO RESUME",width/2.f-83*s,height/2.f-3*s,s,0xffffff);
     }
     gl_.Disable(GL_DEPTH_TEST);gl_.Enable(GL_BLEND);
     gl_.BlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);

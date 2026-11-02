@@ -25,10 +25,16 @@ This Ubuntu 24.04-built archive is not guaranteed to run on older distributions.
 Click window to capture mouse; the stone outcrop under the starting crosshair
 is within 4.5-block reach. Left click breaks it; right click places the
 selected hotbar material against the hit face. WASD moves, mouse looks,
-Space jumps, Ctrl sprints, 1-9/wheel select. Esc pauses and releases mouse;
+Space jumps; double-tap Space toggles creative flight (Space rises, Shift
+descends). Ctrl sprints, 1-9/wheel select. Esc pauses and releases mouse;
 the FIRST click after Esc only recaptures, so click again to break/place.
-F3 shows FPS/CPU timing, current target and edit count; F5 saves; F2 captures
-a PNG; F7 cycles GUI scale. This is creative only, no full inventory or mobs.
+F1 hides HUD/held block for screenshots; F3 shows FPS/CPU timing, target and
+edits; F5 saves; F2 captures a PNG; F7 cycles GUI scale. If mouse lock fails,
+clicks still edit and ARROW KEYS look. Use the optional Command Prompt command
+  set AISLOPCRAFT_MOUSE_FALLBACK=1
+to force unlocked-pointer/arrow-look mode before launching. The flight toggle
+is not saved (you return to walking when reloading). Creative only: no full
+inventory or mobs.
 
 BLOCK EDITS persist in saves-rebuild/study-v1.bin BESIDE this executable;
 its .bak is a validated previous save. On an invalid primary and invalid

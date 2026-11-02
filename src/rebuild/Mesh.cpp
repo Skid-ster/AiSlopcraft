@@ -94,4 +94,18 @@ Mesh buildMesh(const World& world,int cx,int cz) {
             }
     return result;
 }
+Mesh buildHeldMesh(Block block) {
+    Mesh result;
+    if(block==Block::Air)return result;
+    if(block==Block::TallGrass || block==Block::Flower){
+        plant(result,block,{0,0,0});
+    }else{
+        for(int face=0;face<6;++face){
+            appendQuad(result,block,face,{0,0,0},corners[static_cast<size_t>(face)]);
+            ++result.cubeFaces;
+        }
+    }
+    for(auto& v:result.vertices){v.x-=.5f;v.y-=.5f;v.z-=.5f;}
+    return result;
+}
 } // namespace rebuild
