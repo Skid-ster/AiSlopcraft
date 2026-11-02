@@ -1,0 +1,7 @@
+# tile	frames	frame duration at 20Hz
+water_still	8	4
+water_flow	8	4
+lava_still	8	3
+lava_flow	8	3
+fire_layer_0	8	3
+portal	8	3
