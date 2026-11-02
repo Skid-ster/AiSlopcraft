@@ -1,4 +1,33 @@
-node_modules/
-dist/
-.DS_Store
+# Build directories
+build/
+build-*/
+out/
+cmake-build-*/
+.cache/
+CMakeUserPresets.json
+
+# Generated worlds / runtime data (never commit saves)
+saves/
+saves-rebuild/
+screenshots/
+options.txt
+logs/
 *.log
+crash-*.txt
+
+# Editor / OS junk
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Compiled objects
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
