@@ -188,7 +188,7 @@ jobs:
           test -s package/assets/rebuild/atlas.png
 
       - name: Stage standalone rebuild preview (release push only)
-        if: "${{ github.event_name == 'push' && github.event.head_commit.message == 'release: v0.2.0-rebuild-preview.1' }}"
+        if: "${{ github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release: v0.2.0-rebuild-preview.1') }}"
         shell: bash
         run: |
           mkdir -p preview-package/assets/rebuild release-assets
@@ -216,7 +216,7 @@ jobs:
           fi
 
       - name: Upload standalone pre-release bundle (release push only)
-        if: "${{ github.event_name == 'push' && github.event.head_commit.message == 'release: v0.2.0-rebuild-preview.1' }}"
+        if: "${{ github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release: v0.2.0-rebuild-preview.1') }}"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: rebuild-preview-${{ runner.os }}-bundle
@@ -278,7 +278,7 @@ jobs:
 
   publish_preview:
     name: Publish gated rebuild technical pre-release
-    if: "${{ github.event_name == 'push' && github.event.head_commit.message == 'release: v0.2.0-rebuild-preview.1' }}"
+    if: "${{ github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release: v0.2.0-rebuild-preview.1') }}"
     needs: [native, windows_vs2026]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
