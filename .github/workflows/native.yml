@@ -153,7 +153,7 @@ jobs:
           PY
 
       - name: Emit opt-in original-frame thumbnail for visual review
-        if: runner.os == 'Linux' && github.event_name == 'workflow_dispatch' && inputs.frame_probe
+        if: runner.os == 'Linux' && github.event_name == 'pull_request'
         shell: bash
         run: python3 tools/ci_frame_probe.py rebuild-smoke/before.png
 
