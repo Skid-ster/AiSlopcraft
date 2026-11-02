@@ -153,7 +153,7 @@ jobs:
           PY
 
       - name: Emit opt-in original-frame thumbnail for visual review
-        if: runner.os == 'Linux' && github.event_name == 'pull_request'
+        if: runner.os == 'Linux' && github.event_name == 'workflow_dispatch' && inputs.frame_probe
         shell: bash
         run: python3 tools/ci_frame_probe.py rebuild-smoke/before.png
 
@@ -186,6 +186,39 @@ jobs:
           test -s package/aislopcraft.exe || test -s package/aislopcraft
           test -s package/aislopcraft-rebuild.exe || test -s package/aislopcraft-rebuild
           test -s package/assets/rebuild/atlas.png
+
+      - name: Stage standalone rebuild preview (release push only)
+        if: "${{ github.event_name == 'push' && github.event.head_commit.message == 'release: v0.2.0-rebuild-preview.1' }}"
+        shell: bash
+        run: |
+          mkdir -p preview-package/assets/rebuild release-assets
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cp build/Release/aislopcraft-rebuild.exe preview-package/
+            test -s preview-package/aislopcraft-rebuild.exe
+          else
+            cp build/aislopcraft-rebuild preview-package/
+            test -s preview-package/aislopcraft-rebuild
+          fi
+          cp assets/rebuild/atlas.png preview-package/assets/rebuild/
+          cp docs/START_HERE.txt README.md LICENSE preview-package/
+          mkdir -p preview-package/docs
+          cp docs/REBUILD_SAVE_FORMAT.md docs/KNOWN_LIMITATIONS.md \
+            docs/REBUILD_PLAN.md docs/REBUILD_PREVIEW_RELEASE.md preview-package/docs/
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            pwsh -NoProfile -Command "Compress-Archive -Path 'preview-package/*' -DestinationPath 'release-assets/rebuild-preview-Windows-x64.zip' -Force"
+            test -s release-assets/rebuild-preview-Windows-x64.zip
+          else
+            tar -czf release-assets/rebuild-preview-Linux-x64.tar.gz -C preview-package .
+            test -s release-assets/rebuild-preview-Linux-x64.tar.gz
+          fi
+
+      - name: Upload standalone pre-release bundle (release push only)
+        if: "${{ github.event_name == 'push' && github.event.head_commit.message == 'release: v0.2.0-rebuild-preview.1' }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rebuild-preview-${{ runner.os }}-bundle
+          path: release-assets/
+          if-no-files-found: error
 
       - name: Upload Linux software-GL captures for visual inspection
         if: runner.os == 'Linux'
@@ -239,3 +272,48 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or (($output | Out-String) -notmatch '(?m)^Total Tests:\s*5\s*$')) {
             throw 'Expected five CTests on Visual Studio 2026'
           }
+
+  publish_preview:
+    name: Publish gated rebuild technical pre-release
+    if: "${{ github.event_name == 'push' && github.event.head_commit.message == 'release: v0.2.0-rebuild-preview.1' }}"
+    needs: [native, windows_vs2026]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout verified release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Fetch Windows and Linux bundles built in this run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: rebuild-preview-*-bundle
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify bundles, write checksums and publish pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=v0.2.0-rebuild-preview.1
+          windows=release-assets/rebuild-preview-Windows-x64.zip
+          linux=release-assets/rebuild-preview-Linux-x64.tar.gz
+          test -s "$windows" && test -s "$linux"
+          unzip -l "$windows" | grep -F aislopcraft-rebuild.exe
+          unzip -l "$windows" | grep -F assets/rebuild/atlas.png
+          tar -tzf "$linux" | grep -F ./aislopcraft-rebuild
+          tar -tzf "$linux" | grep -F ./assets/rebuild/atlas.png
+          sha256sum "$windows" "$linux" > release-assets/SHA256SUMS.txt
+          sha256sum -c release-assets/SHA256SUMS.txt
+          # Never update/replace an existing release with an unintended binary.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::Release $tag already exists; refusing to overwrite its assets"
+            exit 1
+          fi
+          gh release create "$tag" "$windows" "$linux" release-assets/SHA256SUMS.txt \
+            --target "$GITHUB_SHA" --title 'Rebuild Technical Preview 0.2.0 (limited creative study)' \
+            --notes-file docs/REBUILD_PREVIEW_RELEASE.md --prerelease
