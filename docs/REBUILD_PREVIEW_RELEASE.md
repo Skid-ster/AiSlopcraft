@@ -6,7 +6,7 @@
 
 - **Windows x64:** `rebuild-preview-Windows-x64.zip`. Extract the *entire* ZIP to a writable folder, then start `aislopcraft-rebuild.exe`. No Visual Studio or CMake needed for the prebuilt executable; a working OpenGL 3.3 driver is required. Physical Windows control and frame-rate retesting remain outstanding.
 - **Linux x64:** `rebuild-preview-Linux-x64.tar.gz`. Extract and run `./aislopcraft-rebuild` on a desktop with OpenGL 3.3 and SDL/X11/Wayland system dependencies. Built/tested on Ubuntu 24.04 CI; other distributions (especially older glibc) are not guaranteed.
-- `SHA256SUMS.txt` lists both archive hashes. The ZIP/tar include only the new rebuilt executable, original 16-pixel study atlas, licence and guide/docs; **not** the rejected old executable. Read `START_HERE.txt` before playing.
+- `SHA256SUMS.txt` lists both archive hashes. The ZIP/tar include only the new rebuilt executable, original 16-pixel study atlas, project/SDL3/stb licences and guide/docs; **not** the rejected old executable. Read `START_HERE.txt` before playing.
 
 ### Available in this technical slice
 

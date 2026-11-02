@@ -1,6 +1,6 @@
 # Known limitations — superseded prototype and independent rebuild study
 
-> The previous `aislopcraft` build was **retested and rejected by the user** for being badly unfinished and visually unlike the 2013 target. Its code and old saves remain for rollback, not as the visual starting point. `aislopcraft-rebuild` is a new **in-memory daylight art study** with its own incomplete systems; see [REBUILD_PLAN.md](REBUILD_PLAN.md). The detailed legacy limitations below do not imply those legacy features exist in the new study.
+> The previous `aislopcraft` build was **retested and rejected by the user** for being badly unfinished and visually unlike the 2013 target. Its code and old saves remain for rollback, not as the visual starting point. `aislopcraft-rebuild` is a new **bounded daylight creative study with a separate, limited save format** and many incomplete systems; see [REBUILD_PLAN.md](REBUILD_PLAN.md). The detailed legacy limitations below do not imply those legacy features exist in the new study.
 
 ## Directly observed blockers
 

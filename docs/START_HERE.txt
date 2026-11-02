@@ -4,7 +4,8 @@ AiSlopcraft REBUILD PREVIEW — technical pre-release, not a finished recreation
 This is an UNOFFICIAL, independently made voxel study inspired by the era of
 Minecraft Java release-numbered 1.7.3 (December 2013), NOT Beta 1.7.3.
 It is not affiliated with Mojang Studios or Microsoft. No proprietary game
-files are included. It does not yet reproduce the target game's appearance,
+files are included. Third-party SDL3/stb licence notices are in third_party/.
+It does not yet reproduce the target game's appearance,
 full content or world format; real Windows controls and performance need your
 retest. Please keep expectations at "single creative art/interaction scene."
 

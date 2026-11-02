@@ -201,6 +201,9 @@ jobs:
           fi
           cp assets/rebuild/atlas.png preview-package/assets/rebuild/
           cp docs/START_HERE.txt README.md LICENSE preview-package/
+          mkdir -p preview-package/third_party/stb
+          cp third_party/SDL3-LICENSE.txt preview-package/third_party/
+          cp third_party/stb/LICENSE preview-package/third_party/stb/
           mkdir -p preview-package/docs
           cp docs/REBUILD_SAVE_FORMAT.md docs/KNOWN_LIMITATIONS.md \
             docs/REBUILD_PLAN.md docs/REBUILD_PREVIEW_RELEASE.md preview-package/docs/
