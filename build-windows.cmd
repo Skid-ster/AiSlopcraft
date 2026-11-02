@@ -82,7 +82,7 @@ if errorlevel 1 goto :failed
 
 echo.
 echo Build and headless tests passed. No graphical Windows gameplay or visual-parity claim.
-echo Independent in-memory ART STUDY: "%CD%\build\Release\aislopcraft-rebuild.exe"
+echo Independent REBUILD PREVIEW with separate study saves: "%CD%\build\Release\aislopcraft-rebuild.exe"
 echo Superseded legacy prototype: "%CD%\build\Release\aislopcraft.exe"
 echo To try the new study from the source checkout:
 echo   cd /d "%CD%"

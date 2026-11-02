@@ -30,7 +30,24 @@ constexpr std::array<std::array<Vec3,4>,6> corners{{
 }};
 constexpr std::array<Cell,6> normals{{{0,-1,0},{0,1,0},{0,0,-1},{0,0,1},{-1,0,0},{1,0,0}}};
 constexpr std::array<float,6> light{{.55f,1.f,.82f,.82f,.69f,.69f}};
-void appendQuad(Mesh& mesh,Block block,int face,Cell pos,const std::array<Vec3,4>& quad) {
+Cell add(Cell a,Cell b){return {a.x+b.x,a.y+b.y,a.z+b.z};}
+// Per-corner voxel ambient occlusion, sampled outside the visible face. For
+// adjacent solid blocks, two edge neighbours plus their diagonal occlude the
+// corner; leaves/plants do not create artificial solid black corners.
+float cornerLight(const World& world,Cell pos,int face,Vec3 p) {
+    Cell u{},v{};
+    if(face<2){u.x=p.x<.5f?-1:1;v.z=p.z<.5f?-1:1;}
+    else if(face<4){u.x=p.x<.5f?-1:1;v.y=p.y<.5f?-1:1;}
+    else{u.z=p.z<.5f?-1:1;v.y=p.y<.5f?-1:1;}
+    const Cell outer=add(pos,normals[static_cast<size_t>(face)]);
+    const bool sideU=opaque(world.get(add(outer,u)));
+    const bool sideV=opaque(world.get(add(outer,v)));
+    const bool diagonal=opaque(world.get(add(add(outer,u),v)));
+    const int blocked=sideU&&sideV?3:int(sideU)+int(sideV)+int(diagonal);
+    return light[static_cast<size_t>(face)]*(1.f-.13f*blocked);
+}
+void appendQuad(Mesh& mesh,Block block,int face,Cell pos,const std::array<Vec3,4>& quad,
+                const World* world=nullptr) {
     const int t=tile(block,face);
     std::array<Vertex,4> v{};
     for(int i=0;i<4;++i) {
@@ -41,7 +58,8 @@ void appendQuad(Mesh& mesh,Block block,int face,Cell pos,const std::array<Vec3,4
         u=.03125f+.9375f*u;
         vertical=.03125f+.9375f*vertical;
         v[static_cast<size_t>(i)]={pos.x+p.x,pos.y+p.y,pos.z+p.z,
-                                   (float(t)+u)/16.f,vertical,light[static_cast<size_t>(face)]};
+                                   (float(t)+u)/16.f,vertical,
+                                   world?cornerLight(*world,pos,face,p):light[static_cast<size_t>(face)]};
     }
     constexpr int order[]={0,1,2,0,2,3};
     for(int i:order)mesh.vertices.push_back(v[static_cast<size_t>(i)]);
@@ -70,7 +88,7 @@ Mesh buildMesh(const World& world,int cx,int cz) {
                     const auto n=normals[static_cast<size_t>(face)];
                     Block adjacent=world.get({x+n.x,y+n.y,z+n.z});
                     if(opaque(adjacent) || (b==Block::Leaves && adjacent==Block::Leaves))continue;
-                    appendQuad(result,b,face,c,corners[static_cast<size_t>(face)]);
+                    appendQuad(result,b,face,c,corners[static_cast<size_t>(face)],&world);
                     ++result.cubeFaces;
                 }
             }

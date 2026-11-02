@@ -50,6 +50,43 @@ Mat camera(Vec3 eye,Vec3 forward) {
     m.m[15]=1;
     return m;
 }
+// Fullscreen sky requires no textures and keeps its horizon color aligned
+// with the distance-fog target. Clouds use an authored blocky procedural
+// silhouette rather than any proprietary image or external asset.
+const char* skyVertex=R"GLSL(#version 330 core
+out vec2 vClip;
+void main(){
+    vec2 uv=vec2((gl_VertexID<<1)&2,gl_VertexID&2);
+    vClip=uv*2.0-1.0;
+    gl_Position=vec4(vClip,0.999,1.0);
+}
+)GLSL";
+const char* skyFragment=R"GLSL(#version 330 core
+in vec2 vClip;
+uniform vec3 uEye;
+uniform vec3 uForward;
+uniform vec3 uRight;
+uniform vec3 uUp;
+uniform float uAspect;
+uniform float uTime;
+out vec4 fragColor;
+float randomCell(vec2 cell){return fract(sin(dot(cell,vec2(127.1,311.7)))*43758.5453);}
+void main(){
+    vec3 ray=normalize(uForward+uRight*(vClip.x*uAspect*0.7002)+uUp*(vClip.y*0.7002));
+    vec3 sky=mix(vec3(0.71,0.80,0.91),vec3(0.44,0.66,0.93),
+                 clamp((ray.y+0.03)*1.4,0.0,1.0));
+    if(ray.y>0.10){
+        float reach=(24.0-uEye.y)/ray.y;
+        if(reach>0.0 && reach<100.0){
+            vec2 cell=floor((uEye.xz+ray.xz*reach+vec2(uTime*0.35,0.0))/5.0);
+            float cloud=step(0.48,randomCell(floor(cell/4.0))) *
+                        step(0.26,randomCell(cell+vec2(43.0,19.0)));
+            sky=mix(sky,vec3(0.97,0.98,1.0),cloud*0.83);
+        }
+    }
+    fragColor=vec4(sky,1.0);
+}
+)GLSL";
 const char* worldVertex=R"GLSL(#version 330 core
 layout(location=0) in vec3 aPosition;
 layout(location=1) in vec2 aUV;
@@ -70,7 +107,7 @@ out vec4 fragColor;
 void main(){
     vec4 texel=texture(uAtlas,vUV);
     if(texel.a<0.5)discard;
-    vec3 sky=vec3(0.54,0.74,0.94);
+    vec3 sky=vec3(0.71,0.80,0.91);
     vec3 lit=texel.rgb*vLight;
     float distanceXZ=length(vWorld.xz-uEye.xz);
     float fog=smoothstep(27.0,43.0,distanceXZ);
@@ -177,7 +214,8 @@ bool StudyRenderer::init(const std::filesystem::path& assets,std::string& error)
     const auto* version=gl_.GetString(GL_VERSION);
     if(!version){error="No GL version; OpenGL 3.3 desktop driver required";return false;}
     driver_=reinterpret_cast<const char*>(version);
-    worldProgram_=program(worldVertex,worldFragment,error);
+    skyProgram_=program(skyVertex,skyFragment,error);
+    worldProgram_=skyProgram_?program(worldVertex,worldFragment,error):0;
     uiProgram_=worldProgram_?program(uiVertex,uiFragment,error):0;
     lineProgram_=uiProgram_?program(lineVertex,lineFragment,error):0;
     if(!lineProgram_)return false;
@@ -198,6 +236,7 @@ bool StudyRenderer::init(const std::filesystem::path& assets,std::string& error)
     gl_.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
     gl_.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
     gl_.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+    gl_.GenVertexArrays(1,&skyVao_);
     gl_.GenVertexArrays(1,&uiVao_);gl_.GenBuffers(1,&uiVbo_);
     gl_.BindVertexArray(uiVao_);gl_.BindBuffer(GL_ARRAY_BUFFER,uiVbo_);
     gl_.VertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,sizeof(UiVertex),reinterpret_cast<void*>(0));
@@ -219,15 +258,17 @@ void StudyRenderer::shutdown() {
         if(gpu.vbo)gl_.DeleteBuffers(1,&gpu.vbo);
         gpu={};
     }
+    if(skyVao_)gl_.DeleteVertexArrays(1,&skyVao_);
     if(uiVao_)gl_.DeleteVertexArrays(1,&uiVao_);
     if(uiVbo_)gl_.DeleteBuffers(1,&uiVbo_);
     if(lineVao_)gl_.DeleteVertexArrays(1,&lineVao_);
     if(lineVbo_)gl_.DeleteBuffers(1,&lineVbo_);
     if(texture_)gl_.DeleteTextures(1,&texture_);
+    if(skyProgram_)gl_.DeleteProgram(skyProgram_);
     if(worldProgram_)gl_.DeleteProgram(worldProgram_);
     if(uiProgram_)gl_.DeleteProgram(uiProgram_);
     if(lineProgram_)gl_.DeleteProgram(lineProgram_);
-    uiVao_=uiVbo_=lineVao_=lineVbo_=texture_=worldProgram_=uiProgram_=lineProgram_=0;
+    skyVao_=uiVao_=uiVbo_=lineVao_=lineVbo_=texture_=skyProgram_=worldProgram_=uiProgram_=lineProgram_=0;
 }
 void StudyRenderer::rebuild(const World& world,int cx,int cz) {
     constexpr int width=World::side/World::chunk;
@@ -249,11 +290,13 @@ void StudyRenderer::rebuildAround(const World& world,Cell edit) {
     const int x=edit.x+World::half,z=edit.z+World::half;
     const int cx=x/World::chunk,cz=z/World::chunk;
     rebuild(world,cx,cz);
-    // A face in an adjacent chunk changes only at this exact boundary.
-    if(x%World::chunk==0)rebuild(world,cx-1,cz);
-    if(x%World::chunk==World::chunk-1)rebuild(world,cx+1,cz);
-    if(z%World::chunk==0)rebuild(world,cx,cz-1);
-    if(z%World::chunk==World::chunk-1)rebuild(world,cx,cz+1);
+    // A visible face and its corner AO can depend on voxels in neighbouring
+    // chunks, including the diagonal neighbour at a chunk-corner edit.
+    int dx=x%World::chunk==0?-1:(x%World::chunk==World::chunk-1?1:0);
+    int dz=z%World::chunk==0?-1:(z%World::chunk==World::chunk-1?1:0);
+    if(dx)rebuild(world,cx+dx,cz);
+    if(dz)rebuild(world,cx,cz+dz);
+    if(dx && dz)rebuild(world,cx+dx,cz+dz);
 }
 void StudyRenderer::quad(float x,float y,float w,float h,float u0,float v0,float u1,float v1,
                          uint32_t color,float alpha) {
@@ -283,12 +326,25 @@ void StudyRenderer::label(std::string text,float x,float y,int size,uint32_t col
 }
 void StudyRenderer::draw(const Player& player,const std::optional<Hit>& target,int slot,
                          int width,int height,int guiScale,bool paused,bool debug,
-                         float fps,float frameMs,float drawMs,float swapMs,float editMs,int edits) {
+                         float fps,float frameMs,float drawMs,float swapMs,float editMs,int edits,
+                         const std::string& notice) {
     width=std::max(width,1);height=std::max(height,1);
     Vec3 eye=player.eye();Mat mvp=multiply(projection(float(width)/height),camera(eye,player.direction()));
     gl_.Viewport(0,0,width,height);
-    gl_.ClearColor(.54f,.74f,.94f,1.f);gl_.Clear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
-    gl_.Disable(GL_BLEND);gl_.Enable(GL_DEPTH_TEST);
+    gl_.ClearColor(.71f,.80f,.91f,1.f);gl_.Clear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+    gl_.Disable(GL_BLEND);gl_.Disable(GL_DEPTH_TEST);
+    const Vec3 forward=unit(player.direction());
+    const Vec3 right=unit(cross(forward,{0,1,0}));
+    const Vec3 up=unit(cross(right,forward));
+    gl_.UseProgram(skyProgram_);
+    gl_.Uniform3f(gl_.GetUniformLocation(skyProgram_,"uEye"),eye.x,eye.y,eye.z);
+    gl_.Uniform3f(gl_.GetUniformLocation(skyProgram_,"uForward"),forward.x,forward.y,forward.z);
+    gl_.Uniform3f(gl_.GetUniformLocation(skyProgram_,"uRight"),right.x,right.y,right.z);
+    gl_.Uniform3f(gl_.GetUniformLocation(skyProgram_,"uUp"),up.x,up.y,up.z);
+    gl_.Uniform1f(gl_.GetUniformLocation(skyProgram_,"uAspect"),float(width)/height);
+    gl_.Uniform1f(gl_.GetUniformLocation(skyProgram_,"uTime"),float(SDL_GetTicks())/1000.f);
+    gl_.BindVertexArray(skyVao_);gl_.DrawArrays(GL_TRIANGLES,0,3);
+    gl_.Enable(GL_DEPTH_TEST);
     gl_.BindTexture(GL_TEXTURE_2D,texture_);
     gl_.UseProgram(worldProgram_);
     gl_.UniformMatrix4fv(gl_.GetUniformLocation(worldProgram_,"uMVP"),1,GL_FALSE,mvp.m.data());
@@ -344,7 +400,15 @@ void StudyRenderer::draw(const Player& player,const std::optional<Hit>& target,i
         rect(cx-5*s,cy-s/2.f,10*s,s,0xf3f3f3);
         rect(cx-s/2.f,cy-5*s,s,10*s,0xf3f3f3);
     }
-    label("ART STUDY 01",width-92.f*s,6.f*s,s,0x202020);
+    label("REBUILD PREVIEW",width-103.f*s,6.f*s,s,0x202020);
+    std::string help=notice;
+    if(help.empty() && !paused && edits==0 && SDL_GetTicks()<12000)
+        help="L BREAK R PLACE F5 SAVE";
+    if(!help.empty()){
+        float labelWidth=(help.size()*6.f+8.f)*s;
+        rect(4*s,height-40*s,labelWidth,12*s,0x171717,.78f);
+        label(help,8.f*s,height-37.f*s,s,0xffffff);
+    }
     if(paused){
         rect(width/2.f-110*s,height/2.f-15*s,220*s,30*s,0x1b1b1b,.84f);
         label("PAUSED - CLICK TO RESUME",width/2.f-83*s,height/2.f-3*s,s,0xffffff);

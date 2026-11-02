@@ -45,8 +45,13 @@ World::World():cells_(static_cast<size_t>(side)*side*height,Block::Air) {
         if((h%27)==0 && (x*x+(z-15)*(z-15)>20) && top+1<height)
             cells_[index({x,top+1,z})]=(h&8u)?Block::TallGrass:Block::Flower;
     }
+    // An authored focal outcrop sits inside the first crosshair's reach. The
+    // opening frame both demonstrates a selectable face and preserves sky/trees.
+    for(Cell c: {Cell{0,7,11},Cell{0,8,10},Cell{-1,7,10},Cell{1,7,10}})
+        set(c,Block::Stone);
     struct Tree {int x,z;};
-    constexpr Tree trees[]={{-14,-11},{13,-16},{-22,-29},{25,-27},
+    constexpr Tree trees[]={{-9,0},{11,-3},{-17,12},{17,8},
+                             {-14,-11},{13,-16},{-22,-29},{25,-27},
                              {-31,15},{34,18},{-8,-35},{8,-35},{-35,-24}};
     for(auto [x,z]:trees) {
         const int ground=surface(x,z);

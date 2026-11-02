@@ -59,7 +59,7 @@ target_compile_definitions(voxcore PUBLIC
     VOXCRAFT_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
 
 # Independent rebuild core. Deliberately does not link the superseded voxcore.
-add_library(rebuild_core STATIC src/rebuild/World.cpp src/rebuild/Mesh.cpp)
+add_library(rebuild_core STATIC src/rebuild/World.cpp src/rebuild/Mesh.cpp src/rebuild/StudySave.cpp)
 target_include_directories(rebuild_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(rebuild_core PRIVATE voxcraft_warnings)
 

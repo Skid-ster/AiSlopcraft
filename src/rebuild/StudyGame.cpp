@@ -1,5 +1,6 @@
-// Standalone, independent SDL entry point for the small in-memory art study.
+// Standalone SDL entry point for the bounded, independent rebuild preview.
 #include "StudyRenderer.h"
+#include "StudySave.h"
 #include "World.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -28,11 +29,17 @@ private:
     SDL_Window* window_=nullptr;
     SDL_GLContext context_=nullptr;
     bool running_=true,captured_=false,paused_=false,debug_=false,shot_=false;
+    bool persistent_=false,protectCorruptSave_=false;
     int slot_=0,guiScale_=2,edits_=0,width_=1280,height_=720;
-    float fps_=0,frameMs_=0,drawMs_=0,swapMs_=0,editMs_=0;
+    float fps_=0,frameMs_=0,drawMs_=0,swapMs_=0,editMs_=0,saveTimer_=0;
+    std::filesystem::path savePath_;
+    std::string notice_;
+    uint64_t noticeUntil_=0;
     std::optional<Hit> target_;
-    bool open(std::string& error);
+    bool open(std::string& error,bool persistent);
     void close();
+    void say(const std::string& message);
+    bool save();
     void capture(bool enabled);
     void edit(uint8_t button);
     void handle(const SDL_Event& event);
@@ -46,14 +53,20 @@ std::filesystem::path assetDir() {
     if(std::filesystem::exists("assets/rebuild/atlas.png"))return "assets";
     return VOXCRAFT_ASSET_DIR;
 }
-bool StudyGame::open(std::string& error) {
+bool StudyGame::open(std::string& error,bool persistent) {
+    persistent_=persistent;
     if(!SDL_Init(SDL_INIT_VIDEO)){error=SDL_GetError();return false;}
+    // Save beside the executable, never in an arbitrary launcher working
+    // directory or the superseded game's 'saves/' folder.
+    const char* base=SDL_GetBasePath();
+    if(!base){error="Cannot determine executable directory: "+std::string(SDL_GetError());return false;}
+    savePath_=std::filesystem::path(base)/"saves-rebuild"/"study-v1.bin";
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION,3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION,3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER,1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE,24);
-    window_=SDL_CreateWindow("AiSlopcraft — REBUILD ART STUDY 01 (not a finished game)",
+    window_=SDL_CreateWindow("AiSlopcraft — REBUILD PREVIEW (not a finished recreation)",
                              width_,height_,SDL_WINDOW_OPENGL|SDL_WINDOW_RESIZABLE);
     if(!window_){error=SDL_GetError();return false;}
     context_=SDL_GL_CreateContext(window_);
@@ -63,17 +76,30 @@ bool StudyGame::open(std::string& error) {
     SDL_GetWindowSizeInPixels(window_,&width_,&height_);
     player_.feet={.5f,float(World::surface(0,15)+1),15.5f};
     player_.onGround=true;
+    if(persistent_){
+        const auto loaded=loadStudy(world_,player_,slot_,savePath_);
+        if(loaded.loaded){
+            say(loaded.backup?"BACKUP RESTORED":"STUDY LOADED");
+            std::cout<<"Rebuild: "<<loaded.message<<"; "<<loaded.edits<<" saved block deltas\n";
+        }else if(loaded.message!="No prior study save"){
+            protectCorruptSave_=true; // do not silently replace unreadable user data
+            say("SAVE INVALID SEE CONSOLE");
+            std::cerr<<"Rebuild save not loaded: "<<loaded.message
+                     <<". Autosave disabled; F5 explicitly starts a fresh study save.\n";
+        }
+    }
     for(int cz=0;cz<World::side/World::chunk;++cz)
         for(int cx=0;cx<World::side/World::chunk;++cx)renderer_.rebuild(world_,cx,cz);
     target_=raycast(world_,player_.eye(),player_.direction());
-    std::cout<<"Rebuild study: GL "<<renderer_.driver()<<"; fixed in-memory meadow, original art. "
-             <<"Click the window to capture the mouse. No saves, survival or 1.7.3 parity.\n";
+    std::cout<<"Rebuild preview: GL "<<renderer_.driver()<<"; fixed meadow, original art. "
+             <<"Click to capture. Study saves use only saves-rebuild/; not survival or 1.7.3 parity.\n";
     return true;
 }
 void StudyGame::capture(bool enabled) {
     if(!window_)return;
     if(!SDL_SetWindowRelativeMouseMode(window_,enabled)) {
         std::cerr<<"Mouse capture error: "<<SDL_GetError()<<'\n';
+        if(enabled)say("MOUSE CAPTURE FAILED");
         captured_=false;return;
     }
     captured_=enabled;
@@ -87,6 +113,21 @@ void StudyGame::close() {
     }
     context_=nullptr;window_=nullptr;
     SDL_Quit();
+}
+void StudyGame::say(const std::string& message) {
+    notice_=message;noticeUntil_=SDL_GetTicks()+3500;
+}
+bool StudyGame::save() {
+    if(!persistent_)return false;
+    std::string error;
+    if(saveStudy(world_,player_,slot_,savePath_,error)){
+        say("STUDY SAVED");
+        std::cout<<"Rebuild saved to "<<savePath_<<"; a previous valid primary is backed up as .bak\n";
+        return true;
+    }
+    say("SAVE FAILED SEE CONSOLE");
+    std::cerr<<"Rebuild save failed: "<<error<<'\n';
+    return false;
 }
 void StudyGame::edit(uint8_t button) {
     target_=raycast(world_,player_.eye(),player_.direction());
@@ -120,6 +161,11 @@ void StudyGame::handle(const SDL_Event& e) {
             if(e.key.scancode==SDL_SCANCODE_ESCAPE){paused_=true;capture(false);}
             else if(e.key.scancode==SDL_SCANCODE_F3)debug_=!debug_;
             else if(e.key.scancode==SDL_SCANCODE_F2)shot_=true;
+            else if(e.key.scancode==SDL_SCANCODE_F5){
+                const bool wasProtected=protectCorruptSave_;
+                protectCorruptSave_=false;
+                if(!save() && wasProtected)protectCorruptSave_=true;
+            }
             else if(e.key.scancode==SDL_SCANCODE_F7)guiScale_=guiScale_%4+1;
             else if(e.key.scancode>=SDL_SCANCODE_1 && e.key.scancode<=SDL_SCANCODE_9)
                 slot_=static_cast<int>(e.key.scancode-SDL_SCANCODE_1);
@@ -148,7 +194,8 @@ void StudyGame::draw() {
     SDL_GetWindowSizeInPixels(window_,&width_,&height_);
     auto drawStart=Clock::now();
     renderer_.draw(player_,target_,slot_,width_,height_,guiScale_,paused_,debug_,
-                   fps_,frameMs_,drawMs_,swapMs_,editMs_,edits_);
+                   fps_,frameMs_,drawMs_,swapMs_,editMs_,edits_,
+                   SDL_GetTicks()<noticeUntil_?notice_:std::string{});
     drawMs_=std::chrono::duration<float,std::milli>(Clock::now()-drawStart).count();
     if(shot_){
         std::string error;
@@ -164,7 +211,7 @@ void StudyGame::draw() {
 }
 int StudyGame::run() {
     std::string error;
-    if(!open(error)){std::cerr<<"Rebuild startup failed: "<<error<<'\n';close();return 1;}
+    if(!open(error,true)){std::cerr<<"Rebuild startup failed: "<<error<<'\n';close();return 1;}
     capture(true); // Esc/alt-tab releases; a click reacquires without also mining.
     auto previous=Clock::now(),second=previous;
     float accumulator=0;
@@ -185,6 +232,10 @@ int StudyGame::run() {
                             keys[SDL_SCANCODE_SPACE],
                             keys[SDL_SCANCODE_LCTRL]||keys[SDL_SCANCODE_RCTRL]};
                 player_.tick(world_,input,1.f/60);
+                if(persistent_ && !protectCorruptSave_){
+                    saveTimer_+=1.f/60;
+                    if(saveTimer_>=60.f){save();saveTimer_=0;}
+                }
             }
             accumulator-=1.f/60;
         }
@@ -196,21 +247,22 @@ int StudyGame::run() {
         float interval=std::chrono::duration<float>(Clock::now()-second).count();
         if(interval>=1.f){
             fps_=float(frames)/interval;frames=0;second=Clock::now();
-            std::string title="AiSlopcraft REBUILD ART STUDY 01 | "+
+            std::string title="AiSlopcraft REBUILD PREVIEW | "+
                 std::to_string(static_cast<int>(std::round(fps_)))+" FPS | edits "+
-                std::to_string(edits_)+" | NO SAVES / NOT PARITY";
+                std::to_string(edits_)+" | SEPARATE STUDY SAVE / NOT PARITY";
             SDL_SetWindowTitle(window_,title.c_str());
             if(debug_)std::cout<<title<<" | frame "<<frameMs_<<" ms\n";
         }
         SDL_Delay(1); // do not spin on uncapped software drivers
     }
+    if(!protectCorruptSave_)save();
     close();return 0;
 }
 int StudyGame::smoke(const std::filesystem::path& directory) {
     std::string error;
-    if(!open(error)){std::cerr<<"Rebuild GL smoke startup failed: "<<error<<'\n';close();return 1;}
+    if(!open(error,false)){std::cerr<<"Rebuild GL smoke startup failed: "<<error<<'\n';close();return 1;}
     auto before=directory/"before.png",after=directory/"after.png";
-    renderer_.draw(player_,target_,slot_,width_,height_,guiScale_,false,false,0,0,0,0,0,0);
+    renderer_.draw(player_,target_,slot_,width_,height_,guiScale_,false,false,0,0,0,0,0,0,{});
     bool ok=renderer_.capture(before,width_,height_,error);
     if(ok && target_) {
         const Cell base=target_->cell;
@@ -237,14 +289,14 @@ int StudyGame::smoke(const std::filesystem::path& directory) {
         }
         // Relative-mode recapture can synthesize a warp motion on some drivers.
         // Flush it so these synthetic button tests keep their known camera pose.
-        player_.yaw=0;player_.pitch=-.48f;
+        player_.yaw=0;player_.pitch=Player{}.pitch;
         if(ok){
             ok=click(SDL_BUTTON_RIGHT) && world_.get(placed)==Block::Grass && edits_==1;
             if(!ok)error="SDL right button did not place the selected block";
         }
         if(ok){
             renderer_.draw(player_,target_,slot_,width_,height_,guiScale_,false,false,
-                           0,0,0,0,editMs_,edits_);
+                           0,0,0,0,editMs_,edits_,{});
             ok=renderer_.capture(after,width_,height_,error);
         }
         if(ok){
@@ -263,8 +315,8 @@ int StudyGame::smoke(const std::filesystem::path& directory) {
                 size_t sky=0,green=0,hud=0;
                 for(int y=0;y<h;++y)for(int x=0;x<w;++x){
                     const auto* pixel=pixels+(static_cast<size_t>(y)*w+x)*4;
-                    if(std::abs(int(pixel[0])-138)<18 && std::abs(int(pixel[1])-189)<18 &&
-                       std::abs(int(pixel[2])-240)<18)++sky;
+                    if(y<h/2 && int(pixel[2])>int(pixel[1])+14 &&
+                       int(pixel[1])>int(pixel[0])+13 && pixel[0]>85 && pixel[0]<220)++sky;
                     if(int(pixel[1])>int(pixel[0])+20 && int(pixel[1])>int(pixel[2])+25)++green;
                     if(y>h-60 && pixel[0]<80 && pixel[1]<80 && pixel[2]<80)++hud;
                 }
@@ -307,13 +359,13 @@ int main(int argc,char** argv) {
         return 0;
     }
     if(option=="--help" && argc==2){
-        std::cout<<"AiSlopcraft REBUILD ART STUDY 01 (independent limited scene)\n"
-                 <<"  aislopcraft-rebuild             In-memory creative study (click window)\n"
+        std::cout<<"AiSlopcraft REBUILD PREVIEW (independent limited scene)\n"
+                 <<"  aislopcraft-rebuild             Persistent creative study (click window)\n"
                  <<"  aislopcraft-rebuild --selftest  Headless core/crosshair check\n"
-                 <<"  aislopcraft-rebuild --smoke DIR Captures before/after a GL edit\n"
+                 <<"  aislopcraft-rebuild --smoke DIR Disposable GL/input smoke (NO saves)\n"
                  <<"WASD mouse look, Space jump, Ctrl sprint, click mine, right-click place,\n"
-                 <<"1-9 or wheel select, F2 screenshot, F3 diagnostic, F7 UI scale, Esc release.\n"
-                 <<"No saves, survival, real worldgen, mobs or proven 2013 visual match.\n";
+                 <<"1-9 or wheel select, F2 screenshot, F3 diagnostic, F5 save, F7 GUI scale, Esc release.\n"
+                 <<"Only saves-rebuild/study-v1.bin is used. No survival, real worldgen, mobs or proven 2013 visual match.\n";
         return 0;
     }
     std::cerr<<"Unknown arguments. Use --help.\n";return 2;

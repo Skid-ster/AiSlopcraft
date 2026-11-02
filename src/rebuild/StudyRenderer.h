@@ -17,7 +17,8 @@ public:
     void rebuildAround(const World& world,Cell edit);
     void draw(const Player& player,const std::optional<Hit>& target,int slot,
               int width,int height,int guiScale,bool paused,bool debug,
-              float fps,float frameMs,float drawMs,float swapMs,float editMs,int edits);
+              float fps,float frameMs,float drawMs,float swapMs,float editMs,int edits,
+              const std::string& notice);
     bool capture(const std::filesystem::path& output,int width,int height,std::string& error);
     const std::string& driver() const { return driver_; }
 private:
@@ -25,8 +26,8 @@ private:
     struct UiVertex {float x,y,u,v,r,g,b,a;};
     vox::GL gl_;
     std::array<GPUChunk,(World::side/World::chunk)*(World::side/World::chunk)> chunks_{};
-    GLuint texture_=0,worldProgram_=0,uiProgram_=0,lineProgram_=0;
-    GLuint uiVao_=0,uiVbo_=0,lineVao_=0,lineVbo_=0;
+    GLuint texture_=0,skyProgram_=0,worldProgram_=0,uiProgram_=0,lineProgram_=0;
+    GLuint skyVao_=0,uiVao_=0,uiVbo_=0,lineVao_=0,lineVbo_=0;
     std::vector<UiVertex> ui_;
     std::string driver_;
     GLuint shader(GLenum type,const char* text,std::string& error);

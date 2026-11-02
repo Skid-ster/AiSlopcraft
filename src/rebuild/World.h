@@ -25,7 +25,8 @@ bool solid(Block b);
 bool opaque(Block b);
 
 // A deliberately fixed meadow/forest art study, NOT generated Java terrain.
-// This is a tiny, in-memory world; it neither loads nor writes legacy saves.
+// This tiny world is independent of all legacy save formats; StudySave persists
+// its edits as deltas against this fixed starting scene.
 class World {
 public:
     static constexpr int side=96, half=side/2, height=32, chunk=16;
@@ -49,7 +50,7 @@ std::optional<Hit> raycast(const World& world,Vec3 eye,Vec3 direction,float reac
 struct Input { bool forward=false,back=false,left=false,right=false,jump=false,sprint=false; };
 struct Player {
     Vec3 feet{0.5f,7,15.5f};
-    float yaw=0, pitch=-0.48f; // radians; initial camera faces north and slightly down
+    float yaw=0, pitch=-0.23f; // radians; faces north across the meadow, near a mineable outcrop
     float verticalSpeed=0;
     bool onGround=false;
     Vec3 eye() const { return feet+Vec3{0,1.62f,0}; }

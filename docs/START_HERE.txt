@@ -1,0 +1,44 @@
+AiSlopcraft REBUILD PREVIEW — technical pre-release, not a finished recreation
+=============================================================================
+
+This is an UNOFFICIAL, independently made voxel study inspired by the era of
+Minecraft Java release-numbered 1.7.3 (December 2013), NOT Beta 1.7.3.
+It is not affiliated with Mojang Studios or Microsoft. No proprietary game
+files are included. It does not yet reproduce the target game's appearance,
+full content or world format; real Windows controls and performance need your
+retest. Please keep expectations at "single creative art/interaction scene."
+
+WINDOWS: Extract the WHOLE ZIP to a writable folder (not Program Files).
+Double-click aislopcraft-rebuild.exe. If needed, from Command Prompt:
+  cd /d "C:\path\to\your\extracted\preview"
+  aislopcraft-rebuild.exe
+No Visual Studio/CMake/compiler is needed for this prebuilt ZIP. You DO need
+working Windows OpenGL 3.3 drivers. Keep assets/rebuild/atlas.png beside it.
+
+LINUX: Extract the archive, then use a terminal in the extracted directory:
+  cd "/path/to/your/extracted/preview"
+  ./aislopcraft-rebuild
+An OpenGL 3.3 desktop and SDL/X11/Wayland system dependencies are required.
+This Ubuntu 24.04-built archive is not guaranteed to run on older distributions.
+
+Click window to capture mouse; the stone outcrop under the starting crosshair
+is within 4.5-block reach. Left click breaks it; right click places the
+selected hotbar material against the hit face. WASD moves, mouse looks,
+Space jumps, Ctrl sprints, 1-9/wheel select. Esc pauses and releases mouse;
+the FIRST click after Esc only recaptures, so click again to break/place.
+F3 shows FPS/CPU timing, current target and edit count; F5 saves; F2 captures
+a PNG; F7 cycles GUI scale. This is creative only, no full inventory or mobs.
+
+BLOCK EDITS persist in saves-rebuild/study-v1.bin BESIDE this executable;
+its .bak is a validated previous save. On an invalid primary and invalid
+backup, autosave is disabled to avoid silently overwriting broken files.
+The game shows a warning and logs the reason; only F5 explicitly starts a
+new save. Keep the saves-rebuild folder when updating or moving the preview.
+It is NOT compatible with the old aislopcraft executable's saves/.
+See docs/REBUILD_SAVE_FORMAT.md and docs/KNOWN_LIMITATIONS.md for details.
+
+The release build passed narrow CI build/CTest and Ubuntu software-GL
+SDL-synthetic interaction smoke tests. A real Windows mouse/GPU and a legal,
+matched December 2013 visual reference were not available to the author.
+Please send a screenshot plus F3 diagnostics and describe any lag or controls
+that fail. Green CI is NOT proof of parity with the requested version.
