@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "custompaintings",
+  "version": "1.0.0",
+  "name": "Custom Paintings",
+  "description": "Dynamically loads custom paintings from config/custompaintings/images/",
+  "authors": [
+    "Jay"
+  ],
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.jay.custompaintings.CustomPaintingsMod"
+    ],
+    "modmenu": [
+      "com.jay.custompaintings.CustomPaintingsModMenu"
+    ]
+  },
+  "mixins": [],
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "fabric": ">=0.161.0+26.3",
+    "modmenu": ">=21.0.0"
+  },
+  "breaks": {}
+}

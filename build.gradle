@@ -1,0 +1,40 @@
+group = 'com.jay'
+version = '1.0.0'
+
+plugins {
+    id 'java'
+    id 'eclipse'
+    id 'idea'
+    id 'net.fabricmc.fabric-loom' version '1.17'
+}
+
+repositories {
+    mavenCentral()
+    maven { url = 'https://maven.fabricmc.net' }
+}
+
+sourceCompatibility = JavaVersion.VERSION_25
+targetCompatibility = JavaVersion.VERSION_25
+
+dependencies {
+    // Fabric API
+    minecraft 'net.fabricmc:fabric-loader:0.19.5'
+    mappings 'net.fabricmc:yarn:26.3+build.1' // Placeholder, usually yarn matches version
+    modImplementation 'net.fabricmc:fabric-api:0.161.0+26.3'
+    
+    // Mod Menu
+    modImplementation 'io.github.prospector:modmenu:21.0.0'
+}
+
+// Loom configuration
+loom {
+    // Minecraft version 26.3
+    minecraftVersion = '26.3'
+    // Fabric Loader 0.19.5
+    loaderVersion = '0.19.5'
+    // Fabric API dependency handled in dependencies
+}
+
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+}
