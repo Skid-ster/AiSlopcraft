@@ -14,7 +14,7 @@ export class VehicleManager {
     this.ray = new THREE.Ray(); this.hit = new THREE.Vector3();
   }
   loaded(x,z) { return !!this.world.getChunk(Math.floor(x/CH), Math.floor(z/CH))?.generated; }
-  create(type, x, y, z) {
+  create(type, x, y, z, networkId = null) {
     if (!['boat','minecart','storage','powered'].includes(type) || ![x,y,z].every(Number.isFinite)) return null;
     const group = new THREE.Group();
     const color = type === 'boat' ? 0x9e713d : 0x999c9f;
@@ -38,7 +38,8 @@ export class VehicleManager {
       }
     }
     group.position.set(x,y,z); this.lighting?.prepare(group); this.scene.add(group);
-    const v = {type, group, vx:0, vz:0, nodeX:Math.floor(x), nodeZ:Math.floor(z), target:null, progress:0,
+    const v = {type, group, networkId: networkId || globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
+      remoteDriven: false, vx:0, vz:0, nodeX:Math.floor(x), nodeZ:Math.floor(z), target:null, progress:0,
       slots: type === 'storage' ? new Array(27).fill(null) : null, fuel:0, travel:[0,-1], cartSpeed:0};
     this.vehicles.push(v); return v;
   }
@@ -92,14 +93,52 @@ export class VehicleManager {
     v.group.traverse(o=>{ if(o.isMesh) { o.geometry.dispose(); o.material.dispose(); } });
     return true;
   }
-  serialize() { return this.vehicles.map(v=>({type:v.type,pos:v.group.position.toArray(),rotation:v.group.rotation.y,
-    ...(v.slots ? {slots:v.slots} : {}), ...(v.type === 'powered' ? {fuel:v.fuel} : {}), ...(v.type !== 'boat' ? {nodeX:v.nodeX,nodeZ:v.nodeZ,target:v.target,progress:v.progress,travel:v.travel,cartSpeed:v.cartSpeed} : {})})); }
+  serialize() { return this.vehicles.map(v=>({uid:v.networkId,type:v.type,pos:v.group.position.toArray(),rotation:v.group.rotation.y,
+    vx:v.vx,vz:v.vz, ...(v.slots ? {slots:v.slots} : {}), ...(v.type === 'powered' ? {fuel:v.fuel} : {}), ...(v.type !== 'boat' ? {nodeX:v.nodeX,nodeZ:v.nodeZ,target:v.target,progress:v.progress,travel:v.travel,cartSpeed:v.cartSpeed} : {})})); }
+  applyNetworkSnapshot(snapshot) {
+    if (!Array.isArray(snapshot)) return;
+    const items = snapshot.map(entry => entry?.vehicle).filter(Boolean);
+    const ids = new Set(items.map(item => item.uid));
+    for (const vehicle of [...this.vehicles]) if (!ids.has(vehicle.networkId)) this.removeNetworkVehicle(vehicle.networkId);
+    for (const entry of snapshot) if (entry?.vehicle) this.applyNetworkUpdate(entry.vehicle, entry.riding);
+  }
+  applyNetworkUpdate(item, riding = false) {
+    if (!item || typeof item.uid !== 'string' || item.uid.length > 100 || !Array.isArray(item.pos) || item.pos.length !== 3 || !item.pos.every(Number.isFinite) || item.pos.some(value => Math.abs(value) > 30_000_000)) return null;
+    let vehicle = this.vehicles.find(candidate => candidate.networkId === item.uid);
+    if (!vehicle) vehicle = this.create(item.type, ...item.pos, item.uid);
+    if (!vehicle) return null;
+    vehicle.group.position.fromArray(item.pos);
+    if (Number.isFinite(item.rotation)) vehicle.group.rotation.y = item.rotation;
+    vehicle.vx = Number.isFinite(item.vx) ? Math.max(-20, Math.min(20, item.vx)) : 0;
+    vehicle.vz = Number.isFinite(item.vz) ? Math.max(-20, Math.min(20, item.vz)) : 0;
+    if (vehicle.type === 'storage' && Array.isArray(item.slots) && item.slots.length === 27) vehicle.slots = item.slots;
+    if (vehicle.type === 'powered') vehicle.fuel = Number.isFinite(item.fuel) ? Math.max(0, Math.min(3600, item.fuel)) : 0;
+    if (vehicle.type !== 'boat') {
+      if (Number.isInteger(item.nodeX)) vehicle.nodeX = item.nodeX;
+      if (Number.isInteger(item.nodeZ)) vehicle.nodeZ = item.nodeZ;
+      if (Array.isArray(item.target) && item.target.length === 2 && SIDES.some(([dx,dz]) => dx === item.target[0] && dz === item.target[1])) vehicle.target = [...item.target];
+      else vehicle.target = null;
+      vehicle.progress = Number.isFinite(item.progress) ? Math.max(0, Math.min(0.999, item.progress)) : 0;
+      if (Array.isArray(item.travel) && item.travel.length === 2 && item.travel.every(Number.isFinite)) vehicle.travel = [...item.travel];
+      vehicle.cartSpeed = Number.isFinite(item.cartSpeed) ? Math.max(0, Math.min(8, item.cartSpeed)) : 0;
+    }
+    vehicle.remoteDriven = !!riding;
+    vehicle.group.visible = this.loaded(vehicle.group.position.x, vehicle.group.position.z);
+    this.lighting?.refreshObject(vehicle.group, this.world, vehicle.group.position, .4);
+    return vehicle;
+  }
+  removeNetworkVehicle(uid) {
+    const vehicle = this.vehicles.find(candidate => candidate.networkId === uid);
+    if (vehicle === this.mounted) this.mounted = null;
+    return this.remove(vehicle);
+  }
   load(items) {
     if (!Array.isArray(items)) return;
     for(const item of items.slice(0,1024)) {
       if (!Array.isArray(item?.pos) || item.pos.length!==3 || !item.pos.every(Number.isFinite)) continue;
-      const v=this.create(item.type,...item.pos);
+      const v=this.create(item.type,...item.pos,item.uid || null);
       if (!v) continue;
+      v.vx = Number.isFinite(item.vx) ? item.vx : 0; v.vz = Number.isFinite(item.vz) ? item.vz : 0;
       if (Number.isFinite(item.rotation)) v.group.rotation.y=item.rotation;
       if (v.type === 'storage' && Array.isArray(item.slots) && item.slots.length === 27) v.slots=item.slots;
       if (v.type === 'powered') {
@@ -138,6 +177,7 @@ export class VehicleManager {
     for(const vehicle of this.vehicles) {
       const p=vehicle.group.position; vehicle.group.visible=this.loaded(p.x,p.z);
       if (vehicle.group.visible) {
+        if (vehicle.remoteDriven) { this.lighting?.refreshObject(vehicle.group,this.world,p,.4); continue; }
         if (vehicle.type === 'powered' && vehicle.fuel > 0) {
           vehicle.fuel=Math.max(0,vehicle.fuel-dt);
           this.moveCart(vehicle,dt,vehicle.travel,true);

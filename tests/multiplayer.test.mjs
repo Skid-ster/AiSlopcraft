@@ -92,6 +92,12 @@ try {
   const tntOnHost = waitFor(host, message => message.type === 'tnt:ignite');
   guest.send(JSON.stringify({ type: 'tnt:ignite', x: 5, y: 70, z: 5 }));
   assert.equal((await tntOnHost).x, 5, 'nearby guest TNT ignitions are forwarded to the host simulator');
+  const vehicleNotice = waitFor(guest, message => message.type === 'vehicle:update');
+  host.send(JSON.stringify({ type: 'vehicle:update', riding: false, vehicle: { uid: 'boat-1', type: 'boat', pos: [6, 70, 6], rotation: 0, vx: 1, vz: 0 } }));
+  assert.equal((await vehicleNotice).vehicle.uid, 'boat-1', 'vehicle state is replicated across the room');
+  const projectileNotice = waitFor(guest, message => message.type === 'projectile:update');
+  host.send(JSON.stringify({ type: 'projectile:update', projectile: { uid: 'arrow-1', owner: 'mob', pos: [6, 71, 6], vel: [1, 0, 0], age: 0.4 } }));
+  assert.equal((await projectileNotice).projectile.uid, 'arrow-1', 'in-flight projectiles replicate to other players');
   const spawnOnHost = waitFor(host, message => message.type === 'item:spawn' && message.item.id === 2);
   const spawnOnPeer = waitFor(guest, message => message.type === 'item:spawn' && message.item.id === 2);
   guest.send(JSON.stringify({ type: 'item:spawn', item: { uid: 'guest-drop', id: 2, count: 1, pos: [2, 70, 2] } }));
@@ -104,6 +110,8 @@ try {
   const lateItems = waitFor(newcomer, message => message.type === 'item:snapshot');
   const lateState = waitFor(newcomer, message => message.type === 'game:state');
   const lateMobs = waitFor(newcomer, message => message.type === 'mob:snapshot');
+  const lateVehicles = waitFor(newcomer, message => message.type === 'vehicle:snapshot');
+  const lateProjectiles = waitFor(newcomer, message => message.type === 'projectile:snapshot');
   const newcomerJoined = await request(newcomer, 'room:join', { code: created.code, playerName: 'Late joiner', password: 'blockparty' });
   assert.equal(newcomerJoined.type, 'room:joined');
   const savedSnapshot = await snapshot;
@@ -111,6 +119,11 @@ try {
   assert.equal((await lateItems).items[0].uid, 'drop-1', 'late joiners receive current dropped items');
   assert.equal((await lateState).state.timeOfDay, 0.4, 'late joiners receive shared state');
   assert.equal((await lateMobs).mobs[0].uid, 'mob-1', 'late joiners receive current mobs');
+  assert.equal((await lateVehicles).vehicles[0].vehicle.uid, 'boat-1', 'late joiners receive current vehicles');
+  assert.equal((await lateProjectiles).projectiles[0].uid, 'arrow-1', 'late joiners receive active projectile state');
+  const projectileRemoved = waitFor(guest, message => message.type === 'projectile:remove' && message.uid === 'arrow-1');
+  newcomer.send(JSON.stringify({ type: 'projectile:remove', uid: 'arrow-1' }));
+  await projectileRemoved;
   const itemRemoved = waitFor(host, message => message.type === 'item:remove' && message.uid === 'drop-1');
   const pickupGrant = waitFor(newcomer, message => message.type === 'item:pickup');
   newcomer.send(JSON.stringify({ type: 'item:pickup', uid: 'drop-1' }));

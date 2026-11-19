@@ -55,6 +55,18 @@ export function createMultiplayerServer({ logger = console } = {}) {
   function leave(socket, announce = true) {
     const room = socket.room;
     if (!room) return;
+    if (room.host !== socket && socket.clientId) {
+      for (const [uid, record] of room.vehicles) {
+        if (record.owner !== socket.clientId || !record.riding) continue;
+        record.riding = false; record.owner = room.host.clientId;
+        for (const peer of room.clients) if (peer !== socket) send(peer, { type: 'vehicle:update', ...record });
+      }
+      for (const [uid, shot] of room.projectiles) {
+        if (shot.sourceId !== socket.clientId) continue;
+        room.projectiles.delete(uid);
+        for (const peer of room.clients) if (peer !== socket) send(peer, { type: 'projectile:remove', uid });
+      }
+    }
     room.clients.delete(socket);
     socket.room = null;
     if (announce && room.clients.size) {
@@ -106,6 +118,8 @@ export function createMultiplayerServer({ logger = console } = {}) {
       send(socket, { type: 'item:snapshot', items, done: true });
       if (room.gameState) send(socket, { type: 'game:state', state: room.gameState });
       send(socket, { type: 'mob:snapshot', mobs: room.mobs });
+      send(socket, { type: 'vehicle:snapshot', vehicles: [...room.vehicles.values()] });
+      send(socket, { type: 'projectile:snapshot', projectiles: [...room.projectiles.values()].map(({ sourceId, ...shot }) => shot) });
     }
     for (const peer of room.clients) {
       if (peer === socket) continue;
@@ -120,6 +134,8 @@ export function createMultiplayerServer({ logger = console } = {}) {
     socket.lastChatAt = 0;
     socket.lastAttackAt = 0;
     socket.lastTntAt = 0;
+    socket.vehicleTimes = new Map();
+    socket.projectileTimes = new Map();
     socket.on('pong', () => { socket.isAlive = true; });
     socket.on('message', buffer => {
       if (buffer.length > MAX_MESSAGE) { socket.close(1009, 'Message too large'); return; }
@@ -145,7 +161,7 @@ export function createMultiplayerServer({ logger = console } = {}) {
           const room = {
             code: createCode(rooms), name, playerName, access, gameMode, seed,
             password: passwordRecord(password), clients: new Set(), edits: new Map(), items: new Map(),
-            gameState: null, mobs: [], host: socket,
+            gameState: null, mobs: [], vehicles: new Map(), projectiles: new Map(), host: socket,
           };
           rooms.set(room.code, room);
           join(socket, room, playerName, requestId);
@@ -219,6 +235,53 @@ export function createMultiplayerServer({ logger = console } = {}) {
         socket.room.items.delete(item.uid);
         send(socket, { type: 'item:pickup', item });
         for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'item:remove', uid: item.uid });
+      } else if (message.type === 'projectile:update') {
+        const now = Date.now();
+        const shot = message.projectile;
+        if (!shot || typeof shot.uid !== 'string' || shot.uid.length > 100 || !['player','mob'].includes(shot.owner) || !Array.isArray(shot.pos) || shot.pos.length !== 3 || !shot.pos.every(Number.isFinite) || shot.pos.some(value => Math.abs(value) > 30_000_000) || !Array.isArray(shot.vel) || shot.vel.length !== 3 || !shot.vel.every(Number.isFinite) || shot.vel.some(value => Math.abs(value) > 80)) return;
+        if (now - (socket.projectileTimes.get(shot.uid) || 0) < 80) return;
+        socket.projectileTimes.set(shot.uid, now);
+        if (socket.room.projectiles.size >= 256 && !socket.room.projectiles.has(shot.uid)) return;
+        const projectile = { uid: shot.uid, owner: shot.owner, pos: shot.pos, vel: shot.vel, age: Number.isFinite(shot.age) ? Math.max(0, Math.min(6, shot.age)) : 0, targetId: typeof shot.targetId === 'string' ? shot.targetId.slice(0, 80) : null, sourceId: socket.clientId };
+        socket.room.projectiles.set(projectile.uid, projectile);
+        const { sourceId, ...publicProjectile } = projectile;
+        for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'projectile:update', projectile: publicProjectile });
+      } else if (message.type === 'projectile:remove') {
+        const uid = typeof message.uid === 'string' ? message.uid.slice(0, 100) : '';
+        if (uid && socket.room.projectiles.delete(uid)) {
+          socket.projectileTimes.delete(uid);
+          for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'projectile:remove', uid });
+        }
+      } else if (message.type === 'vehicle:update') {
+        const now = Date.now();
+        const vehicle = message.vehicle;
+        if (!vehicle || typeof vehicle.uid !== 'string' || vehicle.uid.length > 100 || !['boat','minecart','storage','powered'].includes(vehicle.type) || !Array.isArray(vehicle.pos) || vehicle.pos.length !== 3 || !vehicle.pos.every(Number.isFinite) || vehicle.pos.some(value => Math.abs(value) > 30_000_000) || !Number.isFinite(vehicle.rotation)) return;
+        if (now - (socket.vehicleTimes.get(vehicle.uid) || 0) < 75) return;
+        socket.vehicleTimes.set(vehicle.uid, now);
+        if (socket.room.vehicles.size >= 1024 && !socket.room.vehicles.has(vehicle.uid)) return;
+        const directions = [[1,0],[-1,0],[0,1],[0,-1]];
+        const safeDirection = value => Array.isArray(value) && value.length === 2 && directions.some(([x,z]) => x === value[0] && z === value[1]);
+        const safeVehicle = { uid: vehicle.uid, type: vehicle.type, pos: vehicle.pos, rotation: vehicle.rotation % (Math.PI * 2),
+          vx: Number.isFinite(vehicle.vx) ? Math.max(-20, Math.min(20, vehicle.vx)) : 0,
+          vz: Number.isFinite(vehicle.vz) ? Math.max(-20, Math.min(20, vehicle.vz)) : 0,
+          ...(vehicle.type === 'storage' && Array.isArray(vehicle.slots) && vehicle.slots.length === 27 ? { slots: vehicle.slots } : {}),
+          ...(vehicle.type === 'powered' ? { fuel: Number.isFinite(vehicle.fuel) ? Math.max(0, Math.min(3600, vehicle.fuel)) : 0 } : {}),
+          ...(vehicle.type !== 'boat' ? {
+            nodeX: Number.isInteger(vehicle.nodeX) ? Math.max(-30_000_000, Math.min(30_000_000, vehicle.nodeX)) : Math.floor(vehicle.pos[0]),
+            nodeZ: Number.isInteger(vehicle.nodeZ) ? Math.max(-30_000_000, Math.min(30_000_000, vehicle.nodeZ)) : Math.floor(vehicle.pos[2]),
+            target: safeDirection(vehicle.target) ? vehicle.target : null,
+            progress: Number.isFinite(vehicle.progress) ? Math.max(0, Math.min(.999, vehicle.progress)) : 0,
+            travel: safeDirection(vehicle.travel) ? vehicle.travel : [0,-1],
+            cartSpeed: Number.isFinite(vehicle.cartSpeed) ? Math.max(0, Math.min(8, vehicle.cartSpeed)) : 0,
+          } : {}) };
+        socket.room.vehicles.set(vehicle.uid, { vehicle: safeVehicle, riding: !!message.riding, owner: socket.clientId });
+        for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'vehicle:update', ...socket.room.vehicles.get(vehicle.uid) });
+      } else if (message.type === 'vehicle:remove') {
+        const uid = typeof message.uid === 'string' ? message.uid.slice(0, 100) : '';
+        if (uid && socket.room.vehicles.delete(uid)) {
+          socket.vehicleTimes.delete(uid);
+          for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'vehicle:remove', uid });
+        }
       } else if (message.type === 'tnt:ignite') {
         const now = Date.now();
         const { x, y, z } = message;

@@ -61,7 +61,7 @@ export class MultiplayerClient {
         if (message.type === 'error') pending.reject(new Error(message.message || 'Multiplayer request failed.'));
         else pending.resolve(message);
       }
-      if (['world:snapshot', 'item:snapshot', 'game:state', 'mob:snapshot', 'player:state'].includes(message.type) && !this.listeners.get(message.type)?.size) {
+      if (['world:snapshot', 'item:snapshot', 'game:state', 'mob:snapshot', 'vehicle:snapshot', 'projectile:snapshot', 'player:state'].includes(message.type) && !this.listeners.get(message.type)?.size) {
         const queued = this.earlyMessages.get(message.type) || [];
         queued.push(message);
         if (queued.length > 1024) queued.shift();
