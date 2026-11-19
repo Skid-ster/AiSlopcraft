@@ -13,6 +13,13 @@ function stackLimit(stack) {
   return itemStackLimit(stack.id);
 }
 
+function suggestedMultiplayerRelay() {
+  const host = window.location.hostname;
+  if (host === 'localhost' || host === '127.0.0.1') return `ws://${host}:8787/ws`;
+  const preview = host.match(/^5173-(.+\.e2b\.app)$/);
+  return preview ? `wss://8787-${preview[1]}/ws` : '';
+}
+
 function canStack(a, b) {
   return !!a && !!b && a.id === b.id && (a.damage || 0) === (b.damage || 0) && stackLimit(a) > 1;
 }
@@ -79,7 +86,7 @@ export class UI {
       </div>
       <div class="title-buttons">
         <button class="btn" id="btn-singleplayer">Singleplayer</button>
-        <button class="btn" disabled title="Multiplayer is not supported yet">Multiplayer</button>
+        <button class="btn" id="btn-multiplayer">Multiplayer</button>
         <div class="title-button-row"><button class="btn" id="btn-options">Options...</button><button class="btn" id="btn-pack">Import block textures...</button></div>
         <div class="pack-controls"><button class="btn" id="btn-pack-reset">Reset textures</button><input id="pack-file" type="file" accept=".zip,.jar,application/zip" hidden><div id="pack-status" role="status">Optional: choose a Java 1.7 resource pack ZIP or client JAR.</div></div>
       </div>
@@ -115,6 +122,162 @@ export class UI {
       this.game.audio.click();
       this.showOptions();
     });
+
+    const multiplayer = document.createElement('div');
+    multiplayer.className = 'screen multiplayer-screen';
+    multiplayer.id = 'multiplayer-screen';
+    multiplayer.style.display = 'none';
+    multiplayer.innerHTML = `
+      <div class="multiplayer-card">
+        <h2>Multiplayer</h2>
+        <label>Public server address
+          <input id="mp-relay" type="url" placeholder="wss://your-server.example/ws" autocomplete="url">
+        </label>
+        <label>Your player name
+          <input id="mp-player-name" maxlength="20" placeholder="Player" autocomplete="nickname">
+        </label>
+        <div class="mp-columns">
+          <section>
+            <h3>Create a world</h3>
+            <label>World name <input id="mp-world-name" maxlength="32" placeholder="My world"></label>
+            <label>Game mode
+              <select id="mp-mode"><option value="survival">Survival</option><option value="creative">Creative</option></select>
+            </label>
+            <label>Visibility
+              <select id="mp-access"><option value="public">Public — listed</option><option value="private">Private — invite code only</option></select>
+            </label>
+            <label>Optional password <input id="mp-password" type="password" maxlength="64" autocomplete="new-password" placeholder="At least 4 characters"></label>
+            <button class="btn" id="mp-create">Create world</button>
+          </section>
+          <section>
+            <h3>Join a world</h3>
+            <div class="mp-room-list" id="mp-room-list"><span>Connect to a server to browse public worlds.</span></div>
+            <button class="btn" id="mp-refresh">Refresh public worlds</button>
+            <label>Invite code <input id="mp-code" maxlength="6" placeholder="6-character code" autocomplete="off"></label>
+            <label>World password <input id="mp-join-password" type="password" maxlength="64" autocomplete="current-password"></label>
+            <button class="btn" id="mp-join">Join by code</button>
+          </section>
+        </div>
+        <div class="mp-status" id="mp-status" role="status">A public multiplayer relay is required. See README for the quick deploy guide.</div>
+        <div class="mp-footer"><button class="btn btn-half" id="mp-back">Back</button><span>Up to 8 players · The host's relay stays online while hosting.</span></div>
+      </div>`;
+    this.root.appendChild(multiplayer);
+    div.querySelector('#btn-multiplayer').addEventListener('click', () => this.openMultiplayer());
+    multiplayer.querySelector('#mp-back').addEventListener('click', () => { multiplayer.style.display = 'none'; });
+    multiplayer.querySelector('#mp-refresh').addEventListener('click', () => this.refreshPublicRooms());
+    multiplayer.querySelector('#mp-create').addEventListener('click', () => this.createMultiplayerRoom());
+    multiplayer.querySelector('#mp-join').addEventListener('click', () => this.joinMultiplayerRoom());
+    multiplayer.querySelector('#mp-access').addEventListener('change', () => {
+      multiplayer.querySelector('#mp-password').placeholder = multiplayer.querySelector('#mp-access').value === 'private' ? 'Optional (invite code also required)' : 'At least 4 characters, optional';
+    });
+    this.multiplayerScreen = multiplayer;
+    this.multiplayerClient = this.game.multiplayerClient || null;
+    multiplayer.querySelector('#mp-relay').value = this.game.multiplayerRelay || window.localStorage.getItem('aislopcraft:multiplayer-relay') || suggestedMultiplayerRelay();
+    multiplayer.querySelector('#mp-player-name').value = window.localStorage.getItem('aislopcraft:multiplayer-name') || '';
+    multiplayer.querySelector('#mp-code').value = new URLSearchParams(window.location.search).get('room') || '';
+  }
+
+  openMultiplayer() {
+    this.multiplayerScreen.style.display = 'flex';
+    const status = this.multiplayerScreen.querySelector('#mp-status');
+    if (this.game.multiplayerClient) this.multiplayerClient = this.game.multiplayerClient;
+    if (!this.multiplayerScreen.querySelector('#mp-player-name').value) {
+      this.multiplayerScreen.querySelector('#mp-player-name').value = `Player${Math.floor(Math.random() * 900 + 100)}`;
+    }
+    if (!this.multiplayerScreen.querySelector('#mp-relay').value) {
+      status.textContent = 'Set a public wss:// relay URL. See README for one-click deployment and setup.';
+    }
+  }
+
+  async connectMultiplayer() {
+    const screen = this.multiplayerScreen;
+    const relay = screen.querySelector('#mp-relay').value.trim();
+    const playerName = screen.querySelector('#mp-player-name').value.trim();
+    const status = screen.querySelector('#mp-status');
+    if (!playerName) throw new Error('Enter a player name.');
+    if (!relay) throw new Error('Enter the public multiplayer relay address first.');
+    window.localStorage.setItem('aislopcraft:multiplayer-name', playerName);
+    window.localStorage.setItem('aislopcraft:multiplayer-relay', relay);
+    const { MultiplayerClient } = await import('../network/multiplayer.js');
+    if (!this.multiplayerClient) this.multiplayerClient = new MultiplayerClient();
+    status.textContent = 'Connecting to multiplayer relay...';
+    await this.multiplayerClient.connect(relay);
+    return { playerName, status };
+  }
+
+  async refreshPublicRooms() {
+    const screen = this.multiplayerScreen;
+    const list = screen.querySelector('#mp-room-list');
+    const status = screen.querySelector('#mp-status');
+    try {
+      await this.connectMultiplayer();
+      const result = await this.multiplayerClient.listRooms();
+      list.replaceChildren();
+      if (!result.rooms.length) { list.textContent = 'No public worlds are online right now.'; return; }
+      for (const room of result.rooms) {
+        const button = document.createElement('button');
+        button.className = 'mp-room';
+        button.type = 'button';
+        button.textContent = `${room.name} · ${room.players}/${room.maxPlayers} · ${room.gameMode}${room.passwordProtected ? ' · password' : ''}`;
+        button.addEventListener('click', () => {
+          screen.querySelector('#mp-code').value = room.code;
+          screen.querySelector('#mp-join-password').focus();
+        });
+        list.appendChild(button);
+      }
+      status.textContent = `Found ${result.rooms.length} public world${result.rooms.length === 1 ? '' : 's'}.`;
+    } catch (error) { status.textContent = error.message; }
+  }
+
+  async createMultiplayerRoom() {
+    const screen = this.multiplayerScreen;
+    const status = screen.querySelector('#mp-status');
+    try {
+      const { playerName } = await this.connectMultiplayer();
+      const password = screen.querySelector('#mp-password').value;
+      const result = await this.multiplayerClient.createRoom({
+        playerName, name: screen.querySelector('#mp-world-name').value.trim(),
+        gameMode: screen.querySelector('#mp-mode').value, access: screen.querySelector('#mp-access').value,
+        password, seed: this.game.seed,
+      });
+      const entries = [...this.game.world.edits].map(([key,id]) => [key, id, this.game.world.metaEdits.get(key) || 0]);
+      for (const [key,id,meta] of entries) {
+        const [x,y,z] = key.split(',').map(Number);
+        this.multiplayerClient.send('world:edit', { edit: { x,y,z,id,meta } });
+      }
+      this.multiplayerClient.send('chat', { text: `${playerName} opened ${result.gameMode} world “${result.name}”.` });
+      await this.enterMultiplayer(result);
+    } catch (error) { status.textContent = error.message; }
+  }
+
+  async joinMultiplayerRoom() {
+    const screen = this.multiplayerScreen;
+    const status = screen.querySelector('#mp-status');
+    try {
+      const { playerName } = await this.connectMultiplayer();
+      const result = await this.multiplayerClient.joinRoom({
+        code: screen.querySelector('#mp-code').value.trim().toUpperCase(),
+        password: screen.querySelector('#mp-join-password').value, playerName,
+      });
+      await this.enterMultiplayer(result);
+    } catch (error) { status.textContent = error.message; }
+  }
+
+  async enterMultiplayer(room) {
+    if (room.seed !== this.game.seed) {
+      await this.multiplayerClient.leave();
+      throw new Error(`This world uses seed “${room.seed}”. Open the same world seed with ?seed=${encodeURIComponent(room.seed)}, then join again.`);
+    }
+    const edits = room.worldEdits || [];
+    this.game.applyNetworkEdits?.(edits);
+    this.game.setMultiplayerRoom?.(room, this.multiplayerClient);
+    this.multiplayerScreen.style.display = 'none';
+    this.hide('title-screen');
+    this.game.audio.init();
+    this.game.audio.click();
+    this.setMode('game');
+    this.game.start();
+    this.notify(`Joined ${room.name} · ${room.gameMode} · code ${room.code}`, 5000);
   }
 
   showOptions() {
@@ -155,6 +318,12 @@ export class UI {
       <div class="held-name" id="held-name"></div>
       <div class="toast-msg" id="toast-msg"></div>
       <div class="hint" id="hint">Click to play &nbsp;|&nbsp; WASD move · Space jump · Shift sneak · Q drop · E inventory · F3 debug · Esc pause</div>
+      <div class="network-panel" id="network-panel" style="display:none">
+        <div class="network-room-line"><span id="network-room-label"></span><button id="network-copy" type="button">Copy invite</button><button id="network-leave" type="button">Leave</button></div>
+        <div class="network-chat-log" id="network-chat-log" aria-live="polite"></div>
+        <form id="network-chat-form" style="display:none"><input id="network-chat-input" maxlength="240" placeholder="Message…" autocomplete="off"><button type="submit">Send</button></form>
+        <button id="network-chat-open" type="button">Chat (T)</button>
+      </div>
     `;
     this.root.appendChild(div);
     this.hotbarEl = div.querySelector('#hotbar');
@@ -178,6 +347,62 @@ export class UI {
       });
       this.hotbarEl.appendChild(s);
     }
+    const networkPanel = div.querySelector('#network-panel');
+    div.querySelector('#network-copy').addEventListener('click', async () => {
+      const room = this.game.networkRoom;
+      if (!room) return;
+      const invite = new URL(window.location.href);
+      invite.searchParams.set('seed', room.seed);
+      invite.searchParams.set('room', room.code);
+      invite.searchParams.set('relay', this.game.multiplayerClient?.relayUrl || '');
+      try { await navigator.clipboard.writeText(invite.toString()); this.notify('Invite link copied. Share the code and password separately.'); }
+      catch { window.prompt('Copy this invite link:', invite.toString()); }
+    });
+    div.querySelector('#network-leave').addEventListener('click', () => this.game.leaveMultiplayer?.());
+    div.querySelector('#network-chat-open').addEventListener('click', () => this.openNetworkChat());
+    div.querySelector('#network-chat-form').addEventListener('submit', event => {
+      event.preventDefault();
+      const input = div.querySelector('#network-chat-input');
+      const text = input.value.trim();
+      if (text) this.game.multiplayerClient?.send('chat', { text });
+      input.value = '';
+      div.querySelector('#network-chat-form').style.display = 'none';
+      div.querySelector('#network-chat-open').style.display = 'block';
+      input.blur();
+      if (this.mode === 'game') document.getElementById('game-canvas')?.requestPointerLock?.();
+    });
+    this.networkPanel = networkPanel;
+  }
+
+  openNetworkChat() {
+    if (!this.game.networkRoom) return;
+    const form = this.networkPanel.querySelector('#network-chat-form');
+    form.style.display = 'flex';
+    this.networkPanel.querySelector('#network-chat-open').style.display = 'none';
+    document.exitPointerLock?.();
+    this.networkPanel.querySelector('#network-chat-input').focus();
+  }
+
+  appendNetworkChat(name, text) {
+    const log = this.networkPanel?.querySelector('#network-chat-log');
+    if (!log) return;
+    const line = document.createElement('div');
+    const author = document.createElement('strong');
+    author.textContent = `${name}: `;
+    const message = document.createElement('span');
+    message.textContent = text;
+    line.append(author, message);
+    log.appendChild(line);
+    while (log.children.length > 8) log.firstElementChild.remove();
+    log.scrollTop = log.scrollHeight;
+    this.networkPanel.style.display = 'block';
+  }
+
+  updateNetworkPanel() {
+    const room = this.game.networkRoom;
+    if (!this.networkPanel) return;
+    this.networkPanel.style.display = room ? 'block' : 'none';
+    if (room) this.networkPanel.querySelector('#network-room-label').textContent = `${room.name} · ${room.gameMode} · ${(this.game.remotePlayers?.size || 0) + 1}/8 · ${room.code}`;
   }
 
   notify(message, duration = 2400) {
@@ -657,6 +882,21 @@ export class UI {
   }
 
   onKey(e) {
+    if (e.target?.id === 'network-chat-input') {
+      if (e.code === 'Escape') {
+        e.preventDefault();
+        this.networkPanel.querySelector('#network-chat-form').style.display = 'none';
+        this.networkPanel.querySelector('#network-chat-open').style.display = 'block';
+        e.target.blur();
+        if (this.mode === 'game') document.getElementById('game-canvas')?.requestPointerLock?.();
+      }
+      return;
+    }
+    if (e.code === 'KeyT' && this.mode === 'game' && this.game.networkRoom) {
+      e.preventDefault();
+      this.openNetworkChat();
+      return;
+    }
     if (e.code === (this.game.settings?.keys ? this.game.settings.keys.inventory : 'KeyE')) {
       if (this.mode === 'game') {
         e.preventDefault();

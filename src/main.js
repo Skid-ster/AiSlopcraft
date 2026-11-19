@@ -127,6 +127,9 @@ const sky = new Sky(scene, camera);
 const mobs = new MobManager(world, scene, lighting);
 const vehicles = new VehicleManager(world, scene, lighting);
 vehicles.load(savedGame?.vehicles);
+const remotePlayers = new Map();
+let applyingNetworkEdit = false;
+let networkStateTimer = 0;
 const game = {
   world, player, audio, sky, mobs, renderer, lighting, fluids, redstone, vehicles,
   atlasCanvas,
@@ -192,12 +195,84 @@ const game = {
     this.shaderStyle = style;
     lighting.shared.uShaderStyle.value = shaderStyleId(style);
   },
+  applyNetworkEdits(entries) {
+    if (!Array.isArray(entries)) return;
+    applyingNetworkEdit = true;
+    try {
+      for (const entry of entries) {
+        let key, id, meta;
+        if (Array.isArray(entry) && typeof entry[0] === 'string') {
+          [key] = entry;
+          if (Array.isArray(entry[1])) [id, meta] = entry[1];
+          else [key, id, meta] = entry;
+        } else if (entry && Number.isInteger(entry.x)) {
+          key = `${entry.x},${entry.y},${entry.z}`; id = entry.id; meta = entry.meta || 0;
+        }
+        if (typeof key !== 'string' || !Number.isInteger(id) || !Number.isInteger(meta ?? 0)) continue;
+        const [x,y,z] = key.split(',').map(Number);
+        if (![x,y,z].every(Number.isInteger) || y < 0 || y >= WORLD_H) continue;
+        world.recordEdit(x,y,z,id,meta || 0);
+        if (world.getChunk(Math.floor(x / CH), Math.floor(z / CH))?.generated) world.setBlock(x,y,z,id,meta || 0);
+      }
+    } finally { applyingNetworkEdit = false; }
+  },
+  setMultiplayerRoom(room, client) {
+    this.networkOffs?.forEach(off => off());
+    this.networkOffs = [];
+    this.networkRoom = { ...room };
+    this.multiplayerClient = client;
+    player.gameMode = room.gameMode === 'creative' ? 'creative' : 'survival';
+    for (const peer of room.players || []) if (peer.id !== room.id) createRemoteAvatar(peer.id, peer.name);
+    const on = (type, handler) => this.networkOffs.push(client.on(type, handler));
+    on('player:joined', message => {
+      if (!this.networkRoom) return;
+      createRemoteAvatar(message.id, message.name);
+      ui?.notify?.(`${message.name} joined the world.`);
+      ui?.updateNetworkPanel?.();
+    });
+    on('player:left', message => {
+      removeRemoteAvatar(message.id);
+      ui?.notify?.(`${message.name} left the world.`);
+      ui?.updateNetworkPanel?.();
+    });
+    on('player:state', message => updateRemoteAvatar(message));
+    on('world:snapshot', message => this.applyNetworkEdits(message.entries));
+    on('world:edit', message => this.applyNetworkEdits([message.edit]));
+    on('chat', message => ui?.appendNetworkChat?.(message.name, message.text));
+    const disconnectRoom = message => {
+      if (!this.networkRoom) return;
+      const closedName = this.networkRoom.name;
+      this.networkRoom = null;
+      this.networkOffs?.forEach(off => off()); this.networkOffs = [];
+      player.gameMode = 'survival';
+      for (const id of [...remotePlayers.keys()]) removeRemoteAvatar(id);
+      ui?.updateNetworkPanel?.();
+      ui?.notify?.(message?.reason || `Disconnected from ${closedName}.`);
+    };
+    on('room:closed', disconnectRoom);
+    on('disconnected', disconnectRoom);
+    ui?.updateNetworkPanel?.();
+  },
+  async leaveMultiplayer() {
+    const client = this.multiplayerClient;
+    if (!client || !this.networkRoom) return;
+    const host = this.networkRoom.role === 'host';
+    if (host) await client.closeRoom(); else await client.leave();
+    client.disconnect(false);
+    this.networkRoom = null;
+    this.multiplayerClient = null;
+    player.gameMode = 'survival';
+    for (const id of [...remotePlayers.keys()]) removeRemoteAvatar(id);
+    ui?.updateNetworkPanel?.();
+    ui?.notify?.('Left multiplayer. You are now in singleplayer.');
+  },
   onRenderDistanceChange() {
     updateChunks(true);
   },
   started: false,
   time: 0,
   seed: SEED,
+  multiplayerRelay: new URLSearchParams(location.search).get('relay') || '',
   spawnBed: savedGame?.spawnBed || null,
   dropItem(stack) {
     spawnItem(player.pos.x, player.pos.y, player.pos.z, stack.id, stack.count, stack.damage || 0);
@@ -308,6 +383,13 @@ const game = {
           if (saved.stats && typeof saved.stats === 'object') Object.assign(player.stats, saved.stats);
           camera.position.set(player.pos.x, player.pos.y + 1.62, player.pos.z);
         }
+        if (this.networkRoom) {
+          player.gameMode = this.networkRoom.gameMode;
+          if (player.gameMode === 'creative') {
+            const palette = [STONE, DIRT, GRASS, COBBLE, PLANKS, SAND, GLASS, LOG, TORCH, LEAVES, BRICK, WOOL_BASE];
+            for (let i = 0; i < palette.length; i++) if (!player.inventory[i]) player.inventory[i] = { id: palette[i], count: 1, damage: 0 };
+          }
+        }
         updateChunks(true);
         processChunkQueue();
         if (mobs.mobs.length === 0) mobs.spawnInitial(player);
@@ -333,6 +415,71 @@ const game = {
     }, 0));
   },
 };
+function createRemoteAvatar(id, name) {
+  if (remotePlayers.has(id)) return remotePlayers.get(id);
+  const root = new THREE.Group();
+  const hash = [...String(id)].reduce((value, char) => (value * 31 + char.charCodeAt(0)) | 0, 7) >>> 0;
+  const shirt = new THREE.MeshBasicMaterial({ color: new THREE.Color().setHSL((hash % 360) / 360, 0.58, 0.48) });
+  const pants = new THREE.MeshBasicMaterial({ color: 0x394c82 });
+  const skin = new THREE.MeshBasicMaterial({ color: 0xc99a73 });
+  const addPart = (w,h,d,material,y,z=0) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), material);
+    mesh.position.set(0,y,z); root.add(mesh); return mesh;
+  };
+  addPart(0.56,0.7,0.3,shirt,1.05);
+  addPart(0.27,0.72,0.28,pants,-0.2,-0.02).position.x = -0.15;
+  addPart(0.27,0.72,0.28,pants,-0.2,-0.02).position.x = 0.15;
+  addPart(0.42,0.42,0.42,skin,1.62);
+  const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0x242424 });
+  const eye1 = new THREE.Mesh(new THREE.BoxGeometry(0.045,0.05,0.025), eyeMaterial);
+  eye1.position.set(-0.09,1.66,-0.22); root.add(eye1);
+  const eye2 = eye1.clone(); eye2.position.x = 0.09; root.add(eye2);
+  const labelCanvas = document.createElement('canvas'); labelCanvas.width = 256; labelCanvas.height = 48;
+  const context = labelCanvas.getContext('2d');
+  if (context) {
+    context.font = 'bold 26px Arial'; context.textAlign = 'center'; context.textBaseline = 'middle';
+    context.lineWidth = 5; context.strokeStyle = '#171717'; context.fillStyle = '#fff';
+    context.strokeText(String(name).slice(0,20),128,24); context.fillText(String(name).slice(0,20),128,24);
+  }
+  const labelTexture = new THREE.CanvasTexture(labelCanvas);
+  labelTexture.colorSpace = THREE.SRGBColorSpace;
+  const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture, transparent: true, depthTest: false }));
+  label.position.y = 2.25; label.scale.set(1.9,0.36,1); root.add(label);
+  lighting.prepare(root);
+  lighting.setObjectLight(root, 15, 0);
+  scene.add(root);
+  root.visible = false;
+  const record = { root, target: new THREE.Vector3(), yaw: 0, pitch: 0, name, labelTexture };
+  remotePlayers.set(id,record);
+  return record;
+}
+
+function updateRemoteAvatar(message) {
+  const avatar = createRemoteAvatar(message.id,message.name);
+  if (![message.x,message.y,message.z,message.yaw,message.pitch].every(Number.isFinite)) return;
+  avatar.target.set(message.x,message.y,message.z);
+  avatar.yaw = message.yaw;
+  avatar.pitch = message.pitch;
+  avatar.root.visible = true;
+}
+
+function removeRemoteAvatar(id) {
+  const avatar = remotePlayers.get(id);
+  if (!avatar) return;
+  scene.remove(avatar.root);
+  lighting.forget(avatar.root);
+  avatar.root.traverse(object => object.geometry?.dispose());
+  avatar.labelTexture.dispose();
+  for (const material of avatar.root.children.flatMap(object => Array.isArray(object.material) ? object.material : [object.material])) material?.dispose?.();
+  remotePlayers.delete(id);
+}
+
+world.onBlockChange((x,y,z,previousId,id,previousMeta,meta) => {
+  if (!applyingNetworkEdit && game.networkRoom) {
+    game.multiplayerClient?.send('world:edit', { edit: { x,y,z,id,meta:meta || 0 } });
+  }
+});
+
 const ui = new UI(game);
 game.ui = ui;
 // Restore the locally imported atlas, never upload the pack to a server.
@@ -618,7 +765,7 @@ function tryBreakBlock(dt) {
   }
   const id = world.getBlock(hit.x, hit.y, hit.z);
   const held = player.heldStack;
-  const total = breakTime(id, held ? held.id : null);
+  const total = player.gameMode === 'creative' ? 0 : breakTime(id, held ? held.id : null);
 
   if (!player.mining.active || player.mining.x !== hit.x || player.mining.y !== hit.y || player.mining.z !== hit.z) {
     player.mining.active = true;
@@ -641,13 +788,15 @@ function tryBreakBlock(dt) {
     const containerKey = `${hit.x},${hit.y},${hit.z}`;
     releaseContainer(hit.x, hit.y, hit.z, id);
     world.setBlock(hit.x, hit.y, hit.z, AIR);
-    if (id === CROPS) {
-      cropLocations.delete(containerKey);
-      for (const stack of cropDrops(previousMeta)) spawnItem(hit.x, hit.y, hit.z, stack.id, stack.count);
-    } else if (id === LEAVES && held?.id === 359) {
-      spawnItem(hit.x, hit.y, hit.z, LEAVES, 1);
-    } else if (canHarvest(id, held ? held.id : null)) dropBlock(hit.x, hit.y, hit.z, id);
-    if (held) player.useHeldOn(id);
+    if (player.gameMode !== 'creative') {
+      if (id === CROPS) {
+        cropLocations.delete(containerKey);
+        for (const stack of cropDrops(previousMeta)) spawnItem(hit.x, hit.y, hit.z, stack.id, stack.count);
+      } else if (id === LEAVES && held?.id === 359) {
+        spawnItem(hit.x, hit.y, hit.z, LEAVES, 1);
+      } else if (canHarvest(id, held ? held.id : null)) dropBlock(hit.x, hit.y, hit.z, id);
+      if (held) player.useHeldOn(id);
+    }
     audio.breakBlock(id);
     player.stats.blocksMined++;
     player.mining.active = false;
@@ -721,7 +870,7 @@ function tryPlaceBlock() {
     if (!world.setBlock(px,py,pz,placeId,meta)) return;
     if (!world.setBlock(hx,hy,hz,placeId,meta | 8)) { world.setBlock(px,py,pz,AIR); return; }
   } else if (!world.setBlock(px, py, pz, placeId, meta)) return;
-  player.consumeHeld();
+  if (player.gameMode !== 'creative') player.consumeHeld();
   audio.place(placeId);
   player.stats.blocksPlaced++;
   firstPersonArm.triggerPlaceSwing();
@@ -1232,6 +1381,15 @@ function frame() {
       updateFishing(dt);
       updateTNT(dt);
       particles.update(dt, world);
+      if (game.networkRoom && game.multiplayerClient) {
+        networkStateTimer -= dt;
+        if (networkStateTimer <= 0) {
+          game.multiplayerClient.send('player:state', { state: {
+            x: player.pos.x, y: player.pos.y, z: player.pos.z, yaw: player.yaw, pitch: player.pitch,
+          } });
+          networkStateTimer = 0.07;
+        }
+      }
 
     }
 
@@ -1332,6 +1490,15 @@ function frame() {
       if (chunkQueue.length === 0) updateChunks(true);
     }
   }
+
+  for (const avatar of remotePlayers.values()) {
+    avatar.root.position.lerp(avatar.target, 1 - Math.exp(-dt * 14));
+    avatar.root.rotation.y = avatar.yaw;
+    const head = avatar.root.children[3];
+    if (head) head.rotation.x = avatar.pitch;
+    lighting.refreshObject(avatar.root, world, avatar.root.position, 1.2);
+  }
+  ui.updateNetworkPanel();
 
   // One shared update drives terrain, entities, particles and the hand on both
   // the title backdrop and gameplay frames.

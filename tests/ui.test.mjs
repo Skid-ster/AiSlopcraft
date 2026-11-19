@@ -130,6 +130,14 @@ try {
   player.inventory.fill(null);
   ui.mode = 'title';
 
+  // ---------- title: multiplayer lobby ----------
+  check('Multiplayer button is enabled', !btn('btn-multiplayer').disabled);
+  btn('btn-multiplayer').click();
+  check('Multiplayer lobby opens', document.getElementById('multiplayer-screen').style.display === 'flex');
+  check('Lobby offers public/private and survival/creative options',
+    document.getElementById('mp-access').options.length === 2 && document.getElementById('mp-mode').options.length === 2);
+  btn('mp-back').click();
+
   // ---------- title: Singleplayer ----------
   btn('btn-singleplayer').click();
   check('Singleplayer click does not throw', threw === null);

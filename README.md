@@ -15,6 +15,16 @@ npm run dev        # → http://localhost:5173
 
 Production build: `npm run build` (output in `dist/`). Add `?seed=your-seed` to use a named world seed.
 
+## Multiplayer
+
+Multiplayer uses a small public WebSocket relay so players can meet and share world edits across different home networks without port-forwarding. GitHub Pages is static hosting and cannot run this relay, so deploy the included server once:
+
+1. Create a free web service from this repository's `render.yaml` using [Render Blueprints](https://render.com/deploy?repo=https://github.com/Skid-ster/AiSlopcraft). The service starts `npm run multiplayer` and exposes a `/health` check.
+2. Copy the new service URL and convert it to a WebSocket URL, ending in `/ws` (for example, `https://my-relay.onrender.com` becomes `wss://my-relay.onrender.com/ws`). Free services may sleep while idle; the first connection can take a short while to wake them.
+3. In the game's **Multiplayer** menu, enter that relay URL and a player name. **Create a world** chooses Survival or Creative, makes the room public (listed) or private (invite code only), and optionally protects it with a password. Friends can browse public rooms or enter the six-character invite code and password. Share the copied invite link and send the password separately.
+
+Players on different networks connect to the same relay URL. The host must keep the game open: rooms and edit history are held in relay memory and close when the host leaves or the relay restarts. The host and guests need the same world seed; invite links include the host's seed and relay. The relay forwards player positions, chat, and block edits, but inventories, drops, and mob simulation are still local to each browser; this is a small co-op relay, not a cheat-proof authoritative server. It does not use peer-to-peer connections or require players to expose local ports. For local development, run `npm run multiplayer` in one terminal and `npm run dev` in another, then use `ws://localhost:8787/ws` in the lobby.
+
 ## Game systems
 
 - **World:** 128-block height, sea level 63, seeded rolling terrain, caves, ores, beaches, deserts, snowy areas, forests, trees, and plants.
@@ -42,6 +52,7 @@ Production build: `npm run build` (output in `dist/`). Add `?seed=your-seed` to 
 | Esc | Pause / close current screen |
 | F3 | Debug overlay |
 | F1 | Toggle HUD |
+| T | Multiplayer chat (when connected) |
 
 ## Development
 
@@ -53,6 +64,7 @@ npm run build
 - `src/world/` — block/item registry, seeded terrain, chunks, incremental lighting, and mesh generation
 - `src/rendering.js` — shared voxel/entity shaders, presets, fog, and sun shadow map
 - `src/entities/` — player physics, eating, and mob AI/combat
+- `src/network/` and `server/` — WebSocket lobby client and self-hostable public room relay
 - `src/ui/` — inventory, crafting recipes, and furnace simulation
 - `src/world/textures.js`, `src/audio.js`, `src/sky.js` — procedural visuals, WebAudio, and sky cycle
 

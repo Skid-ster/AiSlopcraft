@@ -779,3 +779,36 @@ html, body {
 .pack-controls { text-align: center; color: white; font-size: 9px; text-shadow: 1px 1px #222; }
 .pack-controls .btn { width: 50%; font-size: 10px; min-height: 24px; }
 #pack-status { margin-top: 5px; line-height: 1.4; min-height: 2.8em; overflow-wrap: anywhere; }
+
+/* Multiplayer lobby and shared-session HUD. */
+.multiplayer-screen { z-index: 40; padding: 20px; background: rgba(0,0,0,.78); backdrop-filter: blur(4px); overflow-y: auto; }
+.multiplayer-card { width: min(760px, 96vw); max-height: 94vh; overflow: auto; padding: 24px; border: 3px solid #171717; box-shadow: inset 3px 3px #aaa, inset -3px -3px #444, 0 10px 40px #000; color: #fff; background: linear-gradient(#555,#3b3b3b); text-shadow: 2px 2px #222; }
+.multiplayer-card h2 { text-align: center; font-size: 17px; margin: 2px 0 18px; }
+.multiplayer-card h3 { font-size: 11px; margin: 0 0 10px; }
+.multiplayer-card label { display: grid; gap: 6px; margin: 9px 0; font-size: 9px; }
+.multiplayer-card input, .multiplayer-card select, .network-panel input { min-width: 0; width: 100%; padding: 10px; border: 2px solid #161616; border-radius: 0; background: #ddd; color: #171717; font: 12px 'Courier New', monospace; text-shadow: none; }
+.multiplayer-card .btn { min-width: 0; width: 100%; margin-top: 8px; }
+.mp-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 12px; }
+.mp-columns section { min-width: 0; padding: 12px; border: 2px solid #222; background: rgba(0,0,0,.2); }
+.mp-room-list { display: grid; gap: 6px; min-height: 50px; max-height: 130px; overflow: auto; font-size: 9px; line-height: 1.6; }
+.mp-room { width: 100%; padding: 8px; border: 2px solid #222; color: #fff; background: #666; text-align: left; font: 9px 'Courier New', monospace; cursor: pointer; }
+.mp-room:hover { background: #78864c; }
+.mp-status { min-height: 2.5em; margin: 14px 0; color: #f1e39b; font: 10px/1.5 'Courier New', monospace; overflow-wrap: anywhere; }
+.mp-footer { display: flex; align-items: center; gap: 14px; font: 9px/1.5 'Courier New', monospace; }
+.mp-footer .btn { flex: 0 0 130px; margin: 0; }
+.network-panel { position: absolute; top: 12px; right: 12px; width: min(360px, 92vw); padding: 8px; border: 2px solid #111; background: rgba(18,18,18,.82); color: #fff; font: 9px/1.5 'Courier New', monospace; pointer-events: auto; text-shadow: 1px 1px #000; }
+.network-room-line { display: flex; gap: 6px; align-items: center; justify-content: space-between; }
+.network-room-line span { flex: 1; overflow-wrap: anywhere; }
+.network-panel button { padding: 5px 7px; border: 1px solid #111; color: white; background: #555; font: 9px 'Courier New', monospace; cursor: pointer; }
+.network-panel button:hover { background: #78864c; }
+.network-chat-log { max-height: 112px; overflow: auto; margin-top: 5px; color: #eee; overflow-wrap: anywhere; }
+.network-chat-log strong { color: #e8cf78; }
+#network-chat-form { display: flex; gap: 5px; margin-top: 6px; }
+.network-panel input { padding: 6px; flex: 1; }
+#network-chat-open { margin-top: 5px; }
+@media(max-width:600px) {
+  .multiplayer-card { padding: 14px; }
+  .mp-columns { grid-template-columns: 1fr; gap: 8px; }
+  .mp-footer { align-items: flex-start; }
+  .network-panel { width: min(300px, 94vw); }
+}

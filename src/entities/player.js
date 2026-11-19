@@ -275,6 +275,25 @@ export class Player {
     const len = Math.hypot(ax, az);
     if (len > 0) { ax /= len; az /= len; }
 
+    // Creative players fly freely: jump rises and sneak descends. This branch
+    // intentionally skips block collision and all survival physics/damage.
+    if (this.gameMode === 'creative') {
+      const vertical = Number(!!this.keys[this.bindings.jump]) - Number(!!this.keys[this.bindings.sneak]);
+      this.vel.set(ax * 8.5, vertical * 8.5, az * 8.5);
+      this.pos.addScaledVector(this.vel, dt);
+      this.onGround = false;
+      this.fallStart = null;
+      this.camera.position.set(this.pos.x, this.pos.y + EYE, this.pos.z);
+      const direction = new THREE.Vector3(
+        -Math.sin(this.yaw) * Math.cos(this.pitch),
+        Math.sin(this.pitch),
+        -Math.cos(this.yaw) * Math.cos(this.pitch)
+      );
+      this.camera.lookAt(this.camera.position.clone().add(direction));
+      this._lastX = this.pos.x; this._lastZ = this.pos.z;
+      return;
+    }
+
     const onIce = this.onGround && groundBlock === ICE;
     const control = this.onGround ? (onIce ? 2.4 : 8.5) : 1.6;
     if (len > 0) {
