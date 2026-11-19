@@ -89,6 +89,9 @@ try {
   const attackOnHost = waitFor(host, message => message.type === 'mob:attack');
   guest.send(JSON.stringify({ type: 'mob:attack', uid: 'mob-1', heldId: 276 }));
   assert.equal((await attackOnHost).attacker.id, joined.id, 'guest mob attacks are forwarded for host validation');
+  const tntOnHost = waitFor(host, message => message.type === 'tnt:ignite');
+  guest.send(JSON.stringify({ type: 'tnt:ignite', x: 5, y: 70, z: 5 }));
+  assert.equal((await tntOnHost).x, 5, 'nearby guest TNT ignitions are forwarded to the host simulator');
   const spawnOnHost = waitFor(host, message => message.type === 'item:spawn' && message.item.id === 2);
   const spawnOnPeer = waitFor(guest, message => message.type === 'item:spawn' && message.item.id === 2);
   guest.send(JSON.stringify({ type: 'item:spawn', item: { uid: 'guest-drop', id: 2, count: 1, pos: [2, 70, 2] } }));

@@ -261,12 +261,18 @@ const game = {
         camera: { position: new THREE.Vector3(attacker.x, attacker.y + 1.62, attacker.z) },
         _solidBlockAt: (...args) => player._solidBlockAt(...args),
         raycast: (sharedWorld, distance, options) => Player.prototype.raycast.call(fakePlayer, sharedWorld, distance, options) };
-      const target = mobs.raycastTarget(fakePlayer, 3.5);
-      if (!target || target.networkId !== message.uid || Math.hypot(target.pos.x - attacker.x, target.pos.z - attacker.z) > 4) return;
+      const ranged = !!message.ranged;
+      const target = mobs.raycastTarget(fakePlayer, ranged ? 24 : 3.5);
+      if (!target || target.networkId !== message.uid || Math.hypot(target.pos.x - attacker.x, target.pos.z - attacker.z) > (ranged ? 24 : 4)) return;
       const dx = target.pos.x - attacker.x, dz = target.pos.z - attacker.z, length = Math.hypot(dx, dz) || 1;
-      target.damage(mobAttackDamage(message.heldId), audio, { knockback: new THREE.Vector3(dx / length * 3.4, 1.15, dz / length * 3.4) });
+      target.damage(ranged ? 4 : mobAttackDamage(message.heldId), audio, { knockback: new THREE.Vector3(dx / length * (ranged ? 2 : 3.4), ranged ? 0.7 : 1.15, dz / length * (ranged ? 2 : 3.4)) });
     });
     on('game:state', message => applySharedGameState(message.state));
+    on('tnt:ignite', message => {
+      if (room.role === 'host' && Number.isInteger(message.x) && Number.isInteger(message.y) && Number.isInteger(message.z) && world.getBlock(message.x, message.y, message.z) === TNT && !tntFuses.some(fuse => fuse.x === message.x && fuse.y === message.y && fuse.z === message.z)) {
+        tntFuses.push({ x: message.x, y: message.y, z: message.z, timer: 3.2 }); audio.fuse();
+      }
+    });
     on('chat', message => ui?.appendNetworkChat?.(message.name, message.text));
     const disconnectRoom = message => {
       if (!this.networkRoom) return;
@@ -1065,8 +1071,13 @@ function updateArrows(dt) {
           if (mob.dead) continue;
           const half = mob.def.w / 2 + 0.05;
           if (Math.abs(pos.x - mob.pos.x) <= half && Math.abs(pos.z - mob.pos.z) <= half && pos.y >= mob.pos.y && pos.y <= mob.pos.y + mob.def.h) {
-            const knockback = a.vel.clone().normalize().multiplyScalar(2);
-            mob.damage(4, audio, { knockback }); a.dead = true; audio.arrowHit(); break;
+            if (game.networkRoom?.role === 'guest') {
+              game.multiplayerClient?.send('mob:attack', { uid: mob.networkId, heldId: null, ranged: true });
+            } else {
+              const knockback = a.vel.clone().normalize().multiplyScalar(2);
+              mob.damage(4, audio, { knockback });
+            }
+            a.dead = true; audio.arrowHit(); break;
           }
         }
       }
@@ -1377,7 +1388,8 @@ document.addEventListener('mousedown', (e) => {
       if (id === TNT && held?.id === 259) {
         player.rightDown = false;
         if (!tntFuses.some(t => t.x === hit.x && t.y === hit.y && t.z === hit.z)) {
-          tntFuses.push({ x: hit.x, y: hit.y, z: hit.z, timer: 3.2 });
+          if (game.networkRoom?.role === 'guest') game.multiplayerClient?.send('tnt:ignite', { x: hit.x, y: hit.y, z: hit.z });
+          else tntFuses.push({ x: hit.x, y: hit.y, z: hit.z, timer: 3.2 });
           player.useHeldOn(TNT); audio.fuse();
         }
         return;
@@ -1483,8 +1495,8 @@ function frame() {
       const hostSimulates = !networked || game.networkRoom.role === 'host';
       if (hostSimulates) mobs.update(dt, player, sky.timeOfDay, effects, audio, networked ? remoteMobTargets() : []);
       updateItems(dt);
+      updateArrows(dt);
       if (hostSimulates) {
-        updateArrows(dt);
         fluids.tick(dt);
         redstone.update(dt);
         updateFurnaces(dt);

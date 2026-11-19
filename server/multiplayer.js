@@ -119,6 +119,7 @@ export function createMultiplayerServer({ logger = console } = {}) {
     socket.lastStateAt = 0;
     socket.lastChatAt = 0;
     socket.lastAttackAt = 0;
+    socket.lastTntAt = 0;
     socket.on('pong', () => { socket.isAlive = true; });
     socket.on('message', buffer => {
       if (buffer.length > MAX_MESSAGE) { socket.close(1009, 'Message too large'); return; }
@@ -218,6 +219,12 @@ export function createMultiplayerServer({ logger = console } = {}) {
         socket.room.items.delete(item.uid);
         send(socket, { type: 'item:pickup', item });
         for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'item:remove', uid: item.uid });
+      } else if (message.type === 'tnt:ignite') {
+        const now = Date.now();
+        const { x, y, z } = message;
+        if (socket === socket.room.host || now - socket.lastTntAt < 500 || !socket.lastState || ![x, y, z].every(Number.isInteger) || y < 0 || y >= 128 || Math.hypot(x + 0.5 - socket.lastState.x, z + 0.5 - socket.lastState.z) > 7) return;
+        socket.lastTntAt = now;
+        send(socket.room.host, { type: 'tnt:ignite', x, y, z });
       } else if (message.type === 'player:damage') {
         if (socket !== socket.room.host || typeof message.targetId !== 'string' || !Number.isFinite(message.amount) || message.amount <= 0 || message.amount > 40) return;
         const target = [...socket.room.clients].find(peer => peer.clientId === message.targetId);
@@ -226,7 +233,7 @@ export function createMultiplayerServer({ logger = console } = {}) {
         const now = Date.now();
         if (socket === socket.room.host || now - socket.lastAttackAt < 350 || !socket.lastState || typeof message.uid !== 'string' || message.uid.length > 80) return;
         socket.lastAttackAt = now;
-        send(socket.room.host, { type: 'mob:attack', attacker: { id: socket.clientId, name: socket.playerName, ...socket.lastState }, uid: message.uid, heldId: Number.isInteger(message.heldId) ? message.heldId : null });
+        send(socket.room.host, { type: 'mob:attack', attacker: { id: socket.clientId, name: socket.playerName, ...socket.lastState }, uid: message.uid, heldId: Number.isInteger(message.heldId) ? message.heldId : null, ranged: !!message.ranged });
       } else if (message.type === 'mob:snapshot') {
         if (socket.room.host !== socket) return fail(socket, requestId, 'Only the host can publish shared mob state.');
         if (!Array.isArray(message.mobs) || message.mobs.length > 18) return fail(socket, requestId, 'Invalid shared mob snapshot.');
