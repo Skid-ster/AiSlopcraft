@@ -26,4 +26,11 @@ assert.notDeepEqual(pixel(TILES.furnace_front,7,11),pixel(TILES.furnace_front_li
 assert.notEqual(ITEM_ICON_INDEX[283],ITEM_ICON_INDEX[261],'gold sword no longer shares the bow icon');
 assert.notEqual(ITEM_ICON_INDEX[285],ITEM_ICON_INDEX[328],'gold pickaxe no longer shares the cart icon');
 assert.notEqual(ITEM_ICON_INDEX[342],ITEM_ICON_INDEX[343],'minecart variants have distinct icons');
+const alphaCount=tile=>{let n=0;for(let i=3;i<a.get(tile).data.length;i+=4) if(a.get(tile).data[i]) n++;return n;};
+assert.ok(alphaCount(TILES.tall_grass)<256,'grass sprite keeps its background transparent');
+assert.ok(alphaCount(TILES.cobweb)<130,'cobweb is a sparse, transparent strand pattern');
+assert.ok(new Set(Array.from({length:8},(_,i)=>Buffer.from(a.get(TILES.crops0+i).data).toString('hex'))).size===8,'each crop growth stage has its own sprite');
+assert.notDeepEqual(pixel(TILES.chest_front,8,8),pixel(TILES.chest_front,3,8),'chest front has a distinct metal latch');
+assert.notDeepEqual(pixel(TILES.pumpkin_face,4,6),pixel(TILES.pumpkin_side,4,6),'pumpkin face has cutout eyes rather than plain rind');
+assert.notDeepEqual(pixel(TILES.sandstone_side,4,3),pixel(TILES.sandstone_side,4,4),'sandstone sides have readable horizontal seams');
 console.log('ALL TEXTURE TESTS PASSED');

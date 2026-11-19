@@ -223,4 +223,141 @@ export function applyClassicTextures(ctx) {
     const handle=x>=12&&x<=13&&y>=3&&y<=4;
     return handle?[64,56,43]:shade(base,(frame?-35:0)+grain(x,y,62)*.5);
   }));
+
+  // Finish the frequently seen utility and biome tiles with coherent, legible
+  // pixel art instead of the noisy fallback painter used for uncommon items.
+  put(TILES.sandstone_top,p=>fill(p,(x,y)=>shade([216,202,157],grain(x,y,90)+(x===0||y===0?-8:0))));
+  put(TILES.sandstone_bottom,p=>fill(p,(x,y)=>shade([197,181,137],grain(x,y,91)+(x%4===0?-5:0))));
+  put(TILES.sandstone_side,p=>fill(p,(x,y)=>{
+    const seam=y===3||y===11, fine=y===7;
+    return shade(seam?[170,153,111]:fine?[205,190,147]:[220,206,164],grain(x,y,92)+(seam?-7:0));
+  }));
+  put(TILES.stone_brick,p=>fill(p,(x,y)=>{
+    const row=Math.floor(y/8), stagger=row%2?4:0;
+    const seam=y%8===7||mod(x+stagger,8)===7;
+    return shade(seam?[76,76,76]:[132,132,132],grain(x,y,93)+(seam?-4:0));
+  }));
+  put(TILES.clay,p=>fill(p,(x,y)=>shade([158,164,169],grain(x,y,94)+(hash(Math.floor(x/3),Math.floor(y/2),95)-.5)*12)));
+  put(TILES.snow,p=>fill(p,(x,y)=>shade((x+y)%5===0?[240,247,250]:[226,237,242],grain(x,y,96)*.55)));
+  put(TILES.snow_block,p=>fill(p,(x,y)=>shade([235,243,247],grain(x,y,97)+(x===0||y===0?-5:0))));
+  put(TILES.ice,p=>fill(p,(x,y)=>{
+    const edge=x===0||x===15||y===0||y===15;
+    const glint=(x===4&&y>=3&&y<=7)||(x===5&&y===2)||(x===11&&y>=10&&y<=13);
+    return glint?[224,249,255]:edge?[133,194,220]:[165,218,238];
+  }));
+  put(TILES.cactus_side,p=>fill(p,(x,y)=>{
+    const rib=x%5===1||x%5===2, edge=x===0||x===15;
+    return shade(edge?[42,100,36]:rib?[71,143,49]:[83,164,55],grain(x,y,98)+(y%4===0?-7:0));
+  }));
+  put(TILES.cactus_top,p=>fill(p,(x,y)=>{
+    const edge=x===0||x===15||y===0||y===15, inner=x>=3&&x<=12&&y>=3&&y<=12;
+    return shade(edge?[40,104,39]:inner?[89,164,58]:[116,181,73],grain(x,y,99));
+  }));
+  put(TILES.sugarcane,p=>{
+    for(let y=0;y<16;y++) for(let x=0;x<16;x++) {
+      const stalk=(x>=5&&x<=7)||(x>=10&&x<=11&&y<10);
+      if(stalk) p(x,y,shade(x===5||x===10?[70,125,43]:[104,167,61],(y%4===0?-10:grain(x,y,100)*.3)));
+    }
+  });
+  const plant=(tile,stalk,leaf,seed)=>put(tile,p=>{
+    for(let y=2;y<16;y++) {
+      const center=8+Math.round(Math.sin(y*.7+seed)*2);
+      p(center,y,stalk);
+      if(y%3===0) for(let d=1;d<=3;d++) {
+        const dir=((y+seed)%2)?1:-1;
+        p(center+dir*d,y-d,shade(leaf,d===3?-16:0));
+      }
+    }
+  });
+  plant(TILES.tall_grass,[75,117,43],[95,153,50],1);
+  plant(TILES.sapling,[93,72,43],[56,125,47],3);
+  const mushroom=(tile,cap,stem)=>put(tile,p=>{
+    for(let y=0;y<16;y++) for(let x=0;x<16;x++) {
+      const dx=Math.abs(x-7.5), dome=y<9&&dx<=(y<4?6:9-y)*1.5;
+      const stalk=x>=6&&x<=9&&y>=8&&y<=15;
+      if(dome) p(x,y,shade(cap,(y<4?-8:0)+grain(x,y,101)));
+      else if(stalk) p(x,y,shade(stem,grain(x,y,102)*.4));
+    }
+  });
+  mushroom(TILES.mushroom_red,[192,39,32],[226,214,182]);
+  mushroom(TILES.mushroom_brown,[137,91,54],[222,210,180]);
+  const crop=(tile,stage)=>put(tile,p=>{
+    const height=3+stage*1.5;
+    for(let y=15;y>=16-height;y--) {
+      const stemX=8+Math.round(Math.sin(y*.8+stage)*1.5);
+      p(stemX,y,[71,131,45]);
+      if(stage>1 && (y%3===0||stage>=6)) {
+        for(let d=1;d<=Math.min(3,1+Math.floor(stage/3));d++) {
+          const dir=((y+stage)%2)?1:-1;
+          p(stemX+dir*d,y-d,shade(stage>=7?[203,172,55]:[88,158,51],d===3?-14:0));
+        }
+      }
+      if(stage>=7 && y%3===0) p(stemX-1,y,[216,187,67]);
+    }
+  });
+  for(let stage=0;stage<8;stage++) crop(TILES.crops0+stage,stage);
+  put(TILES.farmland,p=>fill(p,(x,y)=>{
+    const furrow=y%4===0||((x+Math.floor(y/4)*3)%9===0);
+    return shade(furrow?[90,62,39]:[122,83,49],grain(x,y,103)+(furrow?-8:0));
+  }));
+  put(TILES.farmland_wet,p=>fill(p,(x,y)=>{
+    const furrow=y%4===0||((x+Math.floor(y/4)*3)%9===0);
+    return shade(furrow?[71,61,46]:[85,76,49],grain(x,y,104)+(furrow?-6:0));
+  }));
+  put(TILES.cobweb,p=>{
+    for(let y=0;y<16;y++) for(let x=0;x<16;x++) {
+      const diagonal=(x===y||x+y===15||x===7||y===7||Math.abs(x-y)===1||Math.abs(x+y-15)===1);
+      if(diagonal) p(x,y,[201,201,192],225);
+    }
+  });
+  put(TILES.jukebox_top,p=>fill(p,(x,y)=>{
+    const rim=x<2||x>13||y<2||y>13, disc=x>=5&&x<=10&&y>=5&&y<=10;
+    return shade(rim?[72,51,35]:disc?[91,79,60]:[146,108,66],grain(x,y,105));
+  }));
+  put(TILES.jukebox_side,p=>fill(p,(x,y)=>shade(y>=5&&y<=10?[102,59,43]:[146,106,64],grain(x,y,106)+(x===0||x===15?-12:0))));
+  put(TILES.pumpkin_top,p=>fill(p,(x,y)=>{
+    const ring=Math.abs(x-7.5)+Math.abs(y-7.5);
+    return shade(ring<4?[58,103,40]:ring<8?[83,128,47]:[114,145,55],grain(x,y,107));
+  }));
+  put(TILES.pumpkin_side,p=>fill(p,(x,y)=>{
+    const stripe=x%5===0||x%5===1;
+    return shade(stripe?[177,75,19]:[222,118,28],grain(x,y,108)+(stripe?-10:0));
+  }));
+  const pumpkinFace=(tile,lit)=>put(tile,p=>fill(p,(x,y)=>{
+    const eye=(x>=3&&x<=6&&y>=5&&y<=8)||(x>=10&&x<=13&&y>=5&&y<=8);
+    const nose=y>=8&&y<=11&&Math.abs(x-8)<=1;
+    const mouth=y>=12&&y<=13&&x>=5&&x<=11;
+    const cut=eye||nose||mouth;
+    return cut?(lit?[255,202,75]:[38,31,21]):shade([222,112,24],grain(x,y,109)+(x%5===0?-17:0));
+  }));
+  pumpkinFace(TILES.pumpkin_face,false);
+  pumpkinFace(TILES.jack_o_lantern,true);
+  put(TILES.chest_top,p=>fill(p,(x,y)=>{
+    const band=x===2||x===13||y===2||y===13;
+    return shade(band?[94,61,33]:[160,111,59],grain(x,y,110));
+  }));
+  put(TILES.chest_side,p=>fill(p,(x,y)=>{
+    const rim=x<2||x>13||y<2||y>13, band=y===5||y===6;
+    return shade(rim?[88,57,34]:band?[103,72,39]:[158,107,54],grain(x,y,111));
+  }));
+  put(TILES.chest_front,p=>fill(p,(x,y)=>{
+    const rim=x<2||x>13||y<2||y>13, seam=y===6||y===7, lock=x>=7&&x<=9&&y>=6&&y<=10;
+    return lock?[224,184,61]:shade(rim?[83,54,32]:seam?[104,70,37]:[160,108,53],grain(x,y,112));
+  }));
+  put(TILES.bed_top,p=>fill(p,(x,y)=>shade(y<3?[227,227,213]:[173,45,43],grain(x,y,113)+(y===3?-18:0))));
+  put(TILES.bed_side,p=>fill(p,(x,y)=>shade(y<5?[193,50,47]:[143,99,60],grain(x,y,114))));
+  put(TILES.bed_end,p=>fill(p,(x,y)=>{
+    const pillow=x>=3&&x<=12&&y>=2&&y<=6;
+    return shade(pillow?[228,226,209]:[153,45,43],grain(x,y,115));
+  }));
+  put(TILES.bed_foot,p=>fill(p,(x,y)=>shade(y<4?[222,221,204]:[157,48,45],grain(x,y,116))));
+  for(const [tile,metalDoor] of [[TILES.door_wood,false],[TILES.door_iron,true]]) put(tile,p=>{
+    for(let y=0;y<16;y++) for(let x=0;x<16;x++) {
+      const frame=x<2||x>13||y<2||y>13, panel=(x>=3&&x<=12&&y>=3&&y<=12);
+      if(frame||panel) {
+        const handle=!metalDoor&&x>=11&&x<=12&&y>=7&&y<=9;
+        p(x,y,handle?[70,55,36]:shade(metalDoor?(frame?[105,110,117]:[185,188,191]):(frame?[98,68,38]:[157,119,69]),grain(x,y,117)+(frame?-8:0)));
+      }
+    }
+  });
 }
