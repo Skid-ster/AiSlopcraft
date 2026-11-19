@@ -13,7 +13,7 @@ import {
 } from './world/blocks.js';
 import { Player } from './entities/player.js';
 import { advanceEating } from './entities/eating.js';
-import { MobManager, findSafeGround, rollMobDrops } from './entities/mobs.js';
+import { MobManager, findSafeGround, rollMobDrops, mobAttackDamage } from './entities/mobs.js';
 import { UI } from './ui/ui.js';
 import { Audio } from './audio.js';
 import { Sky } from './sky.js';
@@ -130,6 +130,8 @@ vehicles.load(savedGame?.vehicles);
 const remotePlayers = new Map();
 let applyingNetworkEdit = false;
 let networkStateTimer = 0;
+let networkItemTimer = 0;
+let sharedStateTimer = 0;
 const game = {
   world, player, audio, sky, mobs, renderer, lighting, fluids, redstone, vehicles,
   atlasCanvas,
@@ -236,8 +238,35 @@ const game = {
       ui?.updateNetworkPanel?.();
     });
     on('player:state', message => updateRemoteAvatar(message));
+    on('player:damage', message => { if (Number.isFinite(message.amount) && message.amount > 0) player.damage(message.amount, audio); });
     on('world:snapshot', message => this.applyNetworkEdits(message.entries));
     on('world:edit', message => this.applyNetworkEdits([message.edit]));
+    on('item:snapshot', message => applyNetworkItems(message.items));
+    on('item:spawn', message => upsertNetworkItem(message.item));
+    on('item:remove', message => removeNetworkItem(message.uid));
+    on('item:pickup', message => {
+      removeNetworkItem(message.item?.uid);
+      const stack = message.item;
+      if (stack) {
+        const inserted = player.insertItem(stack.id, stack.count, stack.damage || 0);
+        if (inserted < stack.count) spawnItem(player.pos.x, player.pos.y, player.pos.z, stack.id, stack.count - inserted, stack.damage || 0);
+        audio.pop(); ui?.refresh?.();
+      }
+    });
+    on('mob:snapshot', message => { if (room.role !== 'host') mobs.applyNetworkSnapshot(message.mobs); });
+    on('mob:attack', message => {
+      if (room.role !== 'host' || !message.attacker || ![message.attacker.x, message.attacker.y, message.attacker.z, message.attacker.yaw, message.attacker.pitch].every(Number.isFinite)) return;
+      const attacker = message.attacker;
+      const fakePlayer = { pos: new THREE.Vector3(attacker.x, attacker.y, attacker.z), yaw: attacker.yaw, pitch: attacker.pitch,
+        camera: { position: new THREE.Vector3(attacker.x, attacker.y + 1.62, attacker.z) },
+        _solidBlockAt: (...args) => player._solidBlockAt(...args),
+        raycast: (sharedWorld, distance, options) => Player.prototype.raycast.call(fakePlayer, sharedWorld, distance, options) };
+      const target = mobs.raycastTarget(fakePlayer, 3.5);
+      if (!target || target.networkId !== message.uid || Math.hypot(target.pos.x - attacker.x, target.pos.z - attacker.z) > 4) return;
+      const dx = target.pos.x - attacker.x, dz = target.pos.z - attacker.z, length = Math.hypot(dx, dz) || 1;
+      target.damage(mobAttackDamage(message.heldId), audio, { knockback: new THREE.Vector3(dx / length * 3.4, 1.15, dz / length * 3.4) });
+    });
+    on('game:state', message => applySharedGameState(message.state));
     on('chat', message => ui?.appendNetworkChat?.(message.name, message.text));
     const disconnectRoom = message => {
       if (!this.networkRoom) return;
@@ -276,6 +305,10 @@ const game = {
   spawnBed: savedGame?.spawnBed || null,
   dropItem(stack) {
     spawnItem(player.pos.x, player.pos.y, player.pos.z, stack.id, stack.count, stack.damage || 0);
+  },
+  syncSharedState() {
+    if (!this.networkRoom || !this.multiplayerClient) return;
+    this.multiplayerClient.send('game:state', { state: { timeOfDay: sky.timeOfDay, chests: [...chests], furnaces: [...furnaces] } });
   },
   dropHeld(all = false) {
     const stack = player.heldStack;
@@ -392,7 +425,7 @@ const game = {
         }
         updateChunks(true);
         processChunkQueue();
-        if (mobs.mobs.length === 0) mobs.spawnInitial(player);
+        if (mobs.mobs.length === 0 && this.networkRoom?.role !== 'guest') mobs.spawnInitial(player);
         if (!loadedItems) {
           loadedItems = true;
           if (Array.isArray(savedGame?.items)) for (const item of savedGame.items.slice(0, 4096)) {
@@ -460,7 +493,15 @@ function updateRemoteAvatar(message) {
   avatar.target.set(message.x,message.y,message.z);
   avatar.yaw = message.yaw;
   avatar.pitch = message.pitch;
+  avatar.dead = !!message.dead;
   avatar.root.visible = true;
+}
+
+function remoteMobTargets() {
+  return [...remotePlayers.entries()].map(([id, avatar]) => ({
+    id, pos: avatar.target.clone(), vel: new THREE.Vector3(), dead: !!avatar.dead,
+    damage: amount => game.multiplayerClient?.send('player:damage', { targetId: id, amount }),
+  }));
 }
 
 function removeRemoteAvatar(id) {
@@ -640,7 +681,7 @@ let loadedItems = false;
 const itemGroup = new THREE.Group();
 scene.add(itemGroup);
 
-function spawnItem(x, y, z, id, count = 1, damage = 0) {
+function spawnItem(x, y, z, id, count = 1, damage = 0, uid = null) {
   // Geometry/UVs are immutable per item ID. Materials remain per entity so
   // local light uniforms can differ without one dropped item affecting another.
   let geometry = dropGeometryCache.get(id);
@@ -668,7 +709,14 @@ function spawnItem(x, y, z, id, count = 1, damage = 0) {
   mesh.position.set(x + 0.5, y + 0.3, z + 0.5);
   lighting.refreshObject(mesh, world, mesh.position, 0);
   itemGroup.add(mesh);
-  itemEntities.push({ mesh, id, count, damage, vy: 2, age: 0, onGround: false });
+  const sourceUid = uid || globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+  const entity = { mesh, id, count, damage, vy: 2, age: 0, onGround: false, uid: sourceUid };
+  itemEntities.push(entity);
+  if (!uid && game.networkRoom?.role === 'guest') {
+    entity.uid = `${game.networkRoom.id}:${sourceUid}`;
+    game.multiplayerClient?.send('item:spawn', { item: { uid: sourceUid, id, count, damage: damage || 0, pos: mesh.position.toArray(), vy: entity.vy, age: entity.age } });
+  }
+  return entity;
 }
 
 let _itemTex = null;
@@ -686,32 +734,83 @@ function itemTexFromCanvas(canvas) {
 import { ITEM_ICON_INDEX } from './ui/ui.js';
 const ITEM_ICON_INDEX_LOCAL = ITEM_ICON_INDEX;
 
+function removeNetworkItem(uid) {
+  if (typeof uid !== 'string') return;
+  const index = itemEntities.findIndex(item => item.uid === uid);
+  if (index < 0) return;
+  const [item] = itemEntities.splice(index, 1);
+  itemGroup.remove(item.mesh); lighting.forget(item.mesh);
+  item.mesh.material?.dispose?.();
+}
+
+function upsertNetworkItem(item) {
+  if (!item || typeof item.uid !== 'string' || !Number.isInteger(item.id) || !Number.isFinite(item.count) || !Array.isArray(item.pos) || item.pos.length !== 3 || !item.pos.every(Number.isFinite)) return;
+  let entity = itemEntities.find(candidate => candidate.uid === item.uid);
+  if (!entity) entity = spawnItem(item.pos[0] - 0.5, item.pos[1] - 0.3, item.pos[2] - 0.5, item.id, item.count, item.damage || 0, item.uid);
+  entity.count = item.count; entity.mesh.position.fromArray(item.pos);
+  entity.vy = Number.isFinite(item.vy) ? item.vy : 0;
+  entity.age = Number.isFinite(item.age) ? item.age : 0;
+}
+
+function applyNetworkItems(items) {
+  if (!Array.isArray(items)) return;
+  const seen = new Set();
+  for (const item of items) {
+    if (!item || typeof item.uid !== 'string' || !Number.isInteger(item.id) || !Number.isFinite(item.count) || !Array.isArray(item.pos) || item.pos.length !== 3 || !item.pos.every(Number.isFinite)) continue;
+    seen.add(item.uid);
+    upsertNetworkItem(item);
+  }
+  for (const item of [...itemEntities]) if (!seen.has(item.uid)) removeNetworkItem(item.uid);
+}
+
+function applySharedGameState(state) {
+  if (!state || typeof state !== 'object') return;
+  if (Array.isArray(state.chests)) {
+    chests.clear();
+    for (const [key, slots] of state.chests) if (typeof key === 'string' && Array.isArray(slots) && slots.length === 27) chests.set(key, slots);
+  }
+  if (Array.isArray(state.furnaces)) {
+    furnaces.clear();
+    for (const [key, furnace] of state.furnaces) if (typeof key === 'string' && furnace && typeof furnace === 'object') furnaces.set(key, furnace);
+  }
+  if (Number.isFinite(state.timeOfDay)) sky.time = ((state.timeOfDay % 1) + 1) % 1;
+  if (ui?.mode === 'chest') refreshChest();
+  if (ui?.mode === 'furnace') refreshFurnace();
+}
+
 function updateItems(dt) {
   for (const it of itemEntities) {
     const loaded = world.getChunk(Math.floor(it.mesh.position.x / CH), Math.floor(it.mesh.position.z / CH));
     it.mesh.visible = !!loaded?.generated;
     if (!loaded?.generated) continue; // preserve drops rather than falling through unloaded terrain
-    it.age += dt;
-    // physics
-    if (!it.onGround) it.vy -= 14 * dt;
-    it.mesh.position.y += it.vy * dt;
-    const bx = Math.floor(it.mesh.position.x), by = Math.floor(it.mesh.position.y - 0.14), bz = Math.floor(it.mesh.position.z);
-    if (getBlock(world.getBlock(bx, by, bz)).solid && it.vy <= 0) {
-      it.mesh.position.y = by + 1.15;
-      it.vy = 0;
-      it.onGround = true;
+    const networked = !!game.networkRoom;
+    const networkGuest = networked && game.networkRoom.role !== 'host';
+    if (!networkGuest) {
+      it.age += dt;
+      if (!it.onGround) it.vy -= 14 * dt;
+      it.mesh.position.y += it.vy * dt;
+      const bx = Math.floor(it.mesh.position.x), by = Math.floor(it.mesh.position.y - 0.14), bz = Math.floor(it.mesh.position.z);
+      if (getBlock(world.getBlock(bx, by, bz)).solid && it.vy <= 0) {
+        it.mesh.position.y = by + 1.15;
+        it.vy = 0;
+        it.onGround = true;
+      }
+      it.mesh.rotation.y += dt * 1.6;
+      lighting.refreshObject(it.mesh, world, it.mesh.position, 0);
     }
-    it.mesh.rotation.y += dt * 1.6;
-    lighting.refreshObject(it.mesh, world, it.mesh.position, 0);
 
     // pickup
     const dx = it.mesh.position.x - player.pos.x, dy = it.mesh.position.y - player.pos.y - 0.8, dz = it.mesh.position.z - player.pos.z;
-    if (!player.dead && dx * dx + dy * dy + dz * dz < 1.4 * 1.4 && it.age > 0.4) {
-      const inserted = player.insertItem(it.id, it.count, it.damage || 0);
-      if (inserted > 0) {
-        it.count -= inserted;
-        audio.pop();
-        if (it.count <= 0) it.dead = true;
+    if (!player.dead && dx * dx + dy * dy + dz * dz < 1.4 * 1.4 && it.age > 0.4 && !it.pendingPickup) {
+      if (networked) {
+        it.pendingPickup = game.multiplayerClient?.send('item:pickup', { uid: it.uid }) || false;
+      } else {
+        const inserted = player.insertItem(it.id, it.count, it.damage || 0);
+        if (inserted > 0) {
+          it.count -= inserted;
+          audio.pop();
+          if (it.count <= 0) it.dead = true;
+        }
       }
     }
     if (it.age > 300) it.dead = true;
@@ -916,18 +1015,18 @@ function explode(pos, radius, player) {
 // ---- arrows ----
 const arrows = [];
 const arrowGeometry = new THREE.BoxGeometry(0.08, 0.08, 0.5);
-function createArrow(from, velocity, owner) {
+function createArrow(from, velocity, owner, targetId = null) {
   const mesh = new THREE.Mesh(arrowGeometry, new THREE.MeshBasicMaterial({ color: 0x8a6a42 }));
   lighting.prepare(mesh);
   mesh.position.copy(from);
   lighting.refreshObject(mesh, world, mesh.position, 0);
   scene.add(mesh);
-  arrows.push({ mesh, vel: velocity, age: 0, owner });
+  arrows.push({ mesh, vel: velocity, age: 0, owner, targetId });
 }
 function shootArrow(fromMob, player) {
   const from = fromMob.pos.clone().add(new THREE.Vector3(0, 1.6, 0));
   const to = player.pos.clone().add(new THREE.Vector3(0, 1.2, 0));
-  createArrow(from, to.sub(from).normalize().multiplyScalar(18), 'mob');
+  createArrow(from, to.sub(from).normalize().multiplyScalar(18), 'mob', player.id || null);
 }
 function shootPlayerArrow() {
   const dir = new THREE.Vector3(-Math.sin(player.yaw) * Math.cos(player.pitch), Math.sin(player.pitch), -Math.cos(player.yaw) * Math.cos(player.pitch));
@@ -952,7 +1051,13 @@ function updateArrows(dt) {
         break;
       }
       if (a.owner === 'mob') {
-        if (Math.abs(pos.x - player.pos.x) < 0.4 && Math.abs(pos.z - player.pos.z) < 0.4 && pos.y >= player.pos.y && pos.y <= player.pos.y + 1.8) {
+        const remoteTarget = a.targetId ? remotePlayers.get(a.targetId)?.target : null;
+        if (remoteTarget) {
+          if (Math.abs(pos.x - remoteTarget.x) < 0.4 && Math.abs(pos.z - remoteTarget.z) < 0.4 && pos.y >= remoteTarget.y && pos.y <= remoteTarget.y + 1.8) {
+            game.multiplayerClient?.send('player:damage', { targetId: a.targetId, amount: 2 });
+            a.dead = true; audio.arrowHit();
+          }
+        } else if (!a.targetId && Math.abs(pos.x - player.pos.x) < 0.4 && Math.abs(pos.z - player.pos.z) < 0.4 && pos.y >= player.pos.y && pos.y <= player.pos.y + 1.8) {
           player.damage(2, audio); a.dead = true; audio.arrowHit();
         }
       } else {
@@ -1113,6 +1218,7 @@ function buildFurnaceUI() {
       player.cursorStack = result.cursorStack;
       refreshFurnace();
       ui.refresh();
+      game.syncSharedState();
     };
     panel.querySelector('#f-in').addEventListener('mousedown', onFurnaceSlot('input'));
     panel.querySelector('#f-fuel').addEventListener('mousedown', onFurnaceSlot('fuel'));
@@ -1351,7 +1457,9 @@ function frame() {
       if (!vehicles.update(dt, player)) player.update(dt, world, audio);
       if (player.leftDown && player.pointerLocked) {
         if (mobs.raycastTarget(player, 3.5)) {
-          mobs.attack(player, player.heldStack?.id ?? null, audio, 3.5);
+          mobs.attack(player, player.heldStack?.id ?? null, audio, 3.5, game.networkRoom?.role === 'guest'
+            ? (uid, heldId) => game.multiplayerClient?.send('mob:attack', { uid, heldId })
+            : null);
           player.mining.active = false;
           player.mining.progress = 0;
         } else tryBreakBlock(dt);
@@ -1371,23 +1479,49 @@ function frame() {
         placeCooldown = 0;
       }
 
-      mobs.update(dt, player, sky.timeOfDay, effects, audio);
+      const networked = !!game.networkRoom;
+      const hostSimulates = !networked || game.networkRoom.role === 'host';
+      if (hostSimulates) mobs.update(dt, player, sky.timeOfDay, effects, audio, networked ? remoteMobTargets() : []);
       updateItems(dt);
-      updateArrows(dt);
-      fluids.tick(dt);
-      redstone.update(dt);
-      updateFurnaces(dt);
-      updateCrops(dt);
+      if (hostSimulates) {
+        updateArrows(dt);
+        fluids.tick(dt);
+        redstone.update(dt);
+        updateFurnaces(dt);
+        updateCrops(dt);
+        updateTNT(dt);
+      }
       updateFishing(dt);
-      updateTNT(dt);
       particles.update(dt, world);
-      if (game.networkRoom && game.multiplayerClient) {
+      if (networked && game.multiplayerClient) {
         networkStateTimer -= dt;
         if (networkStateTimer <= 0) {
           game.multiplayerClient.send('player:state', { state: {
-            x: player.pos.x, y: player.pos.y, z: player.pos.z, yaw: player.yaw, pitch: player.pitch,
+            x: player.pos.x, y: player.pos.y, z: player.pos.z, yaw: player.yaw, pitch: player.pitch, dead: player.dead,
           } });
-          networkStateTimer = 0.07;
+          if (game.networkRoom.role === 'host') {
+            const mobStates = mobs.mobs.map(mob => {
+              mob.networkId ||= globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+              return { uid: mob.networkId, type: mob.type, pos: mob.pos.toArray(), yaw: mob.yaw, hp: mob.hp, sheared: mob.sheared, fuse: mob.fuse };
+            });
+            game.multiplayerClient.send('mob:snapshot', { mobs: mobStates });
+          }
+          networkStateTimer = 0.12;
+        }
+      }
+      if (networked && game.networkRoom.role === 'host' && game.multiplayerClient) {
+        networkItemTimer -= dt;
+        if (networkItemTimer <= 0) {
+          const itemStates = itemEntities.filter(item => !item.dead).map(item => ({ uid: item.uid, id: item.id, count: item.count, damage: item.damage, pos: item.mesh.position.toArray(), vy: item.vy, age: item.age }));
+          game.multiplayerClient.send('item:snapshot', { items: itemStates });
+          networkItemTimer = 0.4;
+        }
+      }
+      if (networked && game.multiplayerClient) {
+        sharedStateTimer -= dt;
+        if (sharedStateTimer <= 0) {
+          game.multiplayerClient.send('game:state', { state: { timeOfDay: sky.timeOfDay, chests: [...chests], furnaces: [...furnaces] } });
+          sharedStateTimer = 1.25;
         }
       }
 

@@ -294,6 +294,7 @@ export class Mob {
   constructor(type, x, y, z) {
     if (!MOB_DEFS[type]) throw new Error(`Unknown mob type: ${type}`);
     this.type = type;
+    this.networkId = null;
     this.def = MOB_DEFS[type];
     this.pos = new THREE.Vector3(x, y, z);
     this.vel = new THREE.Vector3();
@@ -704,7 +705,7 @@ export class MobManager {
     return mob;
   }
 
-  update(dt, player, timeOfDay, effects, audio) {
+  update(dt, player, timeOfDay, effects, audio, remoteTargets = []) {
     dt = Math.min(Math.max(dt, 0), 0.1);
     this.attackCooldown = Math.max(0, this.attackCooldown - dt);
     const night = !isDaylight(timeOfDay);
@@ -735,8 +736,15 @@ export class MobManager {
       }
     }
 
+    const targets = [player, ...remoteTargets].filter(target => target && !target.dead && target.pos);
     for (const mob of this.mobs) {
-      mob.update(dt, this.world, player, this.mobs, effects, audio, timeOfDay);
+      let target = player;
+      let distance = player.pos.distanceToSquared(mob.pos);
+      for (const candidate of targets) {
+        const nextDistance = candidate.pos.distanceToSquared(mob.pos);
+        if (nextDistance < distance) { target = candidate; distance = nextDistance; }
+      }
+      mob.update(dt, this.world, target, this.mobs, effects, audio, timeOfDay);
       this.lighting?.refreshObject(mob.group, this.world, mob.pos, mob.def.h * 0.65);
       if (mob.dead) {
         this.group.remove(mob.group);
@@ -782,11 +790,45 @@ export class MobManager {
     return nearest;
   }
 
-  attack(player, heldId, audio, maxDistance = 3.5) {
+  applyNetworkSnapshot(snapshot, effects = null) {
+    if (!Array.isArray(snapshot)) return;
+    const incoming = new Set();
+    for (const state of snapshot) {
+      if (!state || typeof state.uid !== 'string' || !MOB_DEFS[state.type] || !Array.isArray(state.pos) || state.pos.length !== 3 || !state.pos.every(Number.isFinite)) continue;
+      incoming.add(state.uid);
+      let mob = this.mobs.find(candidate => candidate.networkId === state.uid);
+      if (!mob) {
+        mob = this.add(state.type, ...state.pos);
+        mob.networkId = state.uid;
+      }
+      mob.pos.set(...state.pos);
+      mob.group.position.copy(mob.pos);
+      mob.yaw = Number.isFinite(state.yaw) ? state.yaw : mob.yaw;
+      mob.group.rotation.y = mob.yaw + Math.PI;
+      mob.hp = Number.isFinite(state.hp) ? Math.max(0, state.hp) : mob.hp;
+      mob.sheared = !!state.sheared;
+      mob.fuse = Number.isFinite(state.fuse) ? state.fuse : -1;
+    }
+    for (const mob of [...this.mobs]) {
+      if (mob.networkId && !incoming.has(mob.networkId)) {
+        this.group.remove(mob.group);
+        this.lighting?.forget(mob.group);
+        mob.dispose();
+        this.mobs.splice(this.mobs.indexOf(mob), 1);
+      }
+    }
+  }
+
+  attack(player, heldId, audio, maxDistance = 3.5, networkAttack = null) {
     const target = this.raycastTarget(player, maxDistance);
     if (!target) return false;
     if (this.attackCooldown > 0) return true;
     this.attackCooldown = 0.45;
+    if (networkAttack && target.networkId) {
+      networkAttack(target.networkId, heldId);
+      if (typeof player.useHeldOn === 'function') player.useHeldOn(AIR);
+      return true;
+    }
     const dx = target.pos.x - player.pos.x;
     const dz = target.pos.z - player.pos.z;
     const length = Math.hypot(dx, dz) || 1;

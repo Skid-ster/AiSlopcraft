@@ -879,6 +879,7 @@ export class UI {
       }
     }
     this.refresh();
+    if (this.mode === 'chest' || this.mode === 'furnace') this.game.syncSharedState?.();
   }
 
   onKey(e) {

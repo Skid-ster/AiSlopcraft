@@ -16,6 +16,7 @@ export class MultiplayerClient {
     this.socket = null;
     this.pending = new Map();
     this.listeners = new Map();
+    this.earlyMessages = new Map();
     this.requestSequence = 0;
     this.room = null;
   }
@@ -23,6 +24,11 @@ export class MultiplayerClient {
   on(type, listener) {
     if (!this.listeners.has(type)) this.listeners.set(type, new Set());
     this.listeners.get(type).add(listener);
+    const queued = this.earlyMessages.get(type) || [];
+    this.earlyMessages.delete(type);
+    for (const message of queued) {
+      try { listener(message); } catch (error) { console.error(`Multiplayer ${type} listener failed`, error); }
+    }
     return () => this.listeners.get(type)?.delete(listener);
   }
 
@@ -54,6 +60,12 @@ export class MultiplayerClient {
         clearTimeout(pending.timeout);
         if (message.type === 'error') pending.reject(new Error(message.message || 'Multiplayer request failed.'));
         else pending.resolve(message);
+      }
+      if (['world:snapshot', 'item:snapshot', 'game:state', 'mob:snapshot', 'player:state'].includes(message.type) && !this.listeners.get(message.type)?.size) {
+        const queued = this.earlyMessages.get(message.type) || [];
+        queued.push(message);
+        if (queued.length > 1024) queued.shift();
+        this.earlyMessages.set(message.type, queued);
       }
       this.emit(message.type, message);
     });

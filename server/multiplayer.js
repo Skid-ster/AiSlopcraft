@@ -5,7 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 
 const MAX_PLAYERS = 8;
 const MAX_EDITS = 50_000;
-const MAX_MESSAGE = 128 * 1024;
+const MAX_MESSAGE = 1024 * 1024;
 const ROOM_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const cleanText = (value, max = 24) => String(value ?? '').replace(/[<>\u0000-\u001f\u007f]/g, '').trim().slice(0, max);
 const validRoom = value => /^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/.test(String(value ?? ''));
@@ -102,6 +102,10 @@ export function createMultiplayerServer({ logger = console } = {}) {
         send(socket, { type: 'world:snapshot', entries: edits.slice(index, index + 160), done: index + 160 >= edits.length });
       }
       if (!edits.length) send(socket, { type: 'world:snapshot', entries: [], done: true });
+      const items = [...room.items.values()];
+      send(socket, { type: 'item:snapshot', items, done: true });
+      if (room.gameState) send(socket, { type: 'game:state', state: room.gameState });
+      send(socket, { type: 'mob:snapshot', mobs: room.mobs });
     }
     for (const peer of room.clients) {
       if (peer === socket) continue;
@@ -114,6 +118,7 @@ export function createMultiplayerServer({ logger = console } = {}) {
     socket.isAlive = true;
     socket.lastStateAt = 0;
     socket.lastChatAt = 0;
+    socket.lastAttackAt = 0;
     socket.on('pong', () => { socket.isAlive = true; });
     socket.on('message', buffer => {
       if (buffer.length > MAX_MESSAGE) { socket.close(1009, 'Message too large'); return; }
@@ -138,7 +143,8 @@ export function createMultiplayerServer({ logger = console } = {}) {
         try {
           const room = {
             code: createCode(rooms), name, playerName, access, gameMode, seed,
-            password: passwordRecord(password), clients: new Set(), edits: new Map(), host: socket,
+            password: passwordRecord(password), clients: new Set(), edits: new Map(), items: new Map(),
+            gameState: null, mobs: [], host: socket,
           };
           rooms.set(room.code, room);
           join(socket, room, playerName, requestId);
@@ -174,7 +180,7 @@ export function createMultiplayerServer({ logger = console } = {}) {
         if (!state || ![state.x, state.y, state.z, state.yaw, state.pitch].every(Number.isFinite)) return;
         if (Math.abs(state.x) > 30_000_000 || Math.abs(state.z) > 30_000_000 || state.y < -128 || state.y > 512) return;
         socket.lastStateAt = now;
-        socket.lastState = { x: state.x, y: state.y, z: state.z, yaw: state.yaw, pitch: state.pitch };
+        socket.lastState = { x: state.x, y: state.y, z: state.z, yaw: state.yaw, pitch: state.pitch, dead: !!state.dead };
         for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'player:state', id: socket.clientId, name: socket.playerName, ...socket.lastState });
       } else if (message.type === 'world:edit') {
         const edit = message.edit;
@@ -184,6 +190,48 @@ export function createMultiplayerServer({ logger = console } = {}) {
         socket.room.edits.set(key, [edit.id, edit.meta || 0]);
         if (socket.room.edits.size > MAX_EDITS) return fail(socket, requestId, 'The shared world edit limit has been reached.');
         for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'world:edit', edit });
+      } else if (message.type === 'game:state') {
+        if (!message.state || typeof message.state !== 'object' || Array.isArray(message.state) || JSON.stringify(message.state).length > 96_000) return fail(socket, requestId, 'Invalid shared world state.');
+        socket.room.gameState = message.state;
+        for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'game:state', state: message.state });
+      } else if (message.type === 'item:snapshot') {
+        if (socket.room.host !== socket) return fail(socket, requestId, 'Only the host can publish shared item state.');
+        if (!Array.isArray(message.items) || message.items.length > 4096) return fail(socket, requestId, 'Invalid shared item snapshot.');
+        const items = new Map();
+        for (const item of message.items) {
+          if (!item || typeof item.uid !== 'string' || item.uid.length > 80 || !Number.isInteger(item.id) || item.id < 0 || item.id > 4095 || !Number.isInteger(item.count) || item.count < 1 || item.count > 999 || !Array.isArray(item.pos) || item.pos.length !== 3 || !item.pos.every(Number.isFinite) || item.pos.some(value => Math.abs(value) > 30_000_000)) continue;
+          items.set(item.uid, { uid: item.uid, id: item.id, count: item.count, damage: Number.isInteger(item.damage) ? Math.max(0, item.damage) : 0, pos: item.pos, vy: Number.isFinite(item.vy) ? Math.max(-80, Math.min(80, item.vy)) : 0, age: Number.isFinite(item.age) ? Math.max(0, Math.min(300, item.age)) : 0 });
+        }
+        socket.room.items = items;
+        for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'item:snapshot', items: [...items.values()], done: true });
+      } else if (message.type === 'item:spawn') {
+        const source = message.item;
+        if (!source || typeof source.uid !== 'string' || source.uid.length > 80 || !Number.isInteger(source.id) || source.id < 0 || source.id > 4095 || !Number.isInteger(source.count) || source.count < 1 || source.count > 999 || !Array.isArray(source.pos) || source.pos.length !== 3 || !source.pos.every(Number.isFinite) || source.pos.some(value => Math.abs(value) > 30_000_000)) return;
+        if (socket.room.items.size >= 4096) return fail(socket, requestId, 'The shared item limit has been reached.');
+        const uid = `${socket.clientId}:${source.uid}`;
+        const item = { uid, id: source.id, count: source.count, damage: Number.isInteger(source.damage) ? Math.max(0, source.damage) : 0, pos: source.pos, vy: Number.isFinite(source.vy) ? Math.max(-80, Math.min(80, source.vy)) : 0, age: Number.isFinite(source.age) ? Math.max(0, Math.min(300, source.age)) : 0 };
+        socket.room.items.set(uid, item);
+        for (const peer of socket.room.clients) send(peer, { type: 'item:spawn', item });
+      } else if (message.type === 'item:pickup') {
+        const item = socket.room.items.get(String(message.uid ?? ''));
+        if (!item) return;
+        socket.room.items.delete(item.uid);
+        send(socket, { type: 'item:pickup', item });
+        for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'item:remove', uid: item.uid });
+      } else if (message.type === 'player:damage') {
+        if (socket !== socket.room.host || typeof message.targetId !== 'string' || !Number.isFinite(message.amount) || message.amount <= 0 || message.amount > 40) return;
+        const target = [...socket.room.clients].find(peer => peer.clientId === message.targetId);
+        if (target) send(target, { type: 'player:damage', amount: message.amount });
+      } else if (message.type === 'mob:attack') {
+        const now = Date.now();
+        if (socket === socket.room.host || now - socket.lastAttackAt < 350 || !socket.lastState || typeof message.uid !== 'string' || message.uid.length > 80) return;
+        socket.lastAttackAt = now;
+        send(socket.room.host, { type: 'mob:attack', attacker: { id: socket.clientId, name: socket.playerName, ...socket.lastState }, uid: message.uid, heldId: Number.isInteger(message.heldId) ? message.heldId : null });
+      } else if (message.type === 'mob:snapshot') {
+        if (socket.room.host !== socket) return fail(socket, requestId, 'Only the host can publish shared mob state.');
+        if (!Array.isArray(message.mobs) || message.mobs.length > 18) return fail(socket, requestId, 'Invalid shared mob snapshot.');
+        socket.room.mobs = message.mobs.filter(mob => mob && typeof mob.uid === 'string' && mob.uid.length <= 80 && typeof mob.type === 'string' && Array.isArray(mob.pos) && mob.pos.length === 3 && mob.pos.every(Number.isFinite) && [mob.yaw, mob.hp].every(Number.isFinite)).map(mob => ({ uid: mob.uid, type: mob.type, pos: mob.pos.map(value => Math.max(-30_000_000, Math.min(30_000_000, value))), yaw: mob.yaw, hp: Math.max(0, Math.min(1000, mob.hp)), sheared: !!mob.sheared, fuse: Number.isFinite(mob.fuse) ? mob.fuse : -1 }));
+        for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'mob:snapshot', mobs: socket.room.mobs });
       } else if (message.type === 'chat') {
         const now = Date.now();
         if (now - socket.lastChatAt < 500) return;

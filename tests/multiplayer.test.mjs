@@ -73,10 +73,46 @@ try {
 
   const newcomer = await connect();
   const snapshot = waitFor(newcomer, message => message.type === 'world:snapshot' && message.done);
+
+  const itemNotice = waitFor(guest, message => message.type === 'item:snapshot');
+  host.send(JSON.stringify({ type: 'item:snapshot', items: [{ uid: 'drop-1', id: 1, count: 3, damage: 0, pos: [4.5, 71, -2.5], vy: 0, age: 2 }] }));
+  assert.equal((await itemNotice).items[0].uid, 'drop-1', 'shared item drops replicate from the host');
+  const hostStateNotice = waitFor(guest, message => message.type === 'game:state');
+  host.send(JSON.stringify({ type: 'game:state', state: { timeOfDay: 0.4, chests: [['1,2,3', new Array(27).fill(null)]], furnaces: [] } }));
+  assert.equal((await hostStateNotice).state.timeOfDay, 0.4, 'shared world state replicates between room members');
+  const mobNotice = waitFor(guest, message => message.type === 'mob:snapshot');
+  host.send(JSON.stringify({ type: 'mob:snapshot', mobs: [{ uid: 'mob-1', type: 'zombie', pos: [5, 70, 5], yaw: 1, hp: 16, sheared: false, fuse: -1 }] }));
+  assert.equal((await mobNotice).mobs[0].uid, 'mob-1', 'host mob state replicates to guests');
+  const stateOnHost = waitFor(host, message => message.type === 'player:state' && message.id === joined.id);
+  guest.send(JSON.stringify({ type: 'player:state', state: { x: 5, y: 70, z: 4, yaw: 0, pitch: 0, dead: false } }));
+  await stateOnHost;
+  const attackOnHost = waitFor(host, message => message.type === 'mob:attack');
+  guest.send(JSON.stringify({ type: 'mob:attack', uid: 'mob-1', heldId: 276 }));
+  assert.equal((await attackOnHost).attacker.id, joined.id, 'guest mob attacks are forwarded for host validation');
+  const spawnOnHost = waitFor(host, message => message.type === 'item:spawn' && message.item.id === 2);
+  const spawnOnPeer = waitFor(guest, message => message.type === 'item:spawn' && message.item.id === 2);
+  guest.send(JSON.stringify({ type: 'item:spawn', item: { uid: 'guest-drop', id: 2, count: 1, pos: [2, 70, 2] } }));
+  assert.match((await spawnOnHost).item.uid, /guest-drop$/, 'guest-created drops are shared with the host');
+  await spawnOnPeer;
+  const playerDamage = waitFor(guest, message => message.type === 'player:damage');
+  host.send(JSON.stringify({ type: 'player:damage', targetId: joined.id, amount: 2 }));
+  assert.equal((await playerDamage).amount, 2, 'host mob damage is relayed to the affected player');
+
+  const lateItems = waitFor(newcomer, message => message.type === 'item:snapshot');
+  const lateState = waitFor(newcomer, message => message.type === 'game:state');
+  const lateMobs = waitFor(newcomer, message => message.type === 'mob:snapshot');
   const newcomerJoined = await request(newcomer, 'room:join', { code: created.code, playerName: 'Late joiner', password: 'blockparty' });
   assert.equal(newcomerJoined.type, 'room:joined');
   const savedSnapshot = await snapshot;
   assert.ok(savedSnapshot.entries.some(([key, [id]]) => key === '4,70,-3' && id === 0), 'new players receive current world edits');
+  assert.equal((await lateItems).items[0].uid, 'drop-1', 'late joiners receive current dropped items');
+  assert.equal((await lateState).state.timeOfDay, 0.4, 'late joiners receive shared state');
+  assert.equal((await lateMobs).mobs[0].uid, 'mob-1', 'late joiners receive current mobs');
+  const itemRemoved = waitFor(host, message => message.type === 'item:remove' && message.uid === 'drop-1');
+  const pickupGrant = waitFor(newcomer, message => message.type === 'item:pickup');
+  newcomer.send(JSON.stringify({ type: 'item:pickup', uid: 'drop-1' }));
+  assert.equal((await pickupGrant).item.count, 3, 'only a valid shared drop can be claimed');
+  await itemRemoved;
 
   const closed = waitFor(newcomer, message => message.type === 'room:closed');
   await request(host, 'room:close');
