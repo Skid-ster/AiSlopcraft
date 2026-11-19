@@ -113,8 +113,12 @@ const fragmentShader = /* glsl */ `
     if (uShadowStrength <= 0.0) return 1.0;
     vec4 projected = uShadowMatrix * vec4(vWorldPosition, 1.0);
     vec3 coord = projected.xyz / projected.w;
-    if (coord.x <= 0.001 || coord.x >= 0.999 || coord.y <= 0.001 || coord.y >= 0.999 || coord.z >= 1.0) return 1.0;
-    float bias = max(0.0007, 0.0022 * (1.0 - max(dot(normal, sunDir), 0.0)));
+    // Outside the light frustum there is no shadow data. Treat it as lit rather
+    // than comparing against the depth texture's clamped border texels.
+    if (coord.x <= 0.001 || coord.x >= 0.999 || coord.y <= 0.001 || coord.y >= 0.999 || coord.z <= 0.0 || coord.z >= 1.0) return 1.0;
+    // Depth is normalized over a 189-block light range: a large fixed bias
+    // visibly detaches shadows from the blocks that cast them.
+    float bias = max(0.00018, 0.00072 * (1.0 - max(dot(normal, sunDir), 0.0)));
     float visibility = 0.0;
     for (int x = -1; x <= 1; x++) {
       for (int y = -1; y <= 1; y++) {
@@ -365,6 +369,21 @@ export class Lighting {
     this.shadowCamera.position.copy(this._center).addScaledVector(sky.sunDirection, 95);
     this.shadowCamera.lookAt(this._center);
     this.shadowCamera.updateMatrixWorld(true);
+    // Snap the light-space camera to shadow texels. This prevents block edges
+    // and contact shadows from crawling when the player moves by tiny amounts.
+    const texelWorldSize = (this.shadowCamera.right - this.shadowCamera.left) / this.shadowSize;
+    const matrix = this.shadowCamera.matrixWorld.elements;
+    const right = new THREE.Vector3(matrix[0], matrix[1], matrix[2]);
+    const up = new THREE.Vector3(matrix[4], matrix[5], matrix[6]);
+    const snapAxis = (axis) => {
+      const offset = this._center.dot(axis);
+      return Math.round(offset / texelWorldSize) * texelWorldSize - offset;
+    };
+    const shiftRight = snapAxis(right), shiftUp = snapAxis(up);
+    this._center.addScaledVector(right, shiftRight).addScaledVector(up, shiftUp);
+    this.shadowCamera.position.addScaledVector(right, shiftRight).addScaledVector(up, shiftUp);
+    this.shadowCamera.lookAt(this._center);
+    this.shadowCamera.updateMatrixWorld(true);
     this.shadowMatrix.set(0.5, 0, 0, 0.5, 0, 0.5, 0, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0, 1);
     this.shadowMatrix.multiply(this.shadowCamera.projectionMatrix).multiply(this.shadowCamera.matrixWorldInverse);
     this.shared.uShadowStrength.value = id === 3 ? 0.78 : 0.50;
@@ -372,14 +391,21 @@ export class Lighting {
     const target = renderer.getRenderTarget();
     const override = scene.overrideMaterial;
     const autoClear = renderer.autoClear;
-    scene.overrideMaterial = this.depthMaterial;
-    renderer.autoClear = true;
-    renderer.setRenderTarget(this.shadowTarget);
-    renderer.clear();
-    renderer.render(scene, this.shadowCamera);
-    renderer.setRenderTarget(target);
-    renderer.autoClear = autoClear;
-    scene.overrideMaterial = override;
+    const clearColor = renderer.getClearColor(new THREE.Color());
+    const clearAlpha = renderer.getClearAlpha();
+    try {
+      scene.overrideMaterial = this.depthMaterial;
+      renderer.autoClear = true;
+      renderer.setClearColor(0xffffff, 1);
+      renderer.setRenderTarget(this.shadowTarget);
+      renderer.clear(true, true, false);
+      renderer.render(scene, this.shadowCamera);
+    } finally {
+      renderer.setRenderTarget(target);
+      renderer.setClearColor(clearColor, clearAlpha);
+      renderer.autoClear = autoClear;
+      scene.overrideMaterial = override;
+    }
   }
 
   forget(root) {

@@ -12,5 +12,13 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 4173,
     allowedHosts: true
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        // Keep the engine separately cacheable from the frequently edited game.
+        manualChunks: { three: ['three'] }
+      }
+    }
   }
 });

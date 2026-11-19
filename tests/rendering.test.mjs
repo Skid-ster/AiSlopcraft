@@ -65,6 +65,35 @@ assert.match(fragment, /uEmissionMap/);
 assert.match(fragment, /#include <colorspace_fragment>/);
 assert.match(fragment, /uTime \* 0\.006/, 'water UV animation is consumed by the shader');
 
+
+assert.match(fragment, /coord\.z <= 0\.0/, 'points before the shadow frustum remain lit');
+assert.match(fragment, /0\.00072/, 'shadow bias is small enough to avoid detached shadows');
+assert.match(lighting.updateShadows.toString(), /texelWorldSize/, 'shadow projection is texel-snapped to reduce shimmer');
+
+// A failed shadow pass must not poison the renderer state for the main frame.
+const shadowScene = new THREE.Scene();
+const priorOverride = new THREE.MeshBasicMaterial();
+shadowScene.overrideMaterial = priorOverride;
+const priorTarget = { name: 'screen' };
+const fakeRenderer = {
+  autoClear: false,
+  currentTarget: priorTarget,
+  getRenderTarget() { return this.currentTarget; },
+  getClearColor(target) { return target.set(0x123456); },
+  getClearAlpha() { return 0.25; },
+  setClearColor(color, alpha) { this.clearColor = color; this.clearAlpha = alpha; },
+  setRenderTarget(target) { this.currentTarget = target; },
+  clear() {},
+  render() { throw new Error('simulated shadow pass failure'); },
+};
+const shadowCamera = new THREE.PerspectiveCamera();
+assert.throws(() => lighting.updateShadows(fakeRenderer, shadowScene, shadowCamera,
+  { sunDirection: new THREE.Vector3(0.4, 0.8, 0.2) }, 'shader', 100, true), /simulated shadow pass failure/);
+assert.equal(fakeRenderer.currentTarget, priorTarget, 'render target restored after shadow failure');
+assert.equal(fakeRenderer.autoClear, false, 'autoClear restored after shadow failure');
+assert.equal(shadowScene.overrideMaterial, priorOverride, 'override material restored after shadow failure');
+assert.equal(fakeRenderer.clearAlpha, 0.25, 'clear alpha restored after shadow failure');
+
 // Sky/fog integration: one source of truth, depth-tested celestials, underwater.
 const dom = new JSDOM('<!doctype html><html><body></body></html>');
 global.document = dom.window.document;
