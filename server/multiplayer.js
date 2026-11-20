@@ -242,7 +242,7 @@ export function createMultiplayerServer({ logger = console } = {}) {
         if (now - (socket.projectileTimes.get(shot.uid) || 0) < 80) return;
         socket.projectileTimes.set(shot.uid, now);
         if (socket.room.projectiles.size >= 256 && !socket.room.projectiles.has(shot.uid)) return;
-        const projectile = { uid: shot.uid, owner: shot.owner, pos: shot.pos, vel: shot.vel, age: Number.isFinite(shot.age) ? Math.max(0, Math.min(6, shot.age)) : 0, targetId: typeof shot.targetId === 'string' ? shot.targetId.slice(0, 80) : null, sourceId: socket.clientId };
+        const projectile = { uid: shot.uid, owner: shot.owner, pos: shot.pos, vel: shot.vel, age: Number.isFinite(shot.age) ? Math.max(0, Math.min(6, shot.age)) : 0, targetId: typeof shot.targetId === 'string' ? shot.targetId.slice(0, 80) : null, damage: Number.isFinite(shot.damage) ? Math.max(0, Math.min(40, shot.damage)) : 2, sourceId: socket.clientId };
         socket.room.projectiles.set(projectile.uid, projectile);
         const { sourceId, ...publicProjectile } = projectile;
         for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'projectile:update', projectile: publicProjectile });

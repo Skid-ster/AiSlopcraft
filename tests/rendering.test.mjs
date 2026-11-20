@@ -54,6 +54,12 @@ lighting.setObjectLight(mesh, 0, 14);
 assert.deepEqual(mesh.material.uniforms.uObjectLight.value.toArray(), [0, 14]);
 lighting.forget(mesh);
 assert.equal(lighting.materials.has(mesh.material), false);
+const caster = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial());
+lighting.prepare(caster);
+assert.equal(caster.layers.isEnabled(1), true, 'entity shader meshes participate in the sun-shadow pass');
+const nonCaster = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial());
+lighting.prepare(nonCaster, { castShadow: false });
+assert.equal(nonCaster.layers.isEnabled(1), false, 'transient particles skip shadow rendering');
 
 const vertex = solid.vertexShader, fragment = solid.fragmentShader;
 assert.match(vertex, /attribute vec2 aLight/);
@@ -93,6 +99,25 @@ assert.equal(fakeRenderer.currentTarget, priorTarget, 'render target restored af
 assert.equal(fakeRenderer.autoClear, false, 'autoClear restored after shadow failure');
 assert.equal(shadowScene.overrideMaterial, priorOverride, 'override material restored after shadow failure');
 assert.equal(fakeRenderer.clearAlpha, 0.25, 'clear alpha restored after shadow failure');
+const cachedLighting = new Lighting({ shadowSize: 64 });
+const cachedScene = new THREE.Scene();
+const cachedCamera = new THREE.PerspectiveCamera();
+const cacheRenderer = {
+  autoClear: true, currentTarget: null, renders: 0,
+  getRenderTarget() { return this.currentTarget; },
+  getClearColor(target) { return target.set(0x000000); },
+  getClearAlpha() { return 1; },
+  setClearColor() {}, setRenderTarget(target) { this.currentTarget = target; }, clear() {},
+  render() { this.renders++; },
+};
+const cacheSky = { sunDirection: new THREE.Vector3(0.4, 0.8, 0.2) };
+cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'shader', 10);
+cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'shader', 10.3);
+assert.equal(cacheRenderer.renders, 1, 'unchanged shadow maps are cached instead of rendered every frame');
+cachedCamera.position.x = 1;
+cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'shader', 10.4);
+assert.equal(cacheRenderer.renders, 2, 'moving the view refreshes the shadow map promptly');
+cachedLighting.dispose();
 
 // Sky/fog integration: one source of truth, depth-tested celestials, underwater.
 const dom = new JSDOM('<!doctype html><html><body></body></html>');

@@ -237,6 +237,7 @@ export class Lighting {
     this.depthMaterial = new THREE.MeshDepthMaterial({ map: atlasTexture || null, alphaTest: 0.45, side: THREE.DoubleSide });
     this.lastShadowTime = -Infinity;
     this.lastShadowPosition = new THREE.Vector3(Infinity, Infinity, Infinity);
+    this.lastShadowSunDirection = new THREE.Vector3(Infinity, Infinity, Infinity);
     this.shared = {
       uSky: { value: 1 },
       uSkyTint: { value: new THREE.Color(1, 1, 1) },
@@ -297,6 +298,7 @@ export class Lighting {
     const converted = new Map();
     root.traverse(object => {
       if (!object.isMesh || object.userData.noLighting) return;
+      if (opts.castShadow !== false) object.layers.enable(1);
       ensureTint(object.geometry);
       const convert = old => {
         if (old?.uniforms?.uObjectLight) return old;
@@ -361,9 +363,13 @@ export class Lighting {
   updateShadows(renderer, scene, camera, sky, style, time, force = false) {
     const id = shaderStyleId(style);
     if (id < 2 || sky.sunDirection.y <= 0.06) { this.shared.uShadowStrength.value = 0; return; }
-    if (!force && time - this.lastShadowTime < 0.1) return;
+    if (!force && time - this.lastShadowTime < 0.12) return;
+    const cameraMoved = this.lastShadowPosition.distanceToSquared(camera.position) > 0.25;
+    const sunMoved = this.lastShadowSunDirection.distanceToSquared(sky.sunDirection) > 0.000004;
+    if (!force && !cameraMoved && !sunMoved && time - this.lastShadowTime < 1.0) return;
     this.lastShadowTime = time;
     this.lastShadowPosition.copy(camera.position);
+    this.lastShadowSunDirection.copy(sky.sunDirection);
     camera.getWorldDirection(this._forward);
     this._center.copy(camera.position).addScaledVector(this._forward, 18);
     this.shadowCamera.position.copy(this._center).addScaledVector(sky.sunDirection, 95);

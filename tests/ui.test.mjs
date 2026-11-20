@@ -88,10 +88,17 @@ try {
   check('resource pack import control is present', !!btn('btn-pack') && !!btn('pack-file'));
   btn('btn-pack-reset').click();
   check('resource pack reset is wired', calls.some(call => call[0] === 'resetResourcePack'));
+  check('Beta-style title has game, pack, options and quit entries', !!btn('btn-singleplayer') && !!btn('btn-multiplayer') && !!btn('btn-pack') && !!btn('btn-quit'));
+  btn('btn-pack').click();
+  check('texture packs open in their own menu', visible('texture-pack-screen'));
+  btn('pack-done').click();
+  check('texture pack menu returns to the title screen', !visible('texture-pack-screen'));
 
   // ---------- title: Options ----------
   btn('btn-options').click();
   check('Options button opens options screen', !!btn('options-screen'));
+  btn('opt-difficulty').click();
+  check('difficulty control cycles and applies the saved game setting', game.settings.difficulty === 3);
   btn('opt-video').click();
   check('video controls present', !!btn('opt-render') && !!btn('opt-fov') && !!btn('opt-shader'));
   btn('opt-shader').click(); btn('opt-shader').click();

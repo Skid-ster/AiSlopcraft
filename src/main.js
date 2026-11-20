@@ -169,6 +169,7 @@ const game = {
     const distanceChanged = this.renderDistance !== s.renderDistance;
     this.renderDistance = s.renderDistance;
     this.keepInventory = s.keepInventory;
+    mobs.difficulty = s.difficulty;
     this.setShaderStyle(s.shaderStyle);
     this.setBrightness(s.brightness);
     player.sensitivity = sensitivityToRadians(s.sensitivity);
@@ -999,7 +1000,7 @@ function tryPlaceBlock() {
 
 
 // ---- explosions (creepers, TNT) ----
-function explode(pos, radius, player) {
+function explode(pos, radius, player, damageMultiplier = 1) {
   audio.explosion();
   const r2 = radius * radius;
   for (let dx = -radius; dx <= radius; dx++) {
@@ -1025,7 +1026,7 @@ function explode(pos, radius, player) {
   // damage player
   const dist = player.pos.distanceTo(pos);
   if (dist < radius * 1.6) {
-    player.damage(Math.ceil((1 - dist / (radius * 1.6)) * 12), audio);
+    player.damage(Math.ceil((1 - dist / (radius * 1.6)) * 12 * damageMultiplier), audio);
   }
   // knockback
   const kb = player.pos.clone().sub(pos).normalize().multiplyScalar(Math.max(0, 8 - dist * 1.6));
@@ -1035,19 +1036,19 @@ function explode(pos, radius, player) {
 // ---- arrows ----
 const arrows = [];
 const arrowGeometry = new THREE.BoxGeometry(0.08, 0.08, 0.5);
-function createArrow(from, velocity, owner, targetId = null, uid = null, networkRemote = false) {
+function createArrow(from, velocity, owner, targetId = null, uid = null, networkRemote = false, damage = 2) {
   const mesh = new THREE.Mesh(arrowGeometry, new THREE.MeshBasicMaterial({ color: 0x8a6a42 }));
   lighting.prepare(mesh);
   mesh.position.copy(from);
   lighting.refreshObject(mesh, world, mesh.position, 0);
   scene.add(mesh);
   arrows.push({ mesh, vel: velocity, age: 0, owner, targetId,
-    uid: uid || globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`, networkRemote, networkTimer: 0 });
+    uid: uid || globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`, networkRemote, networkTimer: 0, damage });
 }
-function shootArrow(fromMob, player) {
+function shootArrow(fromMob, player, damage = 2) {
   const from = fromMob.pos.clone().add(new THREE.Vector3(0, 1.6, 0));
   const to = player.pos.clone().add(new THREE.Vector3(0, 1.2, 0));
-  createArrow(from, to.sub(from).normalize().multiplyScalar(18), 'mob', player.id || null);
+  createArrow(from, to.sub(from).normalize().multiplyScalar(18), 'mob', player.id || null, null, false, damage);
 }
 function shootPlayerArrow() {
   const dir = new THREE.Vector3(-Math.sin(player.yaw) * Math.cos(player.pitch), Math.sin(player.pitch), -Math.cos(player.yaw) * Math.cos(player.pitch));
@@ -1061,6 +1062,7 @@ function upsertNetworkProjectile(shot) {
   arrow.mesh.position.fromArray(shot.pos);
   arrow.vel.fromArray(shot.vel);
   arrow.age = Number.isFinite(shot.age) ? Math.max(0, shot.age) : arrow.age;
+  arrow.damage = Number.isFinite(shot.damage) ? Math.max(0, Math.min(40, shot.damage)) : arrow.damage;
   arrow.targetId = typeof shot.targetId === 'string' ? shot.targetId : null;
 }
 function applyNetworkProjectiles(projectiles) {
@@ -1102,11 +1104,11 @@ function updateArrows(dt) {
         const remoteTarget = a.targetId ? remotePlayers.get(a.targetId)?.target : null;
         if (remoteTarget) {
           if (Math.abs(pos.x - remoteTarget.x) < 0.4 && Math.abs(pos.z - remoteTarget.z) < 0.4 && pos.y >= remoteTarget.y && pos.y <= remoteTarget.y + 1.8) {
-            game.multiplayerClient?.send('player:damage', { targetId: a.targetId, amount: 2 });
+            game.multiplayerClient?.send('player:damage', { targetId: a.targetId, amount: a.damage });
             a.dead = true; audio.arrowHit();
           }
         } else if (!a.targetId && Math.abs(pos.x - player.pos.x) < 0.4 && Math.abs(pos.z - player.pos.z) < 0.4 && pos.y >= player.pos.y && pos.y <= player.pos.y + 1.8) {
-          player.damage(2, audio); a.dead = true; audio.arrowHit();
+          player.damage(a.damage, audio); a.dead = true; audio.arrowHit();
         }
       } else {
         for (const mob of mobs.mobs) {
@@ -1134,7 +1136,7 @@ function updateArrows(dt) {
       else {
         a.networkTimer -= dt;
         if (a.networkTimer <= 0) {
-          game.multiplayerClient.send('projectile:update', { projectile: { uid: a.uid, owner: a.owner, pos: a.mesh.position.toArray(), vel: a.vel.toArray(), age: a.age, targetId: a.targetId } });
+          game.multiplayerClient.send('projectile:update', { projectile: { uid: a.uid, owner: a.owner, pos: a.mesh.position.toArray(), vel: a.vel.toArray(), age: a.age, targetId: a.targetId, damage: a.damage } });
           a.networkTimer = 0.12;
         }
       }
@@ -1146,8 +1148,8 @@ function updateArrows(dt) {
 
 // effects object handed to mobs
 const effects = {
-  explosion: (pos, radius, p) => explode(pos, radius, p),
-  shootArrow: (mob, p) => shootArrow(mob, p),
+  explosion: (pos, radius, p, damageMultiplier = 1) => explode(pos, radius, p, damageMultiplier),
+  shootArrow: (mob, p, damage) => shootArrow(mob, p, damage),
   mobBurn: (mob) => {
     const pos = new THREE.Vector3(mob.pos.x, mob.pos.y + 0.45, mob.pos.z);
     particles.spawnEffect(pos, { color: Math.random() < 0.5 ? 0xff8a1c : 0xffd247, life: 0.35, scale: 0.7, vy: 1.5, gravity: -0.2 });
@@ -1562,7 +1564,7 @@ function frame() {
 
       const networked = !!game.networkRoom;
       const hostSimulates = !networked || game.networkRoom.role === 'host';
-      if (hostSimulates) mobs.update(dt, player, sky.timeOfDay, effects, audio, networked ? remoteMobTargets() : []);
+      if (hostSimulates) mobs.update(dt, player, sky.timeOfDay, effects, audio, networked ? remoteMobTargets() : [], game.settings.difficulty);
       updateItems(dt);
       updateArrows(dt);
       if (hostSimulates) {

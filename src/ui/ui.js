@@ -81,17 +81,23 @@ export class UI {
     div.innerHTML = `
       <div class="title-logo">
         <div class="title-main"><img src="${logo}" alt="AiSlopcraft"></div>
-        <div class="title-sub">Java 1.7.3-inspired</div>
+        <div class="title-sub">Java Edition Beta 1.7.3</div>
         <div class="splash">${this.splash}</div>
       </div>
       <div class="title-buttons">
-        <button class="btn" id="btn-singleplayer">Singleplayer</button>
-        <button class="btn" id="btn-multiplayer">Multiplayer</button>
-        <div class="title-button-row"><button class="btn" id="btn-options">Options...</button><button class="btn" id="btn-pack">Import block textures...</button></div>
-        <div class="pack-controls"><button class="btn" id="btn-pack-reset">Reset textures</button><input id="pack-file" type="file" accept=".zip,.jar,application/zip" hidden><div id="pack-status" role="status">Optional: choose a Java 1.7 resource pack ZIP or client JAR.</div></div>
+        <div class="title-button-row title-primary-row">
+          <button class="btn" id="btn-singleplayer">Singleplayer</button>
+          <button class="btn" id="btn-multiplayer">Multiplayer</button>
+        </div>
+        <button class="btn" id="btn-pack">Texture Packs...</button>
+        <div class="title-button-row title-secondary-row">
+          <button class="btn" id="btn-options">Options...</button>
+          <button class="btn" id="btn-quit">Quit Game</button>
+        </div>
       </div>
-      <div class="title-foot">AiSlopcraft · Release-era visuals</div>
-      <div class="title-disclaimer">Not affiliated with Mojang</div>
+      <div class="title-status" id="title-status" role="status" aria-live="polite"></div>
+      <div class="title-foot">AiSlopcraft · Beta 1.7.3-inspired</div>
+      <div class="title-disclaimer">Independent browser game · not affiliated with Mojang</div>
     `;
     this.root.appendChild(div);
     div.querySelector('#btn-singleplayer').addEventListener('click', () => {
@@ -101,21 +107,49 @@ export class UI {
       this.setMode('game');
       this.game.start();
     });
-    const fileInput = div.querySelector('#pack-file');
-    const status = div.querySelector('#pack-status');
-    div.querySelector('#btn-pack').addEventListener('click', () => fileInput.click());
+    const packs = document.createElement('div');
+    packs.className = 'screen texture-pack-screen';
+    packs.id = 'texture-pack-screen';
+    packs.style.display = 'none';
+    packs.innerHTML = `<section class="texture-pack-panel">
+      <h2>Mods and Texture Packs</h2>
+      <p>Import a compatible Java resource pack ZIP or client JAR. Packs are stored only in this browser.</p>
+      <div class="texture-pack-actions">
+        <button class="btn" id="pack-import">Open Pack File...</button>
+        <button class="btn" id="btn-pack-reset">Default Textures</button>
+        <input id="pack-file" type="file" accept=".zip,.jar,application/zip" hidden>
+      </div>
+      <div id="pack-status" role="status" aria-live="polite">Default textures active.</div>
+      <button class="btn" id="pack-done">Done</button>
+    </section>`;
+    this.root.appendChild(packs);
+    this.texturePackScreen = packs;
+    const fileInput = packs.querySelector('#pack-file');
+    const status = packs.querySelector('#pack-status');
+    div.querySelector('#btn-pack').addEventListener('click', () => { packs.style.display = 'flex'; });
+    packs.querySelector('#pack-import').addEventListener('click', () => fileInput.click());
+    packs.querySelector('#pack-done').addEventListener('click', () => { packs.style.display = 'none'; });
+    packs.addEventListener('mousedown', event => { if (event.target === packs) packs.style.display = 'none'; });
+    document.addEventListener('keydown', event => {
+      if (event.code === 'Escape' && packs.style.display === 'flex') { event.preventDefault(); packs.style.display = 'none'; }
+    }, true);
     fileInput.addEventListener('change', async () => {
       const file = fileInput.files?.[0]; if (!file) return;
-      status.textContent = 'Loading block textures...';
+      status.textContent = 'Loading textures...';
       try {
         const result = await this.game.importResourcePack(file);
         this._iconCache.clear();
-        status.textContent = `Loaded ${result.count} block textures locally.${result.saved ? '' : ' Not saved; import again next time.'}`;
+        status.textContent = `Loaded ${result.count} textures locally.${result.saved ? '' : ' Storage is full; re-import next time.'}`;
       } catch (error) { status.textContent = `Could not load pack: ${error.message}`; }
       fileInput.value = '';
     });
-    div.querySelector('#btn-pack-reset').addEventListener('click', () => {
-      this.game.resetResourcePack(); this._iconCache.clear(); status.textContent = 'Default block textures restored.';
+    packs.querySelector('#btn-pack-reset').addEventListener('click', () => {
+      this.game.resetResourcePack(); this._iconCache.clear(); status.textContent = 'Default textures restored.';
+    });
+    div.querySelector('#btn-quit').addEventListener('click', () => {
+      this.game.audio.click();
+      window.close();
+      div.querySelector('#title-status').textContent = 'You can close this browser tab to quit.';
     });
     div.querySelector('#btn-options').addEventListener('click', () => {
       this.game.audio.init();

@@ -338,7 +338,7 @@ export class Mob {
     this._legPhase = Math.random() * Math.PI * 2;
   }
 
-  update(dt, world, player, mobs, effects, audio, timeOfDay = 0.5) {
+  update(dt, world, player, mobs, effects, audio, timeOfDay = 0.5, difficulty = 2) {
     if (this.dead) return;
     dt = Math.max(0, Math.min(dt, 0.1));
     this.age += dt;
@@ -388,7 +388,7 @@ export class Mob {
           const to = player.pos.clone().add(new THREE.Vector3(0, 1.35, 0));
           if (hasLineOfSight(world, from, to)) {
             this.attackTimer = 2;
-            if (effects?.shootArrow) effects.shootArrow(this, player);
+            if (effects?.shootArrow) effects.shootArrow(this, player, 2 * [0, 0.5, 1, 1.5][Math.max(0, Math.min(3, difficulty))]);
             if (audio) audio.bow();
           }
         }
@@ -397,7 +397,7 @@ export class Mob {
         const verticalReach = Math.abs(player.pos.y - this.pos.y) < 2.2;
         if (distance < 1.6 && verticalReach && this.attackTimer <= 0) {
           this.attackTimer = 1;
-          if (typeof player.damage === 'function') player.damage(this.def.dmg, audio);
+          if (typeof player.damage === 'function') player.damage(this.def.dmg * [0, 0.5, 1, 1.5][Math.max(0, Math.min(3, difficulty))], audio);
           if (audio) audio.mobAttack();
         }
         if (this.type === 'spider' && distance < 4 && this.onGround && this.leapTimer <= 0) {
@@ -430,7 +430,7 @@ export class Mob {
       }
       if (this.fuse <= 0) {
         this.dead = true;
-        if (effects?.explosion) effects.explosion(this.pos.clone().add(new THREE.Vector3(0, 0.8, 0)), 3, player);
+        if (effects?.explosion) effects.explosion(this.pos.clone().add(new THREE.Vector3(0, 0.8, 0)), 3, player, [0, 0.5, 1, 1.5][Math.max(0, Math.min(3, difficulty))]);
         return;
       }
     }
@@ -678,6 +678,7 @@ export class MobManager {
     this.mobs = [];
     this.spawnTimer = 0;
     this.attackCooldown = 0;
+    this.difficulty = 2;
     this.group = new THREE.Group();
     scene.add(this.group);
   }
@@ -705,7 +706,8 @@ export class MobManager {
     return mob;
   }
 
-  update(dt, player, timeOfDay, effects, audio, remoteTargets = []) {
+  update(dt, player, timeOfDay, effects, audio, remoteTargets = [], difficulty = this.difficulty) {
+    this.difficulty = Math.max(0, Math.min(3, Math.round(difficulty)));
     dt = Math.min(Math.max(dt, 0), 0.1);
     this.attackCooldown = Math.max(0, this.attackCooldown - dt);
     const night = !isDaylight(timeOfDay);
@@ -724,7 +726,7 @@ export class MobManager {
         if (chunk?.generated) {
           const y = findSafeGround(this.world, x, z, 0.8, 1.8);
           if (y != null) {
-            if (night && hostiles < 10 && Math.random() < 0.7) {
+            if (this.difficulty > 0 && night && hostiles < 10 && Math.random() < 0.7) {
               const types = ['zombie', 'skeleton', 'creeper', 'spider'];
               this.add(types[Math.floor(Math.random() * types.length)], x, y, z);
             } else if (!night && passives < 12 && Math.random() < 0.3) {
@@ -738,13 +740,20 @@ export class MobManager {
 
     const targets = [player, ...remoteTargets].filter(target => target && !target.dead && target.pos);
     for (const mob of this.mobs) {
+      if (this.difficulty === 0 && mob.def.hostile) {
+        mob.dead = true;
+        this.group.remove(mob.group);
+        this.lighting?.forget(mob.group);
+        mob.dispose();
+        continue;
+      }
       let target = player;
       let distance = player.pos.distanceToSquared(mob.pos);
       for (const candidate of targets) {
         const nextDistance = candidate.pos.distanceToSquared(mob.pos);
         if (nextDistance < distance) { target = candidate; distance = nextDistance; }
       }
-      mob.update(dt, this.world, target, this.mobs, effects, audio, timeOfDay);
+      mob.update(dt, this.world, target, this.mobs, effects, audio, timeOfDay, this.difficulty);
       this.lighting?.refreshObject(mob.group, this.world, mob.pos, mob.def.h * 0.65);
       if (mob.dead) {
         this.group.remove(mob.group);

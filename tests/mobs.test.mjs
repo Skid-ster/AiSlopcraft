@@ -122,6 +122,11 @@ check('creeper starts a 1.5 second fuse inside three blocks', creeper.fuse > 1.3
 const fuseBeforeRetreat = creeper.fuse;
 creeper.update(0.05, world, { ...player, pos: new THREE.Vector3(7, 1.001, 0) }, [], {}, audio, 0.5);
 check('creeper cancels its fuse after the player retreats beyond six blocks', creeper.fuse === -1 && fuseBeforeRetreat > 0);
+const explodingCreeper = new Mob('creeper', 0, 1.001, 0);
+explodingCreeper.fuse = 0.01;
+let creeperDamageScale = 0;
+explodingCreeper.update(0.05, world, closePlayer, [], { explosion(_pos, _radius, _target, scale) { creeperDamageScale = scale; } }, audio, 0.5, 3);
+check('creeper explosion damage receives the selected difficulty multiplier', explodingCreeper.dead && creeperDamageScale === 1.5);
 
 const skeletonWorld = new FakeWorld();
 skeletonWorld.fillFloor(-2, 12, -3, 3);
@@ -152,6 +157,20 @@ manager.attack(attacker, 268, audio, 3.5);
 check('melee attack applies damage and knockback away from the player', targetMob.hp === 16 && targetMob.vel.z < 0 && targetMob.vel.y > 0);
 manager.attack(attacker, 267, audio, 3.5);
 check('melee attack cooldown prevents repeated damage in the same instant', targetMob.hp === 16);
+const difficultyDamage = difficulty => {
+  const mob = new Mob('zombie', 0, 1.001, 0);
+  const target = { pos: new THREE.Vector3(1, 1.001, 0), damageTaken: 0, damage(amount) { this.damageTaken += amount; } };
+  mob.update(0.01, world, target, [], {}, audio, 0.5, difficulty);
+  return target.damageTaken;
+};
+check('difficulty scales hostile melee damage across Easy, Normal, and Hard',
+  difficultyDamage(1) > 0 && difficultyDamage(2) === difficultyDamage(1) * 2 && difficultyDamage(3) === difficultyDamage(2) * 1.5);
+const peacefulManager = new MobManager(world, new THREE.Scene());
+peacefulManager.spawnTimer = 100;
+const peacefulHostile = peacefulManager.add('zombie', 0, 1.001, 0);
+let peacefulLoot = 0;
+peacefulManager.update(0.01, player, 0.5, { dropMobLoot() { peacefulLoot++; } }, audio, [], 0);
+check('Peaceful removes existing hostiles without dropping loot', peacefulManager.mobs.length === 0 && peacefulHostile.group.parent === null && peacefulLoot === 0);
 attacker.raycast = () => ({ dist: 0.5 });
 check('solid block raycast prevents attacking mobs through walls', manager.raycastTarget(attacker, 3.5) === null);
 

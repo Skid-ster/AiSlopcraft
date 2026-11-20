@@ -812,3 +812,59 @@ html, body {
   .mp-footer { align-items: flex-start; }
   .network-panel { width: min(300px, 94vw); }
 }
+
+/* Beta 1.7.3 title layout: the era's broad two-up game buttons, texture-pack
+   entry, paired Options/Quit row and low-key version footer. */
+.title-screen {
+  overflow: auto;
+  background: linear-gradient(180deg, rgba(0,0,0,.18), rgba(0,0,0,.48));
+  backdrop-filter: none;
+  gap: 0;
+}
+.title-logo { margin: 0 0 30px; }
+.title-sub { margin-top: 8px; font-size: 11px; letter-spacing: .4px; }
+.title-buttons { width: min(402px, calc(100vw - 32px)); gap: 5px; }
+.title-primary-row, .title-secondary-row {
+  width: 100%; display: flex; gap: 4px; margin-top: 0;
+}
+.title-primary-row .btn, .title-secondary-row .btn { width: 50%; min-width: 0; }
+.title-buttons > #btn-pack { width: 100%; }
+.title-screen .btn {
+  min-height: 28px; padding: 4px 8px; font-size: 12px;
+  background: linear-gradient(#777, #555);
+  border-color: #171717; box-shadow: inset 1px 1px #aaa, inset -1px -1px #333, 0 2px #202020;
+}
+.title-screen .btn:hover {
+  color: #fff; background: linear-gradient(#8b9cc8, #6579ae);
+  outline: 1px solid #e0e6ff;
+}
+.title-status {
+  position: absolute; bottom: 40px; color: #fff; min-height: 14px;
+  font-size: 10px; text-align: center; text-shadow: 2px 2px #222;
+}
+.title-foot, .title-disclaimer { bottom: 8px; font-size: 9px; }
+.texture-pack-screen { z-index: 30; background: rgba(0,0,0,.72); }
+.texture-pack-panel {
+  width: min(520px, calc(100vw - 28px)); padding: 22px;
+  display: flex; flex-direction: column; align-items: stretch; gap: 14px;
+  color: #fff; text-align: center; background: #383838;
+  border: 2px solid #111; box-shadow: inset 2px 2px #777, inset -2px -2px #222, 0 12px 36px #000;
+}
+.texture-pack-panel h2 { font-size: 18px; text-shadow: 2px 2px #111; }
+.texture-pack-panel p, #pack-status { font-size: 12px; line-height: 1.55; color: #ddd; text-shadow: 1px 1px #111; }
+.texture-pack-actions { display: flex; gap: 8px; }
+.texture-pack-actions .btn { min-width: 0; flex: 1; }
+.texture-pack-panel > .btn { min-width: 0; }
+.shader-hint {
+  grid-column: 1 / -1; color: #c9c9c9; font: 11px/1.45 'Pixel UI', monospace;
+  text-shadow: 1px 1px #111; margin: -2px 2px 4px;
+}
+@media (max-height: 650px) {
+  .title-logo { margin-bottom: 16px; }
+  .title-main img { max-height: 120px; }
+  .title-screen { justify-content: flex-start; padding: 18px 0 38px; }
+}
+@media (max-width: 440px) {
+  .texture-pack-actions { flex-direction: column; }
+  .title-foot, .title-disclaimer { font-size: 7px; }
+}
