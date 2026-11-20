@@ -173,6 +173,8 @@ try {
   check('Multiplayer button is enabled', !btn('btn-multiplayer').disabled);
   btn('btn-multiplayer').click();
   check('Multiplayer lobby opens', document.getElementById('multiplayer-screen').style.display === 'flex');
+  check('custom relay configuration is hidden under advanced settings by default', !!document.querySelector('.mp-custom-relay') && !document.querySelector('.mp-custom-relay').open);
+  check('static-only hosting explains the need for a reachable custom room service', document.getElementById('mp-status').textContent.includes('static host') && document.getElementById('mp-status').textContent.includes('custom WebSocket'));
   check('host can choose individual or forced shader and texture settings', !!btn('mp-visual-policy') && !!btn('mp-visual-policy').querySelector('[value="forced"]'));
   installedPacks = [{ id: 'pack-share', name: 'Host Pack', count: 8 }];
   activePackId = 'pack-share';

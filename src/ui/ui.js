@@ -14,10 +14,11 @@ function stackLimit(stack) {
 }
 
 function suggestedMultiplayerRelay() {
-  const host = window.location.hostname;
-  if (host === 'localhost' || host === '127.0.0.1') return `ws://${host}:8787/ws`;
-  const preview = host.match(/^5173-(.+\.e2b\.app)$/);
-  return preview ? `wss://8787-${preview[1]}/ws` : '';
+  const { hostname, host, protocol } = window.location;
+  if (hostname === 'localhost' || hostname === '127.0.0.1') return `ws://${hostname}:8787/ws`;
+  // GitHub Pages is static hosting and cannot serve the WebSocket endpoint.
+  if (hostname.endsWith('.github.io')) return '';
+  return `${protocol === 'https:' ? 'wss:' : 'ws:'}//${host}/ws`;
 }
 
 function canStack(a, b) {
@@ -367,9 +368,14 @@ export class UI {
     multiplayer.innerHTML = `
       <div class="multiplayer-card">
         <h2>Multiplayer</h2>
-        <label>Public server address
-          <input id="mp-relay" type="url" placeholder="wss://your-server.example/ws" autocomplete="url">
-        </label>
+        <p class="mp-connect-help">Uses this site's room service automatically when available; no address setup is needed for this deployment.</p>
+        <details class="mp-custom-relay">
+          <summary>Advanced: use a custom room service</summary>
+          <label>Custom WebSocket address
+            <input id="mp-relay" type="url" placeholder="wss://your-server.example/ws" autocomplete="url">
+          </label>
+          <small>Only needed when this game is hosted on a static site. Leave blank to use the automatic address.</small>
+        </details>
         <label>Your player name
           <input id="mp-player-name" maxlength="20" placeholder="Player" autocomplete="nickname">
         </label>
@@ -407,8 +413,8 @@ export class UI {
             <button class="btn" id="mp-join">Join by code</button>
           </section>
         </div>
-        <div class="mp-status" id="mp-status" role="status">A public multiplayer relay is required. See README for the quick deploy guide.</div>
-        <div class="mp-footer"><button class="btn btn-half" id="mp-back">Back</button><span>Up to 8 players · The host's relay stays online while hosting.</span></div>
+        <div class="mp-status" id="mp-status" role="status">Online multiplayer needs a reachable room service. This deployment provides it automatically.</div>
+        <div class="mp-footer"><button class="btn btn-half" id="mp-back">Back</button><span>Up to 8 players · The host must stay connected while hosting.</span></div>
       </div>`;
     this.root.appendChild(multiplayer);
     div.querySelector('#btn-multiplayer').addEventListener('click', () => this.openMultiplayer());
@@ -424,7 +430,7 @@ export class UI {
       for (const control of multiplayer.querySelectorAll('[data-forced-visual]')) control.disabled = event.target.value !== 'forced';
     });
     this.multiplayerClient = this.game.multiplayerClient || null;
-    multiplayer.querySelector('#mp-relay').value = this.game.multiplayerRelay || window.localStorage.getItem('aislopcraft:multiplayer-relay') || suggestedMultiplayerRelay();
+    multiplayer.querySelector('#mp-relay').value = this.game.multiplayerRelay || window.localStorage.getItem('aislopcraft:multiplayer-relay') || '';
     multiplayer.querySelector('#mp-player-name').value = window.localStorage.getItem('aislopcraft:multiplayer-name') || '';
     multiplayer.querySelector('#mp-code').value = new URLSearchParams(window.location.search).get('room') || '';
   }
@@ -468,18 +474,18 @@ export class UI {
     if (!this.multiplayerScreen.querySelector('#mp-player-name').value) {
       this.multiplayerScreen.querySelector('#mp-player-name').value = `Player${Math.floor(Math.random() * 900 + 100)}`;
     }
-    if (!this.multiplayerScreen.querySelector('#mp-relay').value) {
-      status.textContent = 'Set a public wss:// relay URL. See README for one-click deployment and setup.';
-    }
+    const hasRelay = this.multiplayerScreen.querySelector('#mp-relay').value.trim() || this.game.multiplayerRelay || suggestedMultiplayerRelay();
+    if (!hasRelay) status.textContent = 'This static host has no built-in room service. Enter a reachable custom WebSocket address under Advanced settings.';
+    else status.textContent = 'Ready to connect to the multiplayer room service.';
   }
 
   async connectMultiplayer() {
     const screen = this.multiplayerScreen;
-    const relay = screen.querySelector('#mp-relay').value.trim();
+    const relay = screen.querySelector('#mp-relay').value.trim() || this.game.multiplayerRelay || suggestedMultiplayerRelay() || window.localStorage.getItem('aislopcraft:multiplayer-relay') || '';
     const playerName = screen.querySelector('#mp-player-name').value.trim();
     const status = screen.querySelector('#mp-status');
     if (!playerName) throw new Error('Enter a player name.');
-    if (!relay) throw new Error('Enter the public multiplayer relay address first.');
+    if (!relay) throw new Error('This host has no built-in room service. Enter a reachable WebSocket address under Advanced settings.');
     window.localStorage.setItem('aislopcraft:multiplayer-name', playerName);
     window.localStorage.setItem('aislopcraft:multiplayer-relay', relay);
     const { MultiplayerClient } = await import('../network/multiplayer.js');

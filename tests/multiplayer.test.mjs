@@ -1,16 +1,52 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { deflateSync } from 'node:zlib';
 import { createMultiplayerServer } from '../server/multiplayer.js';
 import { normalizeRelayUrl } from '../src/network/multiplayer.js';
 
-const service = createMultiplayerServer({ logger: { warn() {} } });
+const tempDir = await mkdtemp(join(tmpdir(), 'aislopcraft-online-'));
+const staticDir = join(tempDir, 'site');
+await mkdir(join(staticDir, 'assets'), { recursive: true });
+await writeFile(join(staticDir, 'index.html'), '<!doctype html><title>AiSlopcraft</title>');
+await writeFile(join(staticDir, 'assets', 'app.js'), 'window.gameReady = true;');
+await writeFile(join(staticDir, 'assets', 'main-AbCd1234.js'), 'window.versioned = true;');
+await writeFile(join(tempDir, 'secret.json'), '{"private":true}');
+await symlink(join(tempDir, 'secret.json'), join(staticDir, 'assets', 'escape.json'));
+const service = createMultiplayerServer({ logger: { warn() {} }, staticDir });
 service.http.listen(0, '127.0.0.1');
 await once(service.http, 'listening');
 const { port } = service.http.address();
 const base = `http://127.0.0.1:${port}`;
-assert.equal((await fetch(`${base}/health`)).status, 200, 'relay exposes a health check');
+const healthResponse = await fetch(`${base}/health`);
+assert.equal(healthResponse.status, 200, 'online server exposes a readiness check');
+assert.equal((await healthResponse.json()).status, 'ok', 'readiness includes the built game');
+assert.equal((await fetch(`${base}/health`, { method: 'POST' })).status, 405, 'health endpoint rejects unsupported methods');
+const siteResponse = await fetch(`${base}/`);
+assert.equal(siteResponse.status, 200, 'combined service serves the built game at its root');
+assert.match(await siteResponse.text(), /AiSlopcraft/);
+assert.match(siteResponse.headers.get('content-type'), /text\/html/);
+assert.equal(siteResponse.headers.get('cache-control'), 'no-cache', 'the app entry point is revalidated after deploys');
+const assetResponse = await fetch(`${base}/assets/app.js`);
+assert.equal(await assetResponse.text(), 'window.gameReady = true;', 'combined service serves static game assets beside the WebSocket relay');
+assert.equal((await fetch(`${base}/assets/main-AbCd1234.js`)).headers.get('cache-control'), 'public, max-age=31536000, immutable', 'content-hashed assets are safely cached for a year');
+assert.equal((await fetch(`${base}/assets/missing.js`)).status, 404, 'missing asset paths do not incorrectly return the SPA shell');
+assert.equal((await fetch(`${base}/assets/escape.json`)).status, 403, 'static serving blocks symlinks outside the build directory');
+assert.match(await (await fetch(`${base}/saved-world`)).text(), /AiSlopcraft/, 'client-side routes fall back to the app entry point');
+assert.equal((await fetch(`${base}/`, { method: 'HEAD' })).status, 200, 'static serving supports HEAD requests');
+const unbuiltService = createMultiplayerServer({ logger: { warn() {} }, staticDir: join(tempDir, 'not-built') });
+unbuiltService.http.listen(0, '127.0.0.1');
+await once(unbuiltService.http, 'listening');
+const unbuiltBase = `http://127.0.0.1:${unbuiltService.http.address().port}`;
+try {
+  assert.equal((await fetch(`${unbuiltBase}/health`)).status, 503, 'readiness fails if the frontend build is missing');
+  assert.equal((await fetch(`${unbuiltBase}/`)).status, 503, 'missing frontend build is reported instead of a false healthy root page');
+} finally {
+  await unbuiltService.close();
+}
 
 function connect() {
   const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
@@ -183,4 +219,5 @@ try {
   for (const socket of [host, wrongPass, browser, guest, newcomer, individualHost]) socket.close();
 } finally {
   await service.close();
+  await rm(tempDir, { recursive: true, force: true });
 }
