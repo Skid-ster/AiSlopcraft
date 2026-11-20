@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 const logo = new URL('./logo.svg', import.meta.url).href;
+const MULTIPLAYER_DEPLOY_URL = 'https://render.com/deploy?repo=https://github.com/Skid-ster/AiSlopcraft';
 // UI: title screen, hotbar, hearts, armor, inventory, crafting table, furnace, chest,
 // pause, death screen, F3 debug, hover tooltips, shift-click & 3D isometric icons.
 import {
@@ -475,8 +476,28 @@ export class UI {
       this.multiplayerScreen.querySelector('#mp-player-name').value = `Player${Math.floor(Math.random() * 900 + 100)}`;
     }
     const hasRelay = this.multiplayerScreen.querySelector('#mp-relay').value.trim() || this.game.multiplayerRelay || suggestedMultiplayerRelay();
-    if (!hasRelay) status.textContent = 'This static host has no built-in room service. Enter a reachable custom WebSocket address under Advanced settings.';
-    else status.textContent = 'Ready to connect to the multiplayer room service.';
+    status.replaceChildren();
+    if (!hasRelay) {
+      status.append('This copy is on static hosting, which cannot run online rooms.');
+      if (window.location.hostname.endsWith('.github.io')) {
+        status.append(document.createElement('br'));
+        const deployLink = document.createElement('a');
+        deployLink.className = 'mp-deploy-link';
+        deployLink.href = MULTIPLAYER_DEPLOY_URL;
+        deployLink.target = '_blank';
+        deployLink.rel = 'noopener noreferrer';
+        deployLink.textContent = 'Owner: set up online play once';
+        status.append(deployLink);
+        const instructions = document.createElement('small');
+        instructions.className = 'mp-deploy-help';
+        instructions.textContent = 'After setup, share the new service URL. Players need no setup.';
+        status.append(document.createElement('br'), instructions);
+      } else {
+        status.append(' Add a reachable service under Advanced settings.');
+      }
+    } else {
+      status.textContent = 'Ready to connect to the multiplayer room service.';
+    }
   }
 
   async connectMultiplayer() {

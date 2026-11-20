@@ -1,6 +1,6 @@
 # AiSlopcraft
 
-**[▶ Play AiSlopcraft](https://skid-ster.github.io/AiSlopcraft/)** · [Source code](https://github.com/Skid-ster/AiSlopcraft)
+**[▶ Play AiSlopcraft](https://skid-ster.github.io/AiSlopcraft/)** · [Enable online multiplayer (owner setup)](https://render.com/deploy?repo=https://github.com/Skid-ster/AiSlopcraft) · [Source code](https://github.com/Skid-ster/AiSlopcraft)
 
 AiSlopcraft is a browser-based voxel survival game inspired by **Minecraft Java Edition Beta 1.7.3**. Explore a seeded world, mine and build, craft and smelt, grow crops, fight familiar mobs, or invite friends into a co-op world—all in a classic, pixel-art presentation.
 
@@ -40,8 +40,8 @@ The generated site is written to `dist/`.
 
 Online multiplayer needs a reachable process to coordinate rooms and relay game state; a static site alone cannot do that. To avoid making players configure a separate relay, this project can serve the built game and WebSocket room service from the **same origin and deployment**:
 
-1. Create the included `render.yaml` web service with [Render Blueprints](https://render.com/deploy?repo=https://github.com/Skid-ster/AiSlopcraft). It builds the site and starts the combined app server.
-2. Open the service URL. The Multiplayer menu connects to that same site's `/ws` endpoint automatically—players do not enter or configure a relay address. Create a Survival or Creative public room (listed) or private room (invite code only); private rooms may also have a password. Friends open the same game URL and browse or enter the six-character invite code.
+1. Click [Enable online multiplayer](https://render.com/deploy?repo=https://github.com/Skid-ster/AiSlopcraft), sign in to Render with GitHub, review the `aislopcraft-online` service, then click **Apply**. This is the owner's one-time setup; it builds and starts the game and room service together.
+2. When Render marks it **Live**, share that service URL. Players open it and Multiplayer connects automatically—no address, account, or relay setup for them. Create a Survival or Creative public room (listed) or private room (invite code only); private rooms may also have a password. Friends open the same game URL and browse or enter the six-character invite code.
 
 GitHub Pages remains static and cannot host the room service. If you publish only on GitHub Pages, you must provide a custom `wss://` endpoint in Multiplayer settings. Free service plans may sleep while idle, so the first connection can take a short while to wake.
 
