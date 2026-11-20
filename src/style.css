@@ -788,6 +788,10 @@ html, body {
 .multiplayer-card h2 { text-align: center; font-size: 17px; margin: 2px 0 18px; }
 .multiplayer-card h3 { font-size: 11px; margin: 0 0 10px; }
 .multiplayer-card label { display: grid; gap: 6px; margin: 9px 0; font-size: 9px; }
+.mp-connect-help { margin: 0 0 8px; color: #ddd; font: 10px/1.5 'Courier New', monospace; text-align: center; }
+.mp-custom-relay { margin: 0 0 12px; font: 9px/1.5 'Courier New', monospace; }
+.mp-custom-relay summary { color: #ddd; cursor: pointer; }
+.mp-custom-relay small { display: block; color: #ccc; font-size: 8px; }
 .mp-visual-help { display: block; margin: 3px 0 8px; color: #ccc; font-size: 9px; line-height: 1.5; }
 .multiplayer-card input, .multiplayer-card select, .network-panel input { min-width: 0; width: 100%; padding: 10px; border: 2px solid #161616; border-radius: 0; background: #ddd; color: #171717; font: 12px 'Courier New', monospace; text-shadow: none; }
 .multiplayer-card .btn { min-width: 0; width: 100%; margin-top: 8px; }

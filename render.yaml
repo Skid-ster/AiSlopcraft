@@ -1,9 +1,9 @@
 services:
   - type: web
-    name: aislopcraft-multiplayer
+    name: aislopcraft-online
     runtime: node
     plan: free
-    buildCommand: npm ci
+    buildCommand: npm ci && npm run build
     startCommand: npm run multiplayer
     healthCheckPath: /health
     envVars:

@@ -1,7 +1,16 @@
 import { createServer } from 'node:http';
+import { createReadStream, existsSync, realpathSync, statSync } from 'node:fs';
+import { extname, resolve, sep } from 'node:path';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
+
+const DEFAULT_DIST_DIR = resolve(fileURLToPath(new URL('../dist', import.meta.url)));
+const MIME_TYPES = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
+  '.json': 'application/json; charset=utf-8', '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf',
+};
 
 const MAX_PLAYERS = 8;
 const MAX_EDITS = 50_000;
@@ -60,16 +69,62 @@ function passwordMatches(record, password) {
   return timingSafeEqual(record.hash, candidate);
 }
 
-export function createMultiplayerServer({ logger = console } = {}) {
+export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_DIST_DIR } = {}) {
   const rooms = new Map();
   const http = createServer((request, response) => {
-    if (request.url === '/health' || request.url === '/') {
-      response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      response.end(JSON.stringify({ service: 'aislopcraft-multiplayer', status: 'ok', rooms: rooms.size }));
+    const url = new URL(request.url || '/', 'http://localhost');
+    const json = (status, body) => {
+      response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+      response.end(request.method === 'HEAD' ? undefined : JSON.stringify(body));
+    };
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      response.setHeader('allow', 'GET, HEAD');
+      json(405, { error: 'method not allowed' });
       return;
     }
-    response.writeHead(404, { 'content-type': 'application/json' });
-    response.end('{"error":"not found"}');
+    if (url.pathname === '/health') {
+      let ready = false;
+      try { ready = Boolean(staticDir && statSync(resolve(staticDir, 'index.html')).isFile()); } catch {}
+      json(ready ? 200 : 503, { service: 'aislopcraft-online', status: ready ? 'ok' : 'not_ready', rooms: rooms.size });
+      return;
+    }
+    if (!staticDir || !existsSync(staticDir)) {
+      json(503, { error: 'Game build is unavailable. Build the site with npm run build.' });
+      return;
+    }
+
+    let pathname;
+    try { pathname = decodeURIComponent(url.pathname); }
+    catch { response.writeHead(400); response.end('Bad path'); return; }
+    if (pathname.includes('\0')) { response.writeHead(400); response.end('Bad path'); return; }
+
+    let root;
+    let file = resolve(staticDir, `.${pathname}`);
+    try {
+      root = realpathSync(staticDir);
+      if (existsSync(file) && statSync(file).isDirectory()) file = resolve(file, 'index.html');
+      if (!existsSync(file) && !extname(pathname)) file = resolve(root, 'index.html');
+      if (!existsSync(file)) { json(404, { error: 'not found' }); return; }
+      file = realpathSync(file);
+      const inRoot = file === root || file.startsWith(`${root}${sep}`);
+      if (!inRoot) { json(403, { error: 'forbidden' }); return; }
+      if (!statSync(file).isFile()) { json(404, { error: 'not found' }); return; }
+    } catch {
+      json(404, { error: 'not found' });
+      return;
+    }
+
+    const extension = extname(file).toLowerCase();
+    const isHashedAsset = /-[A-Za-z0-9_-]{8,}\.[^.]+$/.test(file);
+    response.writeHead(200, {
+      'content-type': MIME_TYPES[extension] || 'application/octet-stream',
+      'cache-control': extension === '.html' ? 'no-cache' : isHashedAsset ? 'public, max-age=31536000, immutable' : 'public, max-age=3600',
+      'x-content-type-options': 'nosniff',
+    });
+    if (request.method === 'HEAD') { response.end(); return; }
+    const stream = createReadStream(file);
+    stream.on('error', () => { if (!response.headersSent) response.writeHead(500); response.end(); });
+    stream.pipe(response);
   });
   const wss = new WebSocketServer({ server: http, path: '/ws', maxPayload: MAX_MESSAGE, perMessageDeflate: false });
 
@@ -357,5 +412,5 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const service = createMultiplayerServer();
   const port = Math.max(1, Math.min(65535, Number(process.env.PORT) || 8787));
   const host = process.env.HOST || '0.0.0.0';
-  service.http.listen(port, host, () => console.log(`AiSlopcraft multiplayer relay listening on ${host}:${port}`));
+  service.http.listen(port, host, () => console.log(`AiSlopcraft online server listening on ${host}:${port}`));
 }
