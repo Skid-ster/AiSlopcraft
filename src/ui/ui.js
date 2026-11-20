@@ -90,6 +90,7 @@ export class UI {
         <div class="title-primary-stack">
           <button class="btn" id="btn-singleplayer">Singleplayer</button>
           <button class="btn" id="btn-multiplayer">Multiplayer</button>
+          <small class="title-multiplayer-hint">Online play: sign up or log in from Multiplayer</small>
         </div>
         <div class="title-button-row title-secondary-row title-controls-row">
           <button class="btn language-button" id="btn-language" title="Language settings are not available yet" aria-label="Language settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c5 5 5 13 0 18m0-18c-5 5-5 13 0 18"/></svg></button>
@@ -390,7 +391,7 @@ export class UI {
             <button class="btn" id="mp-login" type="button">Log in</button>
             <button class="btn" id="mp-signup" type="button">Create account</button>
           </div>
-          <small>No email is required. Keep your password safe; password reset is not available.</small>
+          <small>No email is required. Password reset is unavailable, and free-hosted accounts may be lost if the server resets. Use a unique password you can remember.</small>
         </section>
         <div class="mp-account-panel" id="mp-account-panel" hidden>
           <span id="mp-account-label">Signed in</span>

@@ -171,11 +171,13 @@ try {
 
   // ---------- title: multiplayer lobby ----------
   check('Multiplayer button is enabled', !btn('btn-multiplayer').disabled);
+  check('title clearly tells players where to create an online account', document.querySelector('.title-multiplayer-hint')?.textContent.includes('sign up or log in'));
   btn('btn-multiplayer').click();
   check('Multiplayer lobby opens', document.getElementById('multiplayer-screen').style.display === 'flex');
   check('custom relay configuration is hidden under advanced settings by default', !!document.querySelector('.mp-custom-relay') && !document.querySelector('.mp-custom-relay').open);
   check('multiplayer requires an account with username and password fields', !!btn('mp-username') && !!btn('mp-auth-password') && !!btn('mp-login') && !!btn('mp-signup'));
   check('signup accepts the requested eight-character password example', btn('mp-auth-password').minLength === 8 && btn('mp-auth-password').maxLength === 128);
+  check('account panel warns about unavailable password resets and free-host storage loss', document.querySelector('#mp-auth-panel small')?.textContent.includes('free-hosted accounts may be lost'));
   check('static-only hosting links to the Azure multiplayer setup guide', document.getElementById('mp-status').textContent.includes('static hosting') && document.querySelector('.mp-deploy-link')?.href.endsWith('#deploy-to-azure'));
   check('deployment help states the five-room and five-player limits', document.querySelector('.mp-deploy-help')?.textContent.includes('5 rooms') && document.querySelector('.mp-deploy-help')?.textContent.includes('5 players per room'));
   check('host can choose individual or forced shader and texture settings', !!btn('mp-visual-policy') && !!btn('mp-visual-policy').querySelector('[value="forced"]'));
