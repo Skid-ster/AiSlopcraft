@@ -21,9 +21,13 @@ service.http.listen(0, '127.0.0.1');
 await once(service.http, 'listening');
 const { port } = service.http.address();
 const base = `http://127.0.0.1:${port}`;
+const sockets = [];
 const healthResponse = await fetch(`${base}/health`);
 assert.equal(healthResponse.status, 200, 'online server exposes a readiness check');
-assert.equal((await healthResponse.json()).status, 'ok', 'readiness includes the built game');
+const health = await healthResponse.json();
+assert.equal(health.status, 'ok', 'readiness includes the built game');
+assert.equal(health.maxRooms, 5, 'health endpoint reports the room limit');
+assert.equal(health.maxPlayersPerRoom, 5, 'health endpoint reports the player limit');
 assert.equal((await fetch(`${base}/health`, { method: 'POST' })).status, 405, 'health endpoint rejects unsupported methods');
 const siteResponse = await fetch(`${base}/`);
 assert.equal(siteResponse.status, 200, 'combined service serves the built game at its root');
@@ -48,9 +52,11 @@ try {
   await unbuiltService.close();
 }
 
-function connect() {
+async function connect() {
   const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
-  return once(socket, 'open').then(() => socket);
+  await once(socket, 'open');
+  sockets.push(socket);
+  return socket;
 }
 function waitFor(socket, predicate, timeout = 3000) {
   return new Promise((resolve, reject) => {
@@ -117,6 +123,8 @@ try {
   const listing = await request(browser, 'rooms:list');
   assert.equal(listing.rooms.length, 1, 'public world appears in the lobby');
   assert.equal(listing.rooms[0].gameMode, 'creative');
+  assert.equal(listing.rooms[0].players, 1);
+  assert.equal(listing.rooms[0].maxPlayers, 5, 'room listing publishes the five-player limit');
   assert.equal(listing.rooms[0].passwordProtected, true);
   assert.equal(listing.rooms[0].visualMode, 'forced', 'room listings identify forced host visuals');
 
@@ -195,6 +203,19 @@ try {
   assert.equal((await pickupGrant).item.count, 3, 'only a valid shared drop can be claimed');
   await itemRemoved;
 
+  const fourth = await connect();
+  const fourthJoined = await request(fourth, 'room:join', { code: created.code, playerName: 'Fourth', password: 'blockparty' });
+  assert.equal(fourthJoined.type, 'room:joined');
+  const fifth = await connect();
+  const fifthJoined = await request(fifth, 'room:join', { code: created.code, playerName: 'Fifth', password: 'blockparty' });
+  assert.equal(fifthJoined.type, 'room:joined', 'the fifth player can join');
+  const sixth = await connect();
+  const sixthRejected = await request(sixth, 'room:join', { code: created.code, playerName: 'Sixth', password: 'blockparty' });
+  assert.equal(sixthRejected.type, 'error', 'a sixth player is rejected');
+  assert.match(sixthRejected.message, /room is full/i);
+  assert.equal(created.players.length, 1, 'the host starts as the first room member');
+  assert.equal(service.rooms.get(created.code).clients.size, 5, 'room never exceeds five connected players');
+
   const closed = waitFor(newcomer, message => message.type === 'room:closed');
   await request(host, 'room:close');
   assert.equal((await closed).type, 'room:closed', 'host can close and clean up the lobby');
@@ -212,11 +233,27 @@ try {
   });
   assert.equal(invalidVisuals.type, 'error', 'relay rejects malformed forced texture atlases');
 
+  const roomHosts = [];
+  for (let index = 0; index < 5; index++) {
+    const roomHost = await connect();
+    roomHosts.push(roomHost);
+    const room = await request(roomHost, 'room:create', { playerName: `Host${index}`, name: `Capacity room ${index}` });
+    assert.equal(room.type, 'room:joined');
+    assert.equal(service.rooms.size, roomHosts.length, `room ${roomHosts.length} consumes one server slot`);
+  }
+  assert.equal(service.rooms.size, 5, 'server allows exactly five simultaneous rooms');
+  const overflowHost = await connect();
+  const overflowRoom = await request(overflowHost, 'room:create', { playerName: 'Overflow' });
+  assert.equal(overflowRoom.type, 'error', 'server rejects a sixth simultaneous room');
+  assert.match(overflowRoom.message, /all 5 rooms/i);
+  for (const roomHost of roomHosts) await request(roomHost, 'room:close');
+  assert.equal(service.rooms.size, 0, 'closing rooms releases room capacity');
+
   assert.equal(normalizeRelayUrl('wss://relay.example/ws'), 'wss://relay.example/ws');
   assert.throws(() => normalizeRelayUrl('ws://relay.example/ws'), /secure wss/);
   assert.equal(normalizeRelayUrl('ws://localhost:8787'), 'ws://localhost:8787/ws');
   console.log('ALL MULTIPLAYER TESTS PASSED');
-  for (const socket of [host, wrongPass, browser, guest, newcomer, individualHost]) socket.close();
+  for (const socket of sockets) socket.close();
 } finally {
   await service.close();
   await rm(tempDir, { recursive: true, force: true });

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 const logo = new URL('./logo.svg', import.meta.url).href;
-const MULTIPLAYER_DEPLOY_URL = 'https://render.com/deploy?repo=https://github.com/Skid-ster/AiSlopcraft';
+const MULTIPLAYER_DEPLOY_URL = 'https://github.com/Skid-ster/AiSlopcraft#deploy-to-azure';
 // UI: title screen, hotbar, hearts, armor, inventory, crafting table, furnace, chest,
 // pause, death screen, F3 debug, hover tooltips, shift-click & 3D isometric icons.
 import {
@@ -415,7 +415,7 @@ export class UI {
           </section>
         </div>
         <div class="mp-status" id="mp-status" role="status">Online multiplayer needs a reachable room service. This deployment provides it automatically.</div>
-        <div class="mp-footer"><button class="btn btn-half" id="mp-back">Back</button><span>Up to 8 players · The host must stay connected while hosting.</span></div>
+        <div class="mp-footer"><button class="btn btn-half" id="mp-back">Back</button><span>5 rooms max · 5 players per room · The host stays connected.</span></div>
       </div>`;
     this.root.appendChild(multiplayer);
     div.querySelector('#btn-multiplayer').addEventListener('click', () => this.openMultiplayer());
@@ -486,11 +486,11 @@ export class UI {
         deployLink.href = MULTIPLAYER_DEPLOY_URL;
         deployLink.target = '_blank';
         deployLink.rel = 'noopener noreferrer';
-        deployLink.textContent = 'Owner: set up online play once';
+        deployLink.textContent = 'Owner: set up the Azure game server';
         status.append(deployLink);
         const instructions = document.createElement('small');
         instructions.className = 'mp-deploy-help';
-        instructions.textContent = 'After setup, share the new service URL. Players need no setup.';
+        instructions.textContent = 'One Azure server hosts up to 5 rooms, with 5 players per room.';
         status.append(document.createElement('br'), instructions);
       } else {
         status.append(' Add a reachable service under Advanced settings.');
