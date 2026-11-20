@@ -12,7 +12,8 @@ const MIME_TYPES = {
   '.json': 'application/json; charset=utf-8', '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf',
 };
 
-const MAX_PLAYERS = 8;
+const MAX_ROOMS = 5;
+const MAX_PLAYERS = 5;
 const MAX_EDITS = 50_000;
 const MAX_MESSAGE = 1024 * 1024;
 const ROOM_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -85,7 +86,10 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
     if (url.pathname === '/health') {
       let ready = false;
       try { ready = Boolean(staticDir && statSync(resolve(staticDir, 'index.html')).isFile()); } catch {}
-      json(ready ? 200 : 503, { service: 'aislopcraft-online', status: ready ? 'ok' : 'not_ready', rooms: rooms.size });
+      json(ready ? 200 : 503, {
+        service: 'aislopcraft-online', status: ready ? 'ok' : 'not_ready',
+        rooms: rooms.size, maxRooms: MAX_ROOMS, maxPlayersPerRoom: MAX_PLAYERS,
+      });
       return;
     }
     if (!staticDir || !existsSync(staticDir)) {
@@ -233,6 +237,7 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
         const seed = cleanText(message.seed, 80) || 'Beta 1.7.3';
         if (!playerName) return fail(socket, requestId, 'Choose a player name.');
         if (password.length && password.length < 4) return fail(socket, requestId, 'Passwords must be at least four characters.');
+        if (rooms.size >= MAX_ROOMS) return fail(socket, requestId, `All ${MAX_ROOMS} rooms are in use. Try again later.`);
         try {
           const room = {
             code: createCode(rooms), name, playerName, access, gameMode, seed,

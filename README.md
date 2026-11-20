@@ -1,6 +1,6 @@
 # AiSlopcraft
 
-**[▶ Play AiSlopcraft](https://skid-ster.github.io/AiSlopcraft/)** · [Enable online multiplayer (owner setup)](https://render.com/deploy?repo=https://github.com/Skid-ster/AiSlopcraft) · [Source code](https://github.com/Skid-ster/AiSlopcraft)
+**[▶ Play AiSlopcraft](https://skid-ster.github.io/AiSlopcraft/)** · [Set up the Azure multiplayer server](#deploy-to-azure) · [Source code](https://github.com/Skid-ster/AiSlopcraft)
 
 AiSlopcraft is a browser-based voxel survival game inspired by **Minecraft Java Edition Beta 1.7.3**. Explore a seeded world, mine and build, craft and smelt, grow crops, fight familiar mobs, or invite friends into a co-op world—all in a classic, pixel-art presentation.
 
@@ -38,14 +38,19 @@ The generated site is written to `dist/`.
 
 ## Multiplayer
 
-Online multiplayer needs a reachable process to coordinate rooms and relay game state; a static site alone cannot do that. To avoid making players configure a separate relay, this project can serve the built game and WebSocket room service from the **same origin and deployment**:
+Online multiplayer needs a reachable Node process to coordinate rooms and relay game state; static hosting alone cannot do that. The Azure setup below runs the built game and room service from the **same origin**. One Azure app instance can host at most **5 multiplayer rooms** (game servers), each with at most **5 players including the host** (25 players total). This is one Azure App Service instance—not five separate virtual machines—and the limits are enforced by the relay.
 
-1. Click [Enable online multiplayer](https://render.com/deploy?repo=https://github.com/Skid-ster/AiSlopcraft), sign in to Render with GitHub, review the `aislopcraft-online` service, then click **Apply**. This is the owner's one-time setup; it builds and starts the game and room service together.
-2. When Render marks it **Live**, share that service URL. Players open it and Multiplayer connects automatically—no address, account, or relay setup for them. Create a Survival or Creative public room (listed) or private room (invite code only); private rooms may also have a password. Friends open the same game URL and browse or enter the six-character invite code.
+### Deploy to Azure
 
-GitHub Pages remains static and cannot host the room service. If you publish only on GitHub Pages, you must provide a custom `wss://` endpoint in Multiplayer settings. Free service plans may sleep while idle, so the first connection can take a short while to wake.
+1. In Azure Portal, create an **App Service / Web App** (not Static Web Apps or a VM): Subscription **Azure for Students**, Publish **Code**, Runtime **Node.js 22 LTS**, OS **Linux**, and a UK region such as **UK South**.
+2. Select a **Basic B1** App Service plan so you can enable Always On and WebSockets. Review the displayed cost first; B1 spends your student credit. Keep the scale-out worker count at **1** because room data lives in that single server process.
+3. In **Deployment Center**, choose GitHub, authorize the repository, and select `Skid-ster/AiSlopcraft` on branch `main`. Let Azure create its deployment workflow.
+4. In **Configuration → General settings**, set the startup command to `npm start`, turn **WebSockets** on, and turn **Always On** on. In **Configuration → Application settings**, add `SCM_DO_BUILD_DURING_DEPLOYMENT=true`, then save and restart. The deployment builds the frontend (`npm run build`) and the start command serves it with the room service.
+5. Wait for the deployment to finish, open `https://<your-app-name>.azurewebsites.net/health`, and confirm it returns `"status":"ok"`. Share the root app URL with players. The Multiplayer screen uses its same-origin WebSocket automatically; players do not configure Azure or a relay.
 
-Players on different networks connect to the same relay URL. The host must keep the game open: rooms and edit history are held in relay memory and end when the host leaves or the relay restarts. The host and guests need the same world seed; invite links include the host's seed and relay URL.
+Azure keeps the **service process** available only while the App Service and subscription remain active; check your student-credit balance and expiry. Rooms and world edits are still temporary in-memory sessions: they end if the host leaves or the app restarts/deploys. Keeping world saves across restarts would require a database/storage feature not included here. GitHub Pages remains the singleplayer/static option and cannot itself host rooms.
+
+Players on different networks connect to the same Azure URL. The host and guests need the same world seed; invite links include the host's seed and service URL.
 
 When creating a room, the host can choose **Let each player choose** or **Force the host's shader and texture pack**. Individual mode is the default and leaves every player's visuals untouched. In forced mode the host selects a built-in shader style and an installed texture pack (or default textures); the supported 256×256 block atlas is relayed to room members, and each client restores its personal shader and textures after leaving. Shared atlas payloads are capped at 512 KB and held only in relay memory while the room is open.
 
