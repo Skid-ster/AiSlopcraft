@@ -81,6 +81,38 @@ defaultAtlas.getContext('2d').drawImage(waterCanvas, waterX, waterY);
 
 const lighting = new Lighting({ atlasTexture: atlasTex, emissionTexture: buildEmissionAtlas(atlasCanvas) });
 let atlasGeneration = 0;
+const RESOURCE_PACKS_KEY = 'aislopcraft:resource-packs';
+const ACTIVE_RESOURCE_PACK_KEY = 'aislopcraft:active-resource-pack';
+const resourcePackMemory = new Map();
+let memoryActiveResourcePackId = null;
+let memoryResourcePackSelectionSet = false;
+function storedResourcePacks() {
+  try {
+    const value = JSON.parse(localStorage.getItem(RESOURCE_PACKS_KEY) || '[]');
+    return Array.isArray(value) ? value.filter(pack => pack && typeof pack.id === 'string' && typeof pack.name === 'string') : [];
+  } catch { return []; }
+}
+function hasLegacyResourcePack() {
+  try { return !!localStorage.getItem('aislopcraft:block-atlas'); } catch { return false; }
+}
+function resourcePackState() {
+  const packs = storedResourcePacks();
+  if (hasLegacyResourcePack() && !packs.some(pack => pack.id === 'legacy')) packs.unshift({ id: 'legacy', name: 'Previously imported textures', count: 0 });
+  for (const pack of resourcePackMemory.values()) if (!packs.some(item => item.id === pack.id)) packs.push(pack);
+  let activeId = null, explicitlyDefault = false;
+  try {
+    const storedActive = localStorage.getItem(ACTIVE_RESOURCE_PACK_KEY);
+    explicitlyDefault = storedActive === '__default__';
+    activeId = explicitlyDefault ? null : storedActive;
+  } catch {}
+  if (memoryResourcePackSelectionSet) {
+    activeId = memoryActiveResourcePackId;
+    explicitlyDefault = activeId === null;
+  }
+  if (!activeId && !explicitlyDefault && hasLegacyResourcePack()) activeId = 'legacy';
+  if (!packs.some(pack => pack.id === activeId)) activeId = null;
+  return { packs, activeId };
+}
 function refreshAtlas() {
   atlasTex.needsUpdate = true;
   waterCanvas.getContext('2d').clearRect(0, 0, 16, 16);
@@ -136,6 +168,7 @@ let sharedStateTimer = 0;
 const game = {
   world, player, audio, sky, mobs, renderer, lighting, fluids, redstone, vehicles,
   atlasCanvas,
+  getResourcePackState() { return resourcePackState(); },
   async importResourcePack(file) {
     if (file.size > 32 * 1024 * 1024) throw new Error('Pack is too large (maximum 32 MB).');
     const generation = ++atlasGeneration;
@@ -144,20 +177,82 @@ const game = {
     staged.getContext('2d').drawImage(defaultAtlas, 0, 0);
     const count = await paintBlockSprites(staged, sprites);
     if (generation !== atlasGeneration) throw new Error('Import cancelled.');
+    const id = `pack-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
+    const name = String(file.name || 'Java 1.7 resource pack').replace(/\.[^.]+$/, '').slice(0, 60) || 'Java 1.7 resource pack';
+    const pack = { id, name, count };
+    const atlasData = staged.toDataURL('image/png');
+    resourcePackMemory.set(id, { ...pack, atlasData });
+    memoryActiveResourcePackId = id;
+    memoryResourcePackSelectionSet = true;
+    let saved = true;
+    try {
+      const list = storedResourcePacks().filter(item => item.id !== id);
+      list.push(pack);
+      localStorage.setItem(`aislopcraft:resource-pack:${id}`, atlasData);
+      localStorage.setItem(RESOURCE_PACKS_KEY, JSON.stringify(list));
+      localStorage.setItem(ACTIVE_RESOURCE_PACK_KEY, id);
+    } catch { saved = false; }
     atlasCanvas.getContext('2d').clearRect(0, 0, 256, 256);
     atlasCanvas.getContext('2d').drawImage(staged, 0, 0);
     refreshAtlas();
-    let saved = true;
-    try { localStorage.setItem('aislopcraft:block-atlas', atlasCanvas.toDataURL('image/png')); } catch { saved = false; }
-    return { count, saved };
+    return { ...pack, saved };
   },
-  resetResourcePack() {
+  async useResourcePack(id) {
+    const pack = resourcePackState().packs.find(item => item.id === id);
+    if (!pack) throw new Error('That texture pack is no longer installed.');
+    let atlasData = resourcePackMemory.get(id)?.atlasData;
+    try { atlasData ||= id === 'legacy' ? localStorage.getItem('aislopcraft:block-atlas') : localStorage.getItem(`aislopcraft:resource-pack:${id}`); } catch {}
+    if (!atlasData?.startsWith('data:image/png;base64,') || atlasData.length > 2_000_000) throw new Error('Saved texture pack data is missing or invalid.');
+    const generation = ++atlasGeneration;
+    const image = new Image();
+    await new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = () => reject(new Error('Could not read the saved texture pack.'));
+      image.src = atlasData;
+    });
+    if (generation !== atlasGeneration) return false;
+    if (image.width !== 256 || image.height !== 256) throw new Error('Saved texture pack has invalid dimensions.');
+    atlasCanvas.getContext('2d').clearRect(0, 0, 256, 256);
+    atlasCanvas.getContext('2d').drawImage(image, 0, 0);
+    refreshAtlas();
+    memoryActiveResourcePackId = id;
+    memoryResourcePackSelectionSet = true;
+    try { localStorage.setItem(ACTIVE_RESOURCE_PACK_KEY, id); } catch {}
+    return true;
+  },
+  useDefaultResourcePack() {
+    memoryActiveResourcePackId = null;
+    memoryResourcePackSelectionSet = true;
     atlasGeneration++;
     atlasCanvas.getContext('2d').clearRect(0, 0, 256, 256);
     atlasCanvas.getContext('2d').drawImage(defaultAtlas, 0, 0);
     refreshAtlas();
-    try { localStorage.removeItem('aislopcraft:block-atlas'); } catch {}
+    try { localStorage.setItem(ACTIVE_RESOURCE_PACK_KEY, '__default__'); } catch {}
+    return true;
   },
+  async deleteResourcePack(id) {
+    atlasGeneration++;
+    const wasActive = resourcePackState().activeId === id;
+    resourcePackMemory.delete(id);
+    if (id === 'legacy') {
+      try { localStorage.removeItem('aislopcraft:block-atlas'); } catch {}
+    } else {
+      try { localStorage.removeItem(`aislopcraft:resource-pack:${id}`); } catch {}
+    }
+    const list = storedResourcePacks().filter(pack => pack.id !== id);
+    try { localStorage.setItem(RESOURCE_PACKS_KEY, JSON.stringify(list)); } catch {}
+    if (wasActive) this.useDefaultResourcePack();
+    return resourcePackState();
+  },
+  async restoreResourcePack() {
+    const { activeId } = resourcePackState();
+    if (!activeId) return false;
+    try { return await this.useResourcePack(activeId); } catch {
+      this.useDefaultResourcePack();
+      return false;
+    }
+  },
+  resetResourcePack() { return this.useDefaultResourcePack(); },
   itemIconsCanvas: buildItemIcons(),
   settings,
   renderDistance: settings.renderDistance,
@@ -544,22 +639,8 @@ world.onBlockChange((x,y,z,previousId,id,previousMeta,meta) => {
 
 const ui = new UI(game);
 game.ui = ui;
-// Restore the locally imported atlas, never upload the pack to a server.
-try {
-  const savedAtlas = localStorage.getItem('aislopcraft:block-atlas');
-  if (savedAtlas?.startsWith('data:image/png;base64,') && savedAtlas.length < 2_000_000) {
-    const img = new Image();
-    const generation = atlasGeneration;
-    img.onload = () => {
-      if (generation !== atlasGeneration) return;
-      if (img.width !== 256 || img.height !== 256) return;
-      atlasCanvas.getContext('2d').clearRect(0, 0, 256, 256);
-      atlasCanvas.getContext('2d').drawImage(img, 0, 0);
-      refreshAtlas(); ui._iconCache.clear();
-    };
-    img.src = savedAtlas;
-  }
-} catch {}
+// Restore the selected local 1.7.x texture pack; packs are never uploaded.
+void game.restoreResourcePack().then(() => ui._iconCache.clear());
 game.applySettings();
 if (Number.isFinite(savedGame?.timeOfDay)) sky.time = ((savedGame.timeOfDay % 1) + 1) % 1;
 let saveClock = 0;

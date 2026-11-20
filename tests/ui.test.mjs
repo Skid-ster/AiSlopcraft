@@ -42,6 +42,8 @@ const gone = (id) => !document.getElementById(id);
 const btn = (id) => document.getElementById(id);
 
 const calls = [];
+let installedPacks = [{ id: 'pack-1710', name: 'Beta 1.7.10 Pack', count: 5 }];
+let activePackId = null;
 const player = {
   sensitivity: 0.5,
   health: 20,
@@ -69,7 +71,11 @@ const game = {
     setVolume: () => {},
   },
   player,
-  importResourcePack: async () => ({ count: 5, saved: true }),
+  getResourcePackState: () => ({ packs: installedPacks, activeId: activePackId }),
+  importResourcePack: async () => ({ id: 'pack-new', name: 'New Pack', count: 5, saved: true }),
+  useResourcePack: async id => { activePackId = id; },
+  useDefaultResourcePack: () => { activePackId = null; },
+  deleteResourcePack: async id => { installedPacks = installedPacks.filter(pack => pack.id !== id); if (activePackId === id) activePackId = null; },
   resetResourcePack: () => calls.push(['resetResourcePack']),
   atlasCanvas: document.createElement('canvas'),
   itemIconsCanvas: document.createElement('canvas'),
@@ -85,12 +91,22 @@ let threw = null;
 try {
   ui = new UI(game);
 
-  check('resource pack import control is present', !!btn('btn-pack') && !!btn('pack-file'));
-  btn('btn-pack-reset').click();
-  check('resource pack reset is wired', calls.some(call => call[0] === 'resetResourcePack'));
+  check('resource pack manager is available from the title screen', !!btn('btn-pack'));
   check('Beta-style title has game, pack, options and quit entries', !!btn('btn-singleplayer') && !!btn('btn-multiplayer') && !!btn('btn-pack') && !!btn('btn-quit'));
   btn('btn-pack').click();
-  check('texture packs open in their own menu', visible('texture-pack-screen'));
+  check('texture pack manager opens with 1.7.10 support information', visible('texture-pack-screen') && document.querySelector('.pack-compat-note')?.textContent.includes('OptiFine'));
+  check('installed texture packs and default textures are listed', document.querySelectorAll('.resource-pack-row').length === 2);
+  document.querySelectorAll('.resource-pack-row')[1].querySelector('button').click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  check('installed pack can be enabled', activePackId === 'pack-1710');
+  document.querySelectorAll('.resource-pack-row')[0].querySelector('button').click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  check('custom packs can be disabled without deleting them', activePackId === null && installedPacks.length === 1);
+  document.querySelectorAll('.resource-pack-row')[1].querySelector('button').click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  document.querySelectorAll('.resource-pack-row')[1].querySelectorAll('button')[1].click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  check('active texture pack can be deleted and falls back to built-in art', installedPacks.length === 0 && activePackId === null);
   btn('pack-done').click();
   check('texture pack menu returns to the title screen', !visible('texture-pack-screen'));
 

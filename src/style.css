@@ -845,8 +845,8 @@ html, body {
 .title-foot, .title-disclaimer { bottom: 8px; font-size: 9px; }
 .texture-pack-screen { z-index: 30; background: rgba(0,0,0,.72); }
 .texture-pack-panel {
-  width: min(520px, calc(100vw - 28px)); padding: 22px;
-  display: flex; flex-direction: column; align-items: stretch; gap: 14px;
+  width: min(560px, calc(100vw - 28px)); max-height: calc(100vh - 32px); overflow: auto; padding: 22px;
+  display: flex; flex-direction: column; align-items: stretch; gap: 12px;
   color: #fff; text-align: center; background: #383838;
   border: 2px solid #111; box-shadow: inset 2px 2px #777, inset -2px -2px #222, 0 12px 36px #000;
 }
@@ -855,6 +855,19 @@ html, body {
 .texture-pack-actions { display: flex; gap: 8px; }
 .texture-pack-actions .btn { min-width: 0; flex: 1; }
 .texture-pack-panel > .btn { min-width: 0; }
+.resource-pack-list { display: flex; flex-direction: column; gap: 5px; text-align: left; }
+.resource-pack-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px; background: #292929; border: 1px solid #171717;
+  box-shadow: inset 1px 1px #4e4e4e, inset -1px -1px #202020;
+}
+.resource-pack-info { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.resource-pack-info strong { overflow: hidden; color: #fff; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.resource-pack-info span { color: #bbb; font-size: 9px; }
+.resource-pack-row-actions { display: flex; flex: 0 0 auto; gap: 5px; }
+.resource-pack-row .btn { min-width: 62px; min-height: 26px; padding: 3px 6px; font-size: 9px; }
+.resource-pack-row .btn:disabled { color: #b9d98a; cursor: default; }
+.pack-compat-note { padding: 8px; background: #292929; border: 1px solid #171717; font-size: 10px !important; }
 .shader-hint {
   grid-column: 1 / -1; color: #c9c9c9; font: 11px/1.45 'Pixel UI', monospace;
   text-shadow: 1px 1px #111; margin: -2px 2px 4px;

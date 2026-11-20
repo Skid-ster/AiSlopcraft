@@ -8,7 +8,7 @@ const SHADER_HINTS = {
   classic: 'Beta-style light and fog, with no enhanced sun shadows.',
   vibrant: 'Brighter, more saturated colors. No sun-shadow pass.',
   cinematic: 'Warm color grading with soft, filtered block shadows.',
-  shader: 'Full Shader Lite: dynamic sun shadows and animated reflective water.',
+  shader: 'Shader Lite: dynamic sun shadows and animated reflective water. External OptiFine shaderpack ZIPs are not supported by this WebGL renderer.',
 };
 const FPS_STEPS = [0, 30, 60, 90, 120, 144, 165, 240, 260];
 const DIFFICULTIES = ['Peaceful', 'Easy', 'Normal', 'Hard'];

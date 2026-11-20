@@ -112,21 +112,59 @@ export class UI {
     packs.id = 'texture-pack-screen';
     packs.style.display = 'none';
     packs.innerHTML = `<section class="texture-pack-panel">
-      <h2>Mods and Texture Packs</h2>
-      <p>Import a compatible Java resource pack ZIP or client JAR. Packs are stored only in this browser.</p>
+      <h2>Texture Packs</h2>
+      <p>Import Java Edition 1.7.x packs, including 1.7.10, or a client JAR. Supported block textures are stored locally; packs can be switched or removed below.</p>
+      <div class="resource-pack-list" id="pack-list" aria-live="polite"></div>
       <div class="texture-pack-actions">
         <button class="btn" id="pack-import">Open Pack File...</button>
-        <button class="btn" id="btn-pack-reset">Default Textures</button>
         <input id="pack-file" type="file" accept=".zip,.jar,application/zip" hidden>
       </div>
-      <div id="pack-status" role="status" aria-live="polite">Default textures active.</div>
+      <p class="pack-compat-note">This browser game cannot load Java Forge mods or OptiFine shaderpacks. Use Video Settings for its built-in WebGL shader styles.</p>
+      <div id="pack-status" role="status" aria-live="polite">Built-in textures active.</div>
       <button class="btn" id="pack-done">Done</button>
     </section>`;
     this.root.appendChild(packs);
     this.texturePackScreen = packs;
     const fileInput = packs.querySelector('#pack-file');
     const status = packs.querySelector('#pack-status');
-    div.querySelector('#btn-pack').addEventListener('click', () => { packs.style.display = 'flex'; });
+    const packList = packs.querySelector('#pack-list');
+    const renderPackList = () => {
+      const state = this.game.getResourcePackState?.() || { packs: [], activeId: null };
+      packList.replaceChildren();
+      const appendRow = (title, detail, active, use, remove = null) => {
+        const row = document.createElement('div'); row.className = 'resource-pack-row';
+        const info = document.createElement('div'); info.className = 'resource-pack-info';
+        const name = document.createElement('strong'); name.textContent = title;
+        const meta = document.createElement('span'); meta.textContent = detail;
+        info.append(name, meta);
+        const actions = document.createElement('div'); actions.className = 'resource-pack-row-actions';
+        const useButton = document.createElement('button'); useButton.className = 'btn'; useButton.textContent = active ? 'In Use' : 'Use'; useButton.disabled = active;
+        useButton.addEventListener('click', async () => {
+          useButton.disabled = true;
+          try { await use(); this._iconCache.clear(); status.textContent = `${title} is now active.`; }
+          catch (error) { status.textContent = `Could not use pack: ${error.message}`; }
+          renderPackList();
+        });
+        actions.appendChild(useButton);
+        if (remove) {
+          const deleteButton = document.createElement('button'); deleteButton.className = 'btn'; deleteButton.textContent = 'Delete';
+          deleteButton.addEventListener('click', async () => {
+            await remove(); this._iconCache.clear(); status.textContent = `${title} was removed.`; renderPackList();
+          });
+          actions.appendChild(deleteButton);
+        }
+        row.append(info, actions); packList.appendChild(row);
+      };
+      appendRow('Default textures', 'Built-in AiSlopcraft art', state.activeId === null,
+        () => this.game.useDefaultResourcePack?.() ?? this.game.resetResourcePack?.());
+      for (const pack of state.packs) {
+        const details = `${pack.count ? `${pack.count} block textures` : 'Imported pack'}${pack.id === 'legacy' ? ' · older installation' : ''}`;
+        appendRow(pack.name, details, state.activeId === pack.id,
+          () => this.game.useResourcePack(pack.id), () => this.game.deleteResourcePack(pack.id));
+      }
+    };
+    renderPackList();
+    div.querySelector('#btn-pack').addEventListener('click', () => { renderPackList(); packs.style.display = 'flex'; });
     packs.querySelector('#pack-import').addEventListener('click', () => fileInput.click());
     packs.querySelector('#pack-done').addEventListener('click', () => { packs.style.display = 'none'; });
     packs.addEventListener('mousedown', event => { if (event.target === packs) packs.style.display = 'none'; });
@@ -135,16 +173,14 @@ export class UI {
     }, true);
     fileInput.addEventListener('change', async () => {
       const file = fileInput.files?.[0]; if (!file) return;
-      status.textContent = 'Loading textures...';
+      status.textContent = 'Checking Java 1.7.x block textures...';
       try {
         const result = await this.game.importResourcePack(file);
         this._iconCache.clear();
-        status.textContent = `Loaded ${result.count} textures locally.${result.saved ? '' : ' Storage is full; re-import next time.'}`;
+        status.textContent = `${result.name}: installed ${result.count} supported block textures.${result.saved ? '' : ' Applied this session, but browser storage could not save it.'}`;
+        renderPackList();
       } catch (error) { status.textContent = `Could not load pack: ${error.message}`; }
       fileInput.value = '';
-    });
-    packs.querySelector('#btn-pack-reset').addEventListener('click', () => {
-      this.game.resetResourcePack(); this._iconCache.clear(); status.textContent = 'Default textures restored.';
     });
     div.querySelector('#btn-quit').addEventListener('click', () => {
       this.game.audio.click();

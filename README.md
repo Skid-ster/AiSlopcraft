@@ -70,11 +70,11 @@ For local development, run `npm run multiplayer` in one terminal and `npm run de
 
 Change difficulty, video, controls, sound, and gameplay options from the title or pause menu. Shader presets can be switched live in Video Settings. From the title screen, **Texture Packs...** opens the local pack importer.
 
-## Importing optional Java 1.7 block textures
+## Managing Java 1.7.x texture packs
 
-In **Texture Packs...**, choose **Open Pack File...** to import a local Java 1.7-era resource-pack ZIP or client JAR containing `assets/minecraft/textures/blocks/`. Supported block sprites are processed in the browser and are not uploaded. A derived 256×256 atlas is saved in browser storage where available; choose **Default Textures** to restore the bundled art. Use only assets you have the right to use.
+In **Texture Packs...**, choose **Open Pack File...** to import a Java Edition 1.7.x resource-pack ZIP (including 1.7.10) or client JAR containing `assets/minecraft/textures/blocks/`. The manager lists installed packs so you can switch between one pack and the built-in textures, or delete a pack. Supported block sprites are processed in the browser and are not uploaded. Pack atlases are saved in browser storage where available. Use only assets you have the right to use.
 
-This is a partial resource-pack importer: missing sprites fall back to the bundled art. It does not import item, entity, GUI, sky, colormap, or sound assets. Animated textures, including water and lava, use their first frame, and biome coloring is approximated. Chest faces and redstone wire retain their bundled art because their Minecraft layouts require special handling. Other project block-atlas tiles are mapped or explicitly aliased. Importing a pack changes textures only; it does not change the game's mechanics into Java Edition 1.7.3.
+This is a partial resource-pack importer: missing sprites fall back to the bundled art. It does not import item, entity, GUI, sky, colormap, or sound assets. Animated textures, including water and lava, use their first frame, and biome coloring is approximated. Chest faces and redstone wire retain their bundled art because their Minecraft layouts require special handling. Other project block-atlas tiles are mapped or explicitly aliased. Importing a pack changes textures only; it does not change the game's mechanics into Java Edition 1.7.3. Java Forge mods and OptiFine shaderpack ZIPs are not executable in this browser game. Its built-in WebGL shader styles implement selected Minecraft-like effects, but arbitrary multi-pass Minecraft shaderpacks are not compatible with the Three.js rendering pipeline.
 
 ## Development
 
