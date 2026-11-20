@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import * as THREE from 'three';
 import { JSDOM } from 'jsdom';
-import { Lighting, SHADER_STYLES, shaderStyleId, syncFogUniforms } from '../src/rendering.js';
+import { Lighting, PSXPostProcess, SHADER_STYLES, shaderStyleId, syncFogUniforms } from '../src/rendering.js';
 
 const fog = new THREE.Fog(0x446688, 12, 90);
 const materials = Array.from({ length: 3 }, () => ({ uniforms: {
@@ -27,7 +27,15 @@ assert.equal(lighting.shared.uBrightness.value, 1);
 const overlay = lighting.createMaterial({ fog: false });
 assert.equal(overlay.uniforms.uShadowStrength.value, 0, 'hand overlay does not inherit world shadows');
 assert.notEqual(overlay.uniforms.uShadowStrength, lighting.shared.uShadowStrength);
-assert.deepEqual(SHADER_STYLES, ['classic', 'vibrant', 'cinematic', 'shader']);
+assert.deepEqual(SHADER_STYLES, ['classic', 'vibrant', 'cinematic', 'shader', 'psx']);
+assert.equal(shaderStyleId('psx'), 4);
+const psxPost = new PSXPostProcess(0.25);
+psxPost.setSize(800, 600);
+assert.equal(psxPost.target.width, 200, 'PSX output renders at one-quarter internal width');
+assert.equal(psxPost.target.height, 150, 'PSX output renders at one-quarter internal height');
+assert.match(psxPost.material.fragmentShader, /bayer4/);
+assert.match(psxPost.material.fragmentShader, /#include <colorspace_fragment>/, 'post-process output converts back to the renderer output color space');
+psxPost.dispose();
 assert.equal(shaderStyleId('cinematic'), 2);
 
 const sky = { dayFactor: 1, sunDirection: new THREE.Vector3(0, 1, 0) };
@@ -70,6 +78,9 @@ assert.match(fragment, /fresnel/);
 assert.match(fragment, /uEmissionMap/);
 assert.match(fragment, /#include <colorspace_fragment>/);
 assert.match(fragment, /uTime \* 0\.006/, 'water UV animation is consumed by the shader');
+assert.match(vertex, /uPsxSnap/, 'PSX vertex snapping scales with depth');
+assert.match(vertex, /snapGrid/, 'PSX snapping uses the active internal resolution');
+assert.match(fragment, /vAffineUv/, 'PSX preset enables affine texture mapping');
 
 
 assert.match(fragment, /coord\.z <= 0\.0/, 'points before the shadow frustum remain lit');

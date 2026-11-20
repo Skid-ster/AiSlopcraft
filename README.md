@@ -14,7 +14,7 @@ It aims for the feel of that era: no hunger bar or sprinting, food heals directl
 - **Farm and build:** till and irrigate farmland, grow and harvest crops, plant saplings, use doors, ladders, beds, cake, buckets, TNT, and more.
 - **Meet the mobs:** farm animals and hostile night creatures, including zombie and skeleton sunlight damage, creeper fuses, spider movement, mob drops, melee combat, and skeleton arrows. Peaceful, Easy, Normal, and Hard difficulty settings adjust hostile encounters and damage.
 - **Play together:** co-op rooms share block edits, chat, player positions, host-simulated mobs and combat, time, containers, dropped items, vehicles, and active projectile visuals. See [Multiplayer](#multiplayer) for relay setup and limitations.
-- **Tune the look:** a native Three.js/WebGL renderer with four live presets—Classic, Vibrant, Cinematic, and Shader Lite. Cinematic and Shader Lite use stabilized directional sun shadows; Shader Lite adds animated water, reflections, and specular highlights. Fog, day/night lighting, brightness, and local light on entities are supported. This is not an OptiFine or Iris shaderpack port.
+- **Tune the look:** a native Three.js/WebGL renderer with five live presets—Classic, Vibrant, Cinematic, Shader Lite, and **PSX (1.7.10)**. Cinematic and Shader Lite use stabilized directional sun shadows; Shader Lite adds animated water, reflections, and specular highlights. PSX is a real multi-pass WebGL preset adapted from the PS1-style affine mapping, depth-scaled vertex snapping, 25% render resolution, 24-step color grading, and ordered dithering in [ckosmic/Minecraft-PSX](https://github.com/ckosmic/minecraft-psx), whose README documents testing on Minecraft 1.7.10 and whose repository declares MIT terms (the checked-in license still has unfilled copyright placeholders). The shader logic is adapted to AiSlopcraft's Three.js render pipeline; it does not make arbitrary OptiFine shaderpack ZIPs executable. Fog, day/night lighting, brightness, and local light on entities are supported.
 - **Use the classic-style interface:** title and texture-pack screens, options, inventory and crafting, hotbar, health/armor/air indicators, pause and death screens, item tooltips, and an F3 debug overlay.
 
 ## Play locally
@@ -26,7 +26,7 @@ npm install
 npm run dev
 ```
 
-Open the local URL printed by Vite (normally `http://localhost:5173`). To create a separate world, add a named seed, for example `?seed=my-world`, to the URL. World edits, inventory, player position and health, and settings are saved in this browser; each seed has its own save.
+Open the local URL printed by Vite (normally `http://localhost:5173`). Choose **Singleplayer** to browse saved worlds or create one with an optional seed. Singleplayer worlds autosave in this browser every 15 seconds, on tab hide, and on save-and-quit; each world has its own save. The **World Saves...** menu exports/imports portable JSON save files. Multiplayer rooms are temporary and never overwrite personal singleplayer saves.
 
 To make a production build:
 
@@ -46,7 +46,7 @@ Multiplayer uses a small WebSocket relay so players can meet and share world edi
 
 Players on different networks connect to the same relay URL. The host must keep the game open: rooms and edit history are held in relay memory and end when the host leaves or the relay restarts. The host and guests need the same world seed; invite links include the host's seed and relay URL.
 
-When creating a room, the host can choose **Each player uses their own** visuals or **Force host shader and textures**. Forced mode sends the host's built-in shader choice and current 256×256 block atlas through the relay to room members; the client restores its own shader and textures after leaving. Shared atlas payloads are capped at 512 KB and held only in relay memory while the room is open. Individual mode is the default and leaves every player's visuals untouched.
+When creating a room, the host can choose **Let each player choose** or **Force the host's shader and texture pack**. Individual mode is the default and leaves every player's visuals untouched. In forced mode the host selects a built-in shader style and an installed texture pack (or default textures); the supported 256×256 block atlas is relayed to room members, and each client restores its personal shader and textures after leaving. Shared atlas payloads are capped at 512 KB and held only in relay memory while the room is open.
 
 Co-op shares block edits, chat, positions, host-simulated mobs and mob combat, world time, chest/furnace contents, and dropped-item spawns and pickups. Vehicles and in-flight projectile visuals are also replicated. Each player's inventory and health remain personal. Vehicle movement is peer-reported, and the relay does not provide a cheat-proof authoritative simulation. Rooms are temporary and are not saved by the relay. Multiplayer uses the relay rather than peer-to-peer connections and does not require players to expose local ports.
 
@@ -85,7 +85,7 @@ npm test
 npm run build
 ```
 
-The test suite covers world generation and lighting, UI, textures, interaction, gameplay, fluids, redstone, vehicles, recipes, furnaces, mobs, rendering, resource packs, and multiplayer.
+The test suite covers world generation and lighting, UI, textures, interaction, gameplay, fluids, redstone, vehicles, recipes, furnaces, mobs, rendering, resource packs, portable world-save validation, and multiplayer.
 
 - `src/world/` — block/item registry, seeded terrain, chunks, lighting, and mesh generation
 - `src/rendering.js` — shared voxel/entity shaders, presets, fog, and sun-shadow pass

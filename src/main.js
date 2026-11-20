@@ -20,8 +20,9 @@ import { Sky } from './sky.js';
 import { createFurnaceState, tickFurnace, interactWithFurnaceSlot } from './ui/furnace.js';
 import { ParticleManager } from './particles.js';
 import { FirstPersonArm } from './arm.js';
-import { Lighting, SHADER_STYLES, shaderStyleId } from './rendering.js';
+import { Lighting, PSXPostProcess, SHADER_STYLES, shaderStyleId } from './rendering.js';
 import { loadSettings, persistSettings, sensitivityToRadians, keyLabel } from './settings.js';
+import { decodeWorldSave, encodeWorldSave, MAX_WORLD_SAVE_BYTES, normalizeWorldSave } from './save.js';
 import { useOnBlock, useOnMob, growCrop, cropDrops } from './interactions.js';
 import { FluidSimulator } from './world/fluids.js';
 import { RedstoneSimulator } from './world/redstone.js';
@@ -80,6 +81,8 @@ defaultAtlas.getContext('2d').clearRect(waterX, waterY, 16, 16);
 defaultAtlas.getContext('2d').drawImage(waterCanvas, waterX, waterY);
 
 const lighting = new Lighting({ atlasTexture: atlasTex, emissionTexture: buildEmissionAtlas(atlasCanvas) });
+const psxPostProcess = new PSXPostProcess(0.25);
+const renderBufferSize = new THREE.Vector2();
 let atlasGeneration = 0;
 const RESOURCE_PACKS_KEY = 'aislopcraft:resource-packs';
 const ACTIVE_RESOURCE_PACK_KEY = 'aislopcraft:active-resource-pack';
@@ -153,10 +156,17 @@ const cutoutMat = lighting.createMaterial({ name: 'TerrainCutout', voxel: true, 
 const waterMat = lighting.createMaterial({ name: 'Water', voxel: true, map: waterTex, water: true, transparent: true, opacity: 0.78, doubleSide: true, depthWrite: false });
 
 // ---- game state ----
-const SEED = new URLSearchParams(location.search).get('seed') || 'Beta 1.7.3';
-const SAVE_KEY = `aislopcraft:world:${SEED}`;
+const WORLD_PARAMS = new URLSearchParams(location.search);
+const SEED = WORLD_PARAMS.get('seed') || 'Beta 1.7.3';
+const WORLD_ID = WORLD_PARAMS.get('id') || SEED;
+const WORLD_NAME = WORLD_PARAMS.get('world') || SEED;
+const START_GAME_MODE = WORLD_PARAMS.get('mode') === 'creative' ? 'creative' : 'survival';
+const SAVE_KEY = `aislopcraft:world:${WORLD_ID}`;
 function readSave() {
-  try { return JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); } catch { return null; }
+  try {
+    const save = normalizeWorldSave(JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'));
+    return save?.seed === SEED && save.worldId === WORLD_ID ? save : null;
+  } catch { return null; }
 }
 const savedGame = readSave();
 const legacySettings = { ...savedGame?.settings };
@@ -191,24 +201,56 @@ let sharedStateTimer = 0;
 const game = {
   world, player, audio, sky, mobs, renderer, lighting, fluids, redstone, vehicles,
   atlasCanvas,
+  worldName: savedGame?.worldName || WORLD_NAME,
   getResourcePackState() { return resourcePackState(); },
-  getResourcePackForSharing() {
-    const { activeId, packs } = resourcePackState();
-    if (!activeId) return null;
-    const pack = packs.find(item => item.id === activeId);
-    let atlasData = resourcePackMemory.get(activeId)?.atlasData;
-    try { atlasData ||= activeId === 'legacy' ? localStorage.getItem('aislopcraft:block-atlas') : localStorage.getItem(`aislopcraft:resource-pack:${activeId}`); } catch {}
-    if (!atlasData || atlasData.length > 700_000) throw new Error('The selected texture pack is too large to share in a multiplayer room. Choose another pack or use built-in textures.');
-    return { name: pack?.name || 'Host texture pack', atlasData };
+  listSavedWorlds() {
+    const worlds = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (!key?.startsWith('aislopcraft:world:')) continue;
+        try {
+          const save = normalizeWorldSave(JSON.parse(localStorage.getItem(key) || 'null'));
+          if (save && key === `aislopcraft:world:${save.worldId}`) worlds.push({ id: save.worldId, seed: save.seed, name: save.worldName || save.seed, gameMode: save.gameMode });
+        } catch { /* ignore just the one corrupt save and keep listing the rest */ }
+      }
+    } catch { /* storage may be disabled by the browser */ }
+    return worlds;
   },
-  getResourcePackForSharing() {
-    const { activeId, packs } = resourcePackState();
-    if (!activeId) return null;
-    const pack = packs.find(item => item.id === activeId);
-    let atlasData = resourcePackMemory.get(activeId)?.atlasData;
-    try { atlasData ||= activeId === 'legacy' ? localStorage.getItem('aislopcraft:block-atlas') : localStorage.getItem(`aislopcraft:resource-pack:${activeId}`); } catch {}
+
+  openLocalWorld(seed, name, gameMode = 'survival', worldId = seed) {
+    const url = new URL(location.href);
+    url.searchParams.set('id', String(worldId));
+    url.searchParams.set('seed', String(seed));
+    url.searchParams.set('world', String(name || seed));
+    url.searchParams.set('mode', gameMode === 'creative' ? 'creative' : 'survival');
+    url.searchParams.delete('room');
+    location.assign(url.href);
+  },
+  renameLocalWorld(worldId, name) {
+    const key = `aislopcraft:world:${worldId}`;
+    const save = normalizeWorldSave(JSON.parse(localStorage.getItem(key) || 'null'));
+    if (!save) throw new Error('Could not find that saved world.');
+    save.worldName = String(name || '').trim().slice(0, 48) || save.worldName;
+    localStorage.setItem(key, JSON.stringify(save));
+  },
+  deleteLocalWorld(worldId) {
+    localStorage.removeItem(`aislopcraft:world:${worldId}`);
+    return true;
+  },
+  recreateLocalWorld(worldId, seed, name, gameMode = 'survival') {
+    this.deleteLocalWorld(worldId);
+    this.openLocalWorld(seed, name, gameMode, worldId);
+  },
+  getResourcePackForSharing(requestedId = resourcePackState().activeId) {
+    if (requestedId == null) return null;
+    const { packs } = resourcePackState();
+    const pack = packs.find(item => item.id === requestedId);
+    if (!pack) throw new Error('That texture pack is no longer installed. Reopen the multiplayer screen and choose another pack.');
+    let atlasData = resourcePackMemory.get(requestedId)?.atlasData;
+    try { atlasData ||= requestedId === 'legacy' ? localStorage.getItem('aislopcraft:block-atlas') : localStorage.getItem(`aislopcraft:resource-pack:${requestedId}`); } catch {}
     if (!atlasData || atlasData.length > 700_000) throw new Error('The selected texture pack is too large to share in a multiplayer room. Choose another pack or use built-in textures.');
-    return { name: pack?.name || 'Host texture pack', atlasData };
+    return { name: pack.name || 'Host texture pack', atlasData };
   },
   async applyMultiplayerVisuals(visuals) {
     await this.clearMultiplayerVisuals();
@@ -563,19 +605,61 @@ const game = {
   saveSettings() {
     persistSettings(localStorage, this.settings);
   },
-  saveAndQuit() {
-    this.saveGame();
+  async saveAndQuit() {
+    if (this.networkRoom) await this.leaveMultiplayer();
+    else this.saveGame();
     this.started = false;
     clearFishing();
     ui.setMode('title');
   },
   saveGame() {
-    const payload = { version: 1, seed: SEED, edits: [...world.edits].map(([key, id]) => [key, id, world.metaEdits.get(key) || 0]),
+    // Multiplayer rooms are temporary shared sessions. Never overwrite a
+    // player's personal singleplayer save with the host's world state.
+    if (this.networkRoom) return false;
+    const payload = { version: 1, worldId: WORLD_ID, seed: SEED, worldName: this.worldName, gameMode: player.gameMode === 'creative' ? 'creative' : 'survival',
+      edits: [...world.edits].map(([key, id]) => [key, id, world.metaEdits.get(key) || 0]),
       settings: this.settings, spawnBed: this.spawnBed, timeOfDay: sky.timeOfDay, furnaces: [...furnaces], chests: [...chests], vehicles: vehicles.serialize(),
       items: itemEntities.filter(it => !it.dead).map(it => ({ id: it.id, count: it.count, damage: it.damage, pos: it.mesh.position.toArray(), vy: it.vy, age: it.age })),
       player: { pos: player.pos.toArray(), yaw: player.yaw, pitch: player.pitch, health: player.health, inventory: player.inventory, armor: player.armor, hotbarIndex: player.hotbarIndex, stats: player.stats } };
-    try { localStorage.setItem(SAVE_KEY, JSON.stringify(payload)); return true; }
-    catch (error) { console.warn('Could not save world', error); ui?.notify('Save failed — browser storage may be full'); return false; }
+    try {
+      const save = normalizeWorldSave(payload);
+      if (!save) throw new Error('The current world state is incomplete.');
+      localStorage.setItem(SAVE_KEY, JSON.stringify(save));
+      return true;
+    } catch (error) { console.warn('Could not save world', error); ui?.notify('Save failed — browser storage may be full'); return false; }
+  },
+  exportWorldSave(requestedWorldId = WORLD_ID) {
+    if (this.networkRoom && requestedWorldId === WORLD_ID) throw new Error('Leave the multiplayer room before exporting a local world save.');
+    if (this.started && requestedWorldId === WORLD_ID && !this.saveGame()) throw new Error('Could not save this world before exporting.');
+    const save = normalizeWorldSave(JSON.parse(localStorage.getItem(`aislopcraft:world:${requestedWorldId}`) || 'null'));
+    if (!save || save.worldId !== requestedWorldId) throw new Error('There is no saved world for that selection yet.');
+    const blob = new Blob([encodeWorldSave(save)], { type: 'application/json' });
+    const href = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const slug = (save.worldName || save.seed).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'world';
+    link.href = href; link.download = `aislopcraft-${slug}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(href), 1000);
+    return true;
+  },
+  async importWorldSaveFile(file) {
+    if (!file || file.size > MAX_WORLD_SAVE_BYTES) throw new Error('Save file is too large (maximum 16 MB).');
+    let save = decodeWorldSave(await file.text());
+    if (localStorage.getItem(`aislopcraft:world:${save.worldId}`)) {
+      const newId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      save = { ...save, worldId: `import-${newId}`.slice(0, 128) };
+    }
+    try { localStorage.setItem(`aislopcraft:world:${save.worldId}`, JSON.stringify(save)); }
+    catch { throw new Error('Browser storage is full. Remove another saved world or clear browser site data, then try again.'); }
+    persistSettings(localStorage, save.settings);
+    const url = new URL(location.href);
+    url.searchParams.set('id', save.worldId);
+    url.searchParams.set('seed', save.seed);
+    url.searchParams.set('world', save.worldName || save.seed);
+    url.searchParams.set('mode', save.gameMode);
+    url.searchParams.delete('room');
+    location.assign(url.href);
+    return true;
   },
   resetWorld() {
     try { localStorage.removeItem(SAVE_KEY); } catch {}
@@ -601,6 +685,7 @@ const game = {
           if (saved.stats && typeof saved.stats === 'object') Object.assign(player.stats, saved.stats);
           camera.position.set(player.pos.x, player.pos.y + 1.62, player.pos.z);
         }
+        player.gameMode = this.networkRoom?.gameMode || savedGame?.gameMode || START_GAME_MODE;
         if (this.networkRoom) {
           player.gameMode = this.networkRoom.gameMode;
           if (player.gameMode === 'creative') {
@@ -713,9 +798,12 @@ void game.restoreResourcePack().then(() => ui._iconCache.clear());
 game.applySettings();
 if (Number.isFinite(savedGame?.timeOfDay)) sky.time = ((savedGame.timeOfDay % 1) + 1) % 1;
 let saveClock = 0;
-window.addEventListener('beforeunload', () => { if (game.started) game.saveGame(); });
+window.addEventListener('beforeunload', () => { if (game.started && !game.networkRoom) game.saveGame(); });
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && game.started && ui.mode === 'game') { game.saveGame(); ui.setMode('pause'); }
+  if (document.hidden && game.started && ui.mode === 'game') {
+    if (!game.networkRoom) game.saveGame();
+    ui.setMode('pause');
+  }
 });
 
 // ---- particles, first-person arm, target wireframe & crack overlay ----
@@ -1666,7 +1754,7 @@ function frame() {
   const simulationPaused = game.started && ui.mode !== 'title' &&
     ['pause', 'death', 'inventory', 'crafting', 'furnace', 'chest'].includes(ui.mode);
   if (!simulationPaused) game.time += dt;
-  if (game.started && ui.mode !== 'title') {
+  if (game.started && ui.mode !== 'title' && !game.networkRoom) {
     saveClock += dt;
     if (saveClock >= 15) { game.saveGame(); saveClock = 0; }
   }
@@ -1875,9 +1963,15 @@ function frame() {
   // One shared update drives terrain, entities, particles and the hand on both
   // the title backdrop and gameplay frames.
   lighting.update({ sky, time: game.time, style: game.shaderStyle, fog: scene.fog });
+  renderer.getDrawingBufferSize(renderBufferSize);
+  if (game.shaderStyle === 'psx') psxPostProcess.setSize(renderBufferSize.x, renderBufferSize.y);
+  // Vertex snapping follows the full viewport grid; the later post pass handles
+  // the independent low-resolution image scale.
+  lighting.shared.uScreenSize.value.copy(renderBufferSize);
   lighting.updateShadows(renderer, scene, camera, sky, game.shaderStyle, game.time);
-  renderer.render(scene, camera);
-  if (game.started && ui.mode !== 'title') firstPersonArm.render(renderer);
+  const drawArm = game.started && ui.mode !== 'title' ? targetRenderer => firstPersonArm.render(targetRenderer) : null;
+  if (game.shaderStyle === 'psx') psxPostProcess.render(renderer, scene, camera, drawArm);
+  else { renderer.render(scene, camera); drawArm?.(renderer); }
 }
 
 frame();

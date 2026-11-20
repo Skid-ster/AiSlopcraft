@@ -8,7 +8,7 @@ const MAX_EDITS = 50_000;
 const MAX_MESSAGE = 1024 * 1024;
 const ROOM_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const cleanText = (value, max = 24) => String(value ?? '').replace(/[<>\u0000-\u001f\u007f]/g, '').trim().slice(0, max);
-const SHADER_STYLES = new Set(['classic', 'vibrant', 'cinematic', 'shader']);
+const SHADER_STYLES = new Set(['classic', 'vibrant', 'cinematic', 'shader', 'psx']);
 const MAX_SHARED_ATLAS_BYTES = 512 * 1024;
 function sanitizeVisualSettings(value) {
   if (value?.mode !== 'forced') return { mode: 'individual' };

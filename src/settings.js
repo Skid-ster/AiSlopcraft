@@ -54,7 +54,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   keys: { ...DEFAULT_KEYS },
 });
 
-const SHADER_STYLES = ['classic', 'vibrant', 'cinematic', 'shader'];
+const SHADER_STYLES = ['classic', 'vibrant', 'cinematic', 'shader', 'psx'];
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const num = (v, fallback) => Number.isFinite(+v) ? +v : fallback;
 

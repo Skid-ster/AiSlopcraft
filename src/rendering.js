@@ -4,7 +4,7 @@
 // shadow map rendered from the voxel geometry.
 import * as THREE from 'three';
 
-export const SHADER_STYLES = ['classic', 'vibrant', 'cinematic', 'shader'];
+export const SHADER_STYLES = ['classic', 'vibrant', 'cinematic', 'shader', 'psx'];
 export const shaderStyleId = style => Math.max(0, SHADER_STYLES.indexOf(style));
 
 export function syncFogUniforms(materials, fog) {
@@ -23,6 +23,9 @@ const vertexShader = /* glsl */ `
   attribute vec4 aTint;
   uniform float uTime;
   uniform float uWater;
+  uniform float uShaderStyle;
+  uniform vec2 uScreenSize;
+  uniform float uPsxSnap;
   #ifdef VOXEL_LIGHT
     attribute vec2 aLight;
     attribute vec3 aNormal;
@@ -36,6 +39,7 @@ const vertexShader = /* glsl */ `
   varying float vInstanceEmission;
   varying vec4 vTint;
   varying vec2 vUv;
+  varying vec3 vAffineUv;
   varying vec2 vLight;
   varying vec3 vWorldNormal;
   varying vec3 vWorldPosition;
@@ -46,6 +50,7 @@ const vertexShader = /* glsl */ `
       vTint.rgb *= instanceColor;
     #endif
     vUv = uv;
+    vAffineUv = vec3(uv, 1.0);
     vInstanceEmission = 0.0;
     vec3 objectNormal = normal;
     #ifdef VOXEL_LIGHT
@@ -71,7 +76,15 @@ const vertexShader = /* glsl */ `
     vWorldNormal = normalize(mat3(modelMatrix) * objectNormal);
     vec4 mv = viewMatrix * world;
     vFogDist = length(mv.xyz);
-    gl_Position = projectionMatrix * mv;
+    vec4 clip = projectionMatrix * mv;
+    if (uShaderStyle > 3.5) {
+      float inaccuracy = uPsxSnap / sqrt(max(clip.w, 0.001)) + 0.1;
+      vec2 snapGrid = max(uScreenSize * 0.75, vec2(1.0));
+      vec2 ndc = floor((clip.xy / clip.w) * snapGrid / inaccuracy) * inaccuracy / snapGrid;
+      clip.xy = ndc * clip.w;
+      vAffineUv = vec3(uv * clip.w, clip.w);
+    }
+    gl_Position = clip;
   }
 `;
 
@@ -103,6 +116,7 @@ const fragmentShader = /* glsl */ `
   uniform float uShadowTexel;
   varying vec4 vTint;
   varying vec2 vUv;
+  varying vec3 vAffineUv;
   varying vec2 vLight;
   varying vec3 vWorldNormal;
   varying vec3 vWorldPosition;
@@ -142,7 +156,7 @@ const fragmentShader = /* glsl */ `
       float highlight = smoothstep(0.35, 1.0, luminance);
       color *= mix(vec3(1.0), vec3(0.90, 0.97, 1.10), shadow * 0.35);
       color *= mix(vec3(1.0), vec3(1.08, 1.01, 0.90), highlight * 0.30);
-    } else if (uShaderStyle > 2.5) {
+    } else if (uShaderStyle > 2.5 && uShaderStyle < 3.5) {
       color = mix(vec3(luminance), color, 1.06);
       color = (color - 0.18) * 1.03 + 0.18;
       color = color / (color + vec3(0.65)) * 1.65;
@@ -152,6 +166,7 @@ const fragmentShader = /* glsl */ `
 
   void main() {
     vec2 uv = vUv;
+    if (uShaderStyle > 3.5) uv = vAffineUv.xy / max(vAffineUv.z, 0.0001);
     if (uWater > 0.5) uv += vec2(uTime * 0.006, uTime * 0.014);
     vec4 tex = mix(vec4(1.0), texture2D(map, uv), uHasMap);
     float alpha = tex.a * vTint.a * uOpacity;
@@ -188,10 +203,10 @@ const fragmentShader = /* glsl */ `
       float fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(waterNormal, viewDir), 0.0), 5.0);
       vec3 reflected = reflect(-viewDir, waterNormal);
       vec3 reflection = mix(uFogColor, uSkyTint, clamp(reflected.y * 0.7 + 0.3, 0.0, 1.0));
-      float strength = uShaderStyle > 2.5 ? 0.72 : 0.28;
+      float strength = uShaderStyle > 2.5 && uShaderStyle < 3.5 ? 0.72 : 0.28;
       rgb = mix(rgb, reflection * (0.35 + 0.65 * uSky), fresnel * strength);
       float specular = pow(max(dot(waterNormal, normalize(sunDir + viewDir)), 0.0), 96.0);
-      rgb += vec3(1.0, 0.90, 0.70) * specular * uSunIntensity * shadow * (uShaderStyle > 2.5 ? 0.9 : 0.25);
+      rgb += vec3(1.0, 0.90, 0.70) * specular * uSunIntensity * shadow * (uShaderStyle > 2.5 && uShaderStyle < 3.5 ? 0.9 : 0.25);
       alpha = mix(alpha, min(0.94, alpha + 0.16), fresnel);
     }
 
@@ -243,6 +258,7 @@ export class Lighting {
       uSkyTint: { value: new THREE.Color(1, 1, 1) },
       uBlockTint: { value: new THREE.Color(1.0, 0.80, 0.55) },
       uShaderStyle: { value: 3 },
+      uScreenSize: { value: new THREE.Vector2(1, 1) },
       uBrightness: { value: 1 },
       uSunDirection: { value: new THREE.Vector3(0, 1, 0) },
       uSunIntensity: { value: 1 },
@@ -273,6 +289,7 @@ export class Lighting {
         uHasEmissionMap: { value: opts.emissionMap ? 1 : 0 },
         uEmission: { value: opts.emission ?? 0 },
         uOpacity: { value: opts.opacity ?? 1 },
+        uPsxSnap: { value: opts.psxSnap ?? (opts.fog === false ? 10 : 15) },
         uAlphaTest: { value: opts.alphaTest ?? (opts.cutout ? 0.45 : 0) },
         uTint: { value: opts.tint?.isColor ? opts.tint.clone() : new THREE.Color(opts.tint ?? 0xffffff) },
         uObjectLight: { value: new THREE.Vector2(15, 0) },
@@ -357,12 +374,12 @@ export class Lighting {
       s.uSkyTint.value.setRGB(0.42 + 0.58 * t, 0.52 + 0.10 * t, 0.85 - 0.45 * t);
     }
     if (fog) syncFogUniforms([{ uniforms: s }], fog);
-    if (id < 2 || sky.sunDirection.y <= 0.06) s.uShadowStrength.value = 0;
+    if (id < 2 || id === 4 || sky.sunDirection.y <= 0.06) s.uShadowStrength.value = 0;
   }
 
   updateShadows(renderer, scene, camera, sky, style, time, force = false) {
     const id = shaderStyleId(style);
-    if (id < 2 || sky.sunDirection.y <= 0.06) { this.shared.uShadowStrength.value = 0; return; }
+    if (id < 2 || id === 4 || sky.sunDirection.y <= 0.06) { this.shared.uShadowStrength.value = 0; return; }
     if (!force && time - this.lastShadowTime < 0.12) return;
     const cameraMoved = this.lastShadowPosition.distanceToSquared(camera.position) > 0.25;
     const sunMoved = this.lastShadowSunDirection.distanceToSquared(sky.sunDirection) > 0.000004;
@@ -428,5 +445,114 @@ export class Lighting {
     this.white.dispose();
     for (const material of this.materials) material.dispose();
     this.materials.clear();
+  }
+}
+
+// Downsampled final pass adapted from the PSX shaderpack workflow: low internal
+// resolution, a 24-step palette, and a 4x4 ordered dither. The world/material
+// shader above also supplies affine UV interpolation and depth-scaled vertex
+// snapping. This is a native Three.js pass, not a runtime OptiFine loader.
+export class PSXPostProcess {
+  constructor(scale = 0.25) {
+    this.scale = Math.max(0.1, Math.min(1, scale));
+    this.target = new THREE.WebGLRenderTarget(1, 1, {
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+      depthBuffer: true,
+      stencilBuffer: false,
+    });
+    this.target.texture.generateMipmaps = false;
+    this.material = new THREE.ShaderMaterial({
+      uniforms: {
+        uScene: { value: this.target.texture },
+        uResolution: { value: new THREE.Vector2(1, 1) },
+      },
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = vec4(position.xy, 0.0, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform sampler2D uScene;
+        uniform vec2 uResolution;
+        varying vec2 vUv;
+        float bayer4(vec2 p) {
+          float x = mod(floor(p.x), 4.0);
+          float y = mod(floor(p.y), 4.0);
+          if (y < 1.0) {
+            if (x < 1.0) return 0.0; if (x < 2.0) return 8.0;
+            if (x < 3.0) return 2.0; return 10.0;
+          }
+          if (y < 2.0) {
+            if (x < 1.0) return 12.0; if (x < 2.0) return 4.0;
+            if (x < 3.0) return 14.0; return 6.0;
+          }
+          if (y < 3.0) {
+            if (x < 1.0) return 3.0; if (x < 2.0) return 11.0;
+            if (x < 3.0) return 1.0; return 9.0;
+          }
+          if (x < 1.0) return 15.0; if (x < 2.0) return 7.0;
+          if (x < 3.0) return 13.0; return 5.0;
+        }
+        void main() {
+          vec2 pixel = floor(vUv * uResolution) + 0.5;
+          vec2 sampleUv = pixel / uResolution;
+          vec3 color = texture2D(uScene, sampleUv).rgb;
+          color = clamp(1.2 * (color - 0.5) + 0.5, 0.0, 1.0);
+          float dither = (bayer4(pixel) - 7.5) * 0.035;
+          color = floor(clamp(color * 24.0 + dither, 0.0, 23.0)) / 24.0;
+          gl_FragColor = vec4(color, 1.0);
+          #include <colorspace_fragment>
+        }
+      `,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.material);
+    quad.frustumCulled = false;
+    this.scene = new THREE.Scene();
+    this.scene.add(quad);
+    this.camera = new THREE.Camera();
+    this._bufferSize = new THREE.Vector2();
+    this._previousTarget = null;
+  }
+
+  setSize(width, height) {
+    const w = Math.max(1, Math.round(width * this.scale));
+    const h = Math.max(1, Math.round(height * this.scale));
+    if (this.target.width !== w || this.target.height !== h) this.target.setSize(w, h);
+    this.material.uniforms.uResolution.value.set(w, h);
+    return this.material.uniforms.uResolution.value;
+  }
+
+  render(renderer, scene, camera, overlays) {
+    renderer.getDrawingBufferSize(this._bufferSize);
+    const resolution = this.setSize(this._bufferSize.x, this._bufferSize.y);
+    this._previousTarget = renderer.getRenderTarget();
+    const previousAutoClear = renderer.autoClear;
+    try {
+      renderer.setRenderTarget(this.target);
+      renderer.autoClear = true;
+      renderer.clear(true, true, true);
+      renderer.render(scene, camera);
+      overlays?.(renderer);
+      renderer.setRenderTarget(this._previousTarget);
+      renderer.autoClear = true;
+      this.material.uniforms.uScene.value = this.target.texture;
+      renderer.render(this.scene, this.camera);
+    } finally {
+      renderer.setRenderTarget(this._previousTarget);
+      renderer.autoClear = previousAutoClear;
+    }
+    return resolution;
+  }
+
+  dispose() {
+    this.target.dispose();
+    this.material.dispose();
+    this.scene.traverse(object => object.geometry?.dispose());
   }
 }

@@ -1,0 +1,44 @@
+/* 1.7.10-inspired title, world browser and world creation overlays. */
+.title-primary-stack { width: 100%; display: flex; flex-direction: column; gap: 7px; }
+.title-primary-stack .btn { width: 100%; min-width: 0; }
+.title-controls-row { margin-top: 24px; gap: 8px; align-items: stretch; }
+.title-screen .title-controls-row .language-button { flex: 0 0 48px; width: 48px; padding: 5px; }
+.language-button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; vertical-align: middle; }
+.title-utility-row { display: flex; justify-content: center; gap: 18px; margin-top: 7px; }
+.title-link { border: 0; padding: 3px 5px; color: #ddd; background: transparent; font: 10px 'Pixel UI', monospace; text-shadow: 1px 1px #111; cursor: pointer; }
+.title-link:hover { color: #fff; text-decoration: underline; }
+.title-screen .title-utility-row .title-link { width: auto; min-width: 0; }
+.title-screen .btn:disabled { color: #888; background: linear-gradient(#454545, #393939); outline: none; }
+.world-menu-screen { z-index: 35; padding: 18px; overflow: auto; background: linear-gradient(rgba(0,0,0,.24),rgba(0,0,0,.24)), url('./dirt.svg') repeat; background-size: auto, 64px 64px; image-rendering: pixelated; }
+.world-menu-card, .world-create-card { width: min(960px, 96vw); min-height: min(78vh, 620px); display: flex; flex-direction: column; align-items: stretch; gap: 15px; padding: 22px; color: #f2f2f2; text-shadow: 2px 2px #333; }
+.world-menu-card h2, .world-create-card h2 { text-align: center; font: 20px 'Pixel UI', monospace; margin-bottom: 4px; }
+.world-list { flex: 1; min-height: 220px; max-height: 56vh; overflow-y: auto; background: rgba(0,0,0,.72); border: 2px solid #21180f; box-shadow: inset 2px 2px #120d08, inset -2px -2px #51402e; padding: 5px; }
+.world-list-empty { display: grid; place-items: center; min-height: 200px; color: #aaa; font: 13px 'Pixel UI', monospace; text-align: center; padding: 20px; }
+.world-list-row { width: 100%; min-height: 58px; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; gap: 5px; margin: 2px 0; padding: 8px 12px; border: 1px solid transparent; color: white; background: transparent; font: 12px 'Pixel UI', monospace; text-align: left; cursor: pointer; }
+.world-list-row span { color: #bcbcbc; font-size: 9px; }
+.world-list-row:hover, .world-list-row[aria-selected="true"] { border-color: #d4d4d4; background: rgba(255,255,255,.14); }
+.world-actions { display: flex; justify-content: center; gap: 8px; }
+.world-actions .btn { min-width: 0; flex: 1; }
+.world-actions-primary .btn { min-height: 38px; }
+.world-actions-secondary .btn { min-height: 34px; }
+.world-actions-portable { margin-top: -9px; }
+.world-actions-portable .title-link { font-size: 9px; }
+.world-menu-card .btn:disabled { color: #858585; cursor: default; background: linear-gradient(#505050,#393939); }
+.world-create-card { width: min(620px, 96vw); min-height: min(78vh, 660px); align-items: center; padding-top: 35px; }
+.world-create-card > label { width: min(100%, 420px); display: grid; gap: 8px; font: 12px 'Pixel UI', monospace; }
+.world-create-card input { width: 100%; padding: 10px; border: 2px solid #aaa; border-radius: 0; outline: 2px solid #222; color: white; background: #101010; font: 14px 'Pixel UI', monospace; user-select: text; }
+.world-save-location { width: min(100%, 420px); color: #aaa; font: 10px 'Pixel UI', monospace; }
+.world-mode-button, .world-create-card #world-more-options { width: min(100%, 420px); min-width: 0; }
+.world-mode-description { width: min(100%, 420px); min-height: 36px; color: #aaa; font: 10px/1.5 'Pixel UI', monospace; }
+.world-create-card .world-seed-field { margin-top: -2px; }
+.world-create-card .world-actions { width: min(100%, 620px); margin-top: auto; }
+.world-create-card [hidden] { display: none !important; }
+.player-preview canvas { display: block; width: 120px; height: 176px; image-rendering: pixelated; touch-action: none; }
+@media(max-width:600px) {
+  .world-menu-screen { padding: 8px; }
+  .world-menu-card, .world-create-card { min-height: calc(100vh - 16px); padding: 14px; gap: 10px; }
+  .world-actions-secondary { display: grid; grid-template-columns: 1fr 1fr; }
+  .title-controls-row { margin-top: 18px; }
+  .title-utility-row { gap: 7px; }
+  .title-link { font-size: 8px; }
+}

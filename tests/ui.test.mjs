@@ -44,6 +44,7 @@ const btn = (id) => document.getElementById(id);
 const calls = [];
 let installedPacks = [{ id: 'pack-1710', name: 'Beta 1.7.10 Pack', count: 5 }];
 let activePackId = null;
+let testSavedWorlds = [];
 const player = {
   sensitivity: 0.5,
   health: 20,
@@ -80,6 +81,14 @@ const game = {
   atlasCanvas: document.createElement('canvas'),
   itemIconsCanvas: document.createElement('canvas'),
   start: () => calls.push(['game.start']),
+  listSavedWorlds: () => testSavedWorlds,
+  openLocalWorld(seed, name, mode, worldId) {
+    calls.push(['game.openLocalWorld', seed, name, mode, worldId]);
+    ui.hide('title-screen'); ui.setMode('game'); this.start();
+  },
+  saveGame: () => { calls.push(['game.saveGame']); return true; },
+  exportWorldSave: () => calls.push(['game.exportWorldSave']),
+  importWorldSaveFile: async () => calls.push(['game.importWorldSaveFile']),
   respawn: () => calls.push(['game.respawn']),
 };
 
@@ -92,7 +101,12 @@ try {
   ui = new UI(game);
 
   check('resource pack manager is available from the title screen', !!btn('btn-pack'));
-  check('Beta-style title has game, pack, options and quit entries', !!btn('btn-singleplayer') && !!btn('btn-multiplayer') && !!btn('btn-pack') && !!btn('btn-quit'));
+  check('title keeps Singleplayer and Multiplayer, with no unsupported Realms button', !!btn('btn-singleplayer') && !!btn('btn-multiplayer') && !btn('btn-realms') && !!btn('btn-pack') && !!btn('btn-saves') && !!btn('btn-quit'));
+  btn('btn-saves').click();
+  check('portable world-save screen opens from the title', visible('world-save-screen') && !!btn('save-import-file'));
+  btn('save-export').click();
+  check('save export control calls the game exporter', calls.some(call => call[0] === 'game.exportWorldSave'));
+  btn('save-done').click();
   btn('btn-pack').click();
   check('texture pack manager opens with 1.7.10 support information', visible('texture-pack-screen') && document.querySelector('.pack-compat-note')?.textContent.includes('OptiFine'));
   check('installed texture packs and default textures are listed', document.querySelectorAll('.resource-pack-row').length === 2);
@@ -124,6 +138,8 @@ try {
   check('brightness slider applies live', Math.abs(game.brightness - 1.2) < 1e-6);
   btn('opt-shader').click();
   check('Shader Lite preset applies immediately', game.shaderStyle === 'shader');
+  btn('opt-shader').click();
+  check('Minecraft PSX-compatible WebGL shader preset applies', game.shaderStyle === 'psx');
   btn('opt-render').value = '8';
   btn('opt-render').dispatchEvent(new dom.window.Event('input'));
   check('render distance slider applies', game.renderDistance === 8);
@@ -158,13 +174,49 @@ try {
   btn('btn-multiplayer').click();
   check('Multiplayer lobby opens', document.getElementById('multiplayer-screen').style.display === 'flex');
   check('host can choose individual or forced shader and texture settings', !!btn('mp-visual-policy') && !!btn('mp-visual-policy').querySelector('[value="forced"]'));
+  installedPacks = [{ id: 'pack-share', name: 'Host Pack', count: 8 }];
+  activePackId = 'pack-share';
+  ui.openMultiplayer();
+  game.getResourcePackForSharing = id => id ? { name: 'Host Pack', atlasData: 'data:image/png;base64,encoded-atlas' } : null;
+  game.world = { edits: new Map() };
+  let createdVisuals = null;
+  ui.multiplayerClient = {
+    async createRoom(options) { createdVisuals = options.visuals; return { name: 'Test room', gameMode: 'survival' }; },
+    send() {},
+  };
+  ui.connectMultiplayer = async () => ({ playerName: 'Host' });
+  ui.enterMultiplayer = async () => {};
+  btn('mp-visual-policy').value = 'individual';
+  btn('mp-visual-policy').dispatchEvent(new dom.window.Event('change'));
+  check('individual visual policy leaves host shader and pack controls disabled', btn('mp-host-shader').disabled && btn('mp-host-texture-pack').disabled);
+  await ui.createMultiplayerRoom();
+  check('individual room creation leaves visual choices to each player', createdVisuals?.mode === 'individual' && !('resourcePack' in createdVisuals));
+  btn('mp-visual-policy').value = 'forced';
+  btn('mp-visual-policy').dispatchEvent(new dom.window.Event('change'));
+  btn('mp-host-shader').value = 'psx';
+  btn('mp-host-texture-pack').value = 'pack-share';
+  check('forced policy enables explicit shader and texture-pack selection', !btn('mp-host-shader').disabled && !btn('mp-host-texture-pack').disabled);
+  await ui.createMultiplayerRoom();
+  check('forced room creation sends the selected shader and host texture pack', createdVisuals?.mode === 'forced' && createdVisuals.shaderStyle === 'psx' && createdVisuals.resourcePack?.name === 'Host Pack');
   check('Lobby offers public/private and survival/creative options',
     document.getElementById('mp-access').options.length === 2 && document.getElementById('mp-mode').options.length === 2);
   btn('mp-back').click();
 
   // ---------- title: Singleplayer ----------
+  testSavedWorlds = [{ id: 'save-id-1', seed: 'map-seed-1', name: 'Existing World', gameMode: 'survival' }];
   btn('btn-singleplayer').click();
-  check('Singleplayer click does not throw', threw === null);
+  check('Singleplayer opens the saved-world selector', visible('world-select-screen') && !!btn('world-create'));
+  check('saved worlds are listed with Play, Create, Rename, Delete, and Re-Create actions', document.querySelector('.world-list-row strong')?.textContent === 'Existing World' && !!btn('world-play') && !!btn('world-rename') && !!btn('world-delete') && !!btn('world-recreate'));
+  btn('world-create').click();
+  btn('new-world-name').value = 'Reference World';
+  btn('new-world-name').dispatchEvent(new dom.window.Event('input'));
+  btn('new-world-mode').click();
+  btn('world-more-options').click();
+  btn('new-world-seed').value = 'test-seed';
+  check('world creator exposes name, game mode, and optional seed', visible('world-create-screen') && btn('new-world-mode').textContent.includes('Creative') && !btn('world-seed-field').hidden);
+  btn('world-create-confirm').click();
+  check('new world launches with the requested name, seed, and mode', calls.some(c => c[0] === 'game.openLocalWorld' && c[1] === 'test-seed' && c[2] === 'Reference World' && c[3] === 'creative' && c[4].startsWith('world-')));
+  check('Singleplayer flow does not throw', threw === null);
   if (threw) console.log('      → ' + threw.message);
   check('audio initialised + click sound played',
     calls.some(c => c[0] === 'audio.init') && calls.some(c => c[0] === 'audio.click'));
@@ -195,6 +247,7 @@ try {
   player.inventory[9] = { id: PLANKS, count: 3, damage: 0 };
   ui.onKey(key('KeyE'));
   check('E opens inventory', ui.mode === 'inventory' && visible('inventory-screen'));
+  check('inventory has a pointer-controlled player model preview canvas', !!btn('player-preview-canvas') && btn('player-preview-canvas').dataset.playerPreview === 'rotating');
   ui.refresh();
   check('inv slot renders item', document.querySelector('#inv-main .slot')?.classList.contains('has-item'));
 
@@ -240,6 +293,8 @@ try {
   // ---------- pause menu ----------
   ui.onKey(key('Escape'));
   check('Escape opens pause', ui.mode === 'pause' && visible('pause-screen'));
+  btn('btn-save-now').click();
+  check('pause menu can save the local world immediately', calls.some(c => c[0] === 'game.saveGame'));
   btn('btn-options2').click();
   check('pause Options opens', !!btn('options-screen'));
   btn('opt-done').click();

@@ -2,13 +2,14 @@
 // Every control is wired to game.settings and applied immediately.
 import { DEFAULT_KEYS, KEY_LABELS, keyLabel, rebindKey } from '../settings.js';
 
-const SHADERS = ['classic', 'vibrant', 'cinematic', 'shader'];
-const SHADER_NAMES = { classic: 'Classic', vibrant: 'Vibrant', cinematic: 'Cinematic', shader: 'Shader Lite' };
+const SHADERS = ['classic', 'vibrant', 'cinematic', 'shader', 'psx'];
+const SHADER_NAMES = { classic: 'Classic', vibrant: 'Vibrant', cinematic: 'Cinematic', shader: 'Shader Lite', psx: 'PSX (1.7.10)' };
 const SHADER_HINTS = {
   classic: 'Beta-style light and fog, with no enhanced sun shadows.',
   vibrant: 'Brighter, more saturated colors. No sun-shadow pass.',
   cinematic: 'Warm color grading with soft, filtered block shadows.',
   shader: 'Shader Lite: dynamic sun shadows and animated reflective water. External OptiFine shaderpack ZIPs are not supported by this WebGL renderer.',
+  psx: 'PSX shader: affine textures, depth-scaled vertex snapping, 25% internal resolution, 24-color grading and ordered dithering. Adapted from an open-source pack tested on 1.7.10; not an arbitrary shader ZIP loader.',
 };
 const FPS_STEPS = [0, 30, 60, 90, 120, 144, 165, 240, 260];
 const DIFFICULTIES = ['Peaceful', 'Easy', 'Normal', 'Hard'];

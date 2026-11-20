@@ -1,3 +1,5 @@
+@import './ui/world-menus.css';
+
 /* AiSlopcraft — classic Minecraft Beta 1.7.3 UI look */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 

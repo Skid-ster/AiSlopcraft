@@ -168,6 +168,9 @@ try {
   const individual = await request(individualHost, 'room:create', { playerName: 'Solo', name: 'Personal visuals' });
   assert.deepEqual(individual.visuals, { mode: 'individual' }, 'rooms default to player-controlled visuals');
   await request(individualHost, 'room:close');
+  const psxRoom = await request(individualHost, 'room:create', { playerName: 'Solo', visuals: { mode: 'forced', shaderStyle: 'psx' } });
+  assert.equal(psxRoom.visuals.shaderStyle, 'psx', 'relay accepts the 1.7.10 PSX shader preset');
+  await request(individualHost, 'room:close');
   const invalidVisuals = await request(individualHost, 'room:create', {
     playerName: 'Solo', visuals: { mode: 'forced', shaderStyle: 'shader', resourcePack: { name: 'Bad pack', atlasData: 'data:image/png;base64,AAAA' } },
   });
