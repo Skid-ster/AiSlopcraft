@@ -801,6 +801,9 @@ html, body {
 .mp-room { width: 100%; padding: 8px; border: 2px solid #222; color: #fff; background: #666; text-align: left; font: 9px 'Courier New', monospace; cursor: pointer; }
 .mp-room:hover { background: #78864c; }
 .mp-status { min-height: 2.5em; margin: 14px 0; color: #f1e39b; font: 10px/1.5 'Courier New', monospace; overflow-wrap: anywhere; }
+.mp-deploy-link { display: inline-block; margin: 5px 0; padding: 8px 12px; border: 2px solid #171717; color: #171717; background: #f1e39b; text-shadow: none; font-weight: bold; }
+.mp-deploy-link:hover, .mp-deploy-link:focus-visible { color: #fff; background: #65743f; }
+.mp-deploy-help { color: #ddd; font-size: 8px; }
 .mp-footer { display: flex; align-items: center; gap: 14px; font: 9px/1.5 'Courier New', monospace; }
 .mp-footer .btn { flex: 0 0 130px; margin: 0; }
 .network-panel { position: absolute; top: 12px; right: 12px; width: min(360px, 92vw); padding: 8px; border: 2px solid #111; background: rgba(18,18,18,.82); color: #fff; font: 9px/1.5 'Courier New', monospace; pointer-events: auto; text-shadow: 1px 1px #000; }
