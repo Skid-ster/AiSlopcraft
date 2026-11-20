@@ -171,9 +171,13 @@ try {
 
   // ---------- title: multiplayer lobby ----------
   check('Multiplayer button is enabled', !btn('btn-multiplayer').disabled);
+  check('title clearly tells players where to create an online account', document.querySelector('.title-multiplayer-hint')?.textContent.includes('sign up or log in'));
   btn('btn-multiplayer').click();
   check('Multiplayer lobby opens', document.getElementById('multiplayer-screen').style.display === 'flex');
   check('custom relay configuration is hidden under advanced settings by default', !!document.querySelector('.mp-custom-relay') && !document.querySelector('.mp-custom-relay').open);
+  check('multiplayer requires an account with username and password fields', !!btn('mp-username') && !!btn('mp-auth-password') && !!btn('mp-login') && !!btn('mp-signup'));
+  check('signup accepts the requested eight-character password example', btn('mp-auth-password').minLength === 8 && btn('mp-auth-password').maxLength === 128);
+  check('account panel warns about unavailable password resets and free-host storage loss', document.querySelector('#mp-auth-panel small')?.textContent.includes('free-hosted accounts may be lost'));
   check('static-only hosting links to the Azure multiplayer setup guide', document.getElementById('mp-status').textContent.includes('static hosting') && document.querySelector('.mp-deploy-link')?.href.endsWith('#deploy-to-azure'));
   check('deployment help states the five-room and five-player limits', document.querySelector('.mp-deploy-help')?.textContent.includes('5 rooms') && document.querySelector('.mp-deploy-help')?.textContent.includes('5 players per room'));
   check('host can choose individual or forced shader and texture settings', !!btn('mp-visual-policy') && !!btn('mp-visual-policy').querySelector('[value="forced"]'));
@@ -181,10 +185,12 @@ try {
   activePackId = 'pack-share';
   ui.openMultiplayer();
   game.getResourcePackForSharing = id => id ? { name: 'Host Pack', atlasData: 'data:image/png;base64,encoded-atlas' } : null;
-  game.world = { edits: new Map() };
+  game.world = { edits: new Map([['1,2,3', 4], ['2,2,3', 5]]), metaEdits: new Map([['1,2,3', 1]]) };
   let createdVisuals = null;
+  let publishedEdits = [];
   ui.multiplayerClient = {
     async createRoom(options) { createdVisuals = options.visuals; return { name: 'Test room', gameMode: 'survival' }; },
+    async request(type, payload) { if (type === 'world:snapshot') publishedEdits.push(...payload.entries); return { type: 'world:snapshot:accepted' }; },
     send() {},
   };
   ui.connectMultiplayer = async () => ({ playerName: 'Host' });
@@ -194,6 +200,7 @@ try {
   check('individual visual policy leaves host shader and pack controls disabled', btn('mp-host-shader').disabled && btn('mp-host-texture-pack').disabled);
   await ui.createMultiplayerRoom();
   check('individual room creation leaves visual choices to each player', createdVisuals?.mode === 'individual' && !('resourcePack' in createdVisuals));
+  check('host publishes saved world edits as compact metadata-preserving batches', publishedEdits.length === 2 && publishedEdits[0][1][0] === 4 && publishedEdits[0][1][1] === 1);
   btn('mp-visual-policy').value = 'forced';
   btn('mp-visual-policy').dispatchEvent(new dom.window.Event('change'));
   btn('mp-host-shader').value = 'psx';
@@ -201,6 +208,11 @@ try {
   check('forced policy enables explicit shader and texture-pack selection', !btn('mp-host-shader').disabled && !btn('mp-host-texture-pack').disabled);
   await ui.createMultiplayerRoom();
   check('forced room creation sends the selected shader and host texture pack', createdVisuals?.mode === 'forced' && createdVisuals.shaderStyle === 'psx' && createdVisuals.resourcePack?.name === 'Host Pack');
+  game.networkRoom = { name: 'Test room', gameMode: 'survival', code: 'ABC234' };
+  game.remotePlayers = new Map([['guest-id', {}]]);
+  ui.updateNetworkPanel();
+  check('multiplayer HUD shows the actual five-player room capacity', document.getElementById('network-room-label').textContent.includes('2/5'));
+  game.networkRoom = null;
   check('Lobby offers public/private and survival/creative options',
     document.getElementById('mp-access').options.length === 2 && document.getElementById('mp-mode').options.length === 2);
   btn('mp-back').click();

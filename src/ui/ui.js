@@ -90,6 +90,7 @@ export class UI {
         <div class="title-primary-stack">
           <button class="btn" id="btn-singleplayer">Singleplayer</button>
           <button class="btn" id="btn-multiplayer">Multiplayer</button>
+          <small class="title-multiplayer-hint">Online play: sign up or log in from Multiplayer</small>
         </div>
         <div class="title-button-row title-secondary-row title-controls-row">
           <button class="btn language-button" id="btn-language" title="Language settings are not available yet" aria-label="Language settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c5 5 5 13 0 18m0-18c-5 5-5 13 0 18"/></svg></button>
@@ -377,9 +378,25 @@ export class UI {
           </label>
           <small>Only needed when this game is hosted on a static site. Leave blank to use the automatic address.</small>
         </details>
-        <label>Your player name
-          <input id="mp-player-name" maxlength="20" placeholder="Player" autocomplete="nickname">
-        </label>
+        <section class="mp-auth-panel" id="mp-auth-panel">
+          <h3>Account required</h3>
+          <p>Sign up once, then log in on any device. Your account name is your player name.</p>
+          <label>Username
+            <input id="mp-username" maxlength="20" minlength="3" pattern="[A-Za-z0-9_]{3,20}" placeholder="play565" autocomplete="username">
+          </label>
+          <label>Password
+            <input id="mp-auth-password" type="password" minlength="8" maxlength="128" placeholder="At least 8 characters" autocomplete="current-password">
+          </label>
+          <div class="mp-auth-actions">
+            <button class="btn" id="mp-login" type="button">Log in</button>
+            <button class="btn" id="mp-signup" type="button">Create account</button>
+          </div>
+          <small>No email is required. Password reset is unavailable, and free-hosted accounts may be lost if the server resets. Use a unique password you can remember.</small>
+        </section>
+        <div class="mp-account-panel" id="mp-account-panel" hidden>
+          <span id="mp-account-label">Signed in</span>
+          <button class="btn" id="mp-logout" type="button">Log out</button>
+        </div>
         <div class="mp-columns">
           <section>
             <h3>Create a world</h3>
@@ -421,6 +438,12 @@ export class UI {
     div.querySelector('#btn-multiplayer').addEventListener('click', () => this.openMultiplayer());
     multiplayer.querySelector('#mp-back').addEventListener('click', () => { multiplayer.style.display = 'none'; });
     multiplayer.querySelector('#mp-refresh').addEventListener('click', () => this.refreshPublicRooms());
+    multiplayer.querySelector('#mp-login').addEventListener('click', () => this.authenticateMultiplayer('auth:login'));
+    multiplayer.querySelector('#mp-signup').addEventListener('click', () => this.authenticateMultiplayer('auth:signup'));
+    multiplayer.querySelector('#mp-auth-password').addEventListener('keydown', event => {
+      if (event.key === 'Enter') { event.preventDefault(); this.authenticateMultiplayer('auth:login'); }
+    });
+    multiplayer.querySelector('#mp-logout').addEventListener('click', () => this.logoutMultiplayer());
     multiplayer.querySelector('#mp-create').addEventListener('click', () => this.createMultiplayerRoom());
     multiplayer.querySelector('#mp-join').addEventListener('click', () => this.joinMultiplayerRoom());
     multiplayer.querySelector('#mp-access').addEventListener('change', () => {
@@ -432,7 +455,9 @@ export class UI {
     });
     this.multiplayerClient = this.game.multiplayerClient || null;
     multiplayer.querySelector('#mp-relay').value = this.game.multiplayerRelay || window.localStorage.getItem('aislopcraft:multiplayer-relay') || '';
-    multiplayer.querySelector('#mp-player-name').value = window.localStorage.getItem('aislopcraft:multiplayer-name') || '';
+    multiplayer.querySelector('#mp-username').value = window.localStorage.getItem('aislopcraft:account-name') || '';
+    this.multiplayerAccount = this.multiplayerClient?.account || null;
+    this.updateMultiplayerAccountUI();
     multiplayer.querySelector('#mp-code').value = new URLSearchParams(window.location.search).get('room') || '';
   }
 
@@ -472,9 +497,8 @@ export class UI {
     for (const control of this.multiplayerScreen.querySelectorAll('[data-forced-visual]')) control.disabled = policy.value !== 'forced';
     const status = this.multiplayerScreen.querySelector('#mp-status');
     if (this.game.multiplayerClient) this.multiplayerClient = this.game.multiplayerClient;
-    if (!this.multiplayerScreen.querySelector('#mp-player-name').value) {
-      this.multiplayerScreen.querySelector('#mp-player-name').value = `Player${Math.floor(Math.random() * 900 + 100)}`;
-    }
+    this.multiplayerAccount = this.multiplayerClient?.account || this.multiplayerAccount || null;
+    this.updateMultiplayerAccountUI();
     const hasRelay = this.multiplayerScreen.querySelector('#mp-relay').value.trim() || this.game.multiplayerRelay || suggestedMultiplayerRelay();
     status.replaceChildren();
     if (!hasRelay) {
@@ -496,24 +520,105 @@ export class UI {
         status.append(' Add a reachable service under Advanced settings.');
       }
     } else {
-      status.textContent = 'Ready to connect to the multiplayer room service.';
+      status.textContent = this.multiplayerAccount ? `Signed in as ${this.multiplayerAccount.username}.` : 'Sign in or create an account to play online.';
+    }
+    if (!this.multiplayerAccount && window.localStorage.getItem('aislopcraft:account-token')) {
+      void this.restoreMultiplayerAccount().catch(error => { status.textContent = error.message; });
     }
   }
 
-  async connectMultiplayer() {
+  updateMultiplayerAccountUI() {
+    if (!this.multiplayerScreen) return;
+    const account = this.multiplayerAccount;
+    this.multiplayerScreen.classList.toggle('mp-authenticated', Boolean(account));
+    this.multiplayerScreen.querySelector('#mp-auth-panel').hidden = Boolean(account);
+    this.multiplayerScreen.querySelector('#mp-account-panel').hidden = !account;
+    this.multiplayerScreen.querySelector('#mp-account-label').textContent = account ? `Signed in as ${account.username}` : '';
+    const username = this.multiplayerScreen.querySelector('#mp-username');
+    if (account) username.value = account.username;
+  }
+
+  async prepareMultiplayerClient() {
     const screen = this.multiplayerScreen;
     const relay = screen.querySelector('#mp-relay').value.trim() || this.game.multiplayerRelay || suggestedMultiplayerRelay() || window.localStorage.getItem('aislopcraft:multiplayer-relay') || '';
-    const playerName = screen.querySelector('#mp-player-name').value.trim();
-    const status = screen.querySelector('#mp-status');
-    if (!playerName) throw new Error('Enter a player name.');
-    if (!relay) throw new Error('This host has no built-in room service. Enter a reachable WebSocket address under Advanced settings.');
-    window.localStorage.setItem('aislopcraft:multiplayer-name', playerName);
-    window.localStorage.setItem('aislopcraft:multiplayer-relay', relay);
+    if (!relay) throw new Error('This static site cannot host rooms. Open the Azure setup guide or enter a custom WebSocket service under Advanced.');
     const { MultiplayerClient } = await import('../network/multiplayer.js');
     if (!this.multiplayerClient) this.multiplayerClient = new MultiplayerClient();
-    status.textContent = 'Connecting to multiplayer relay...';
     await this.multiplayerClient.connect(relay);
-    return { playerName, status };
+    this.game.multiplayerRelay = relay;
+    window.localStorage.setItem('aislopcraft:multiplayer-relay', relay);
+    return this.multiplayerClient;
+  }
+
+  async authenticateMultiplayer(type) {
+    const screen = this.multiplayerScreen;
+    const status = screen.querySelector('#mp-status');
+    const username = screen.querySelector('#mp-username').value.trim();
+    const password = screen.querySelector('#mp-auth-password').value;
+    if (!username || !password) { status.textContent = 'Enter a username and password.'; return; }
+    const buttons = [screen.querySelector('#mp-login'), screen.querySelector('#mp-signup')];
+    buttons.forEach(button => { button.disabled = true; });
+    status.textContent = type === 'auth:signup' ? 'Creating your account…' : 'Signing in…';
+    try {
+      const client = await this.prepareMultiplayerClient();
+      const result = await client.request(type, { username, password });
+      this.multiplayerAccount = result.account;
+      client.account = result.account;
+      window.localStorage.setItem('aislopcraft:account-token', result.token);
+      window.localStorage.setItem('aislopcraft:account-name', result.account.username);
+      screen.querySelector('#mp-auth-password').value = '';
+      this.updateMultiplayerAccountUI();
+      status.textContent = `Welcome, ${result.account.username}. You can now browse or create a room.`;
+    } catch (error) { status.textContent = error.message; }
+    finally { buttons.forEach(button => { button.disabled = false; }); }
+  }
+
+  async restoreMultiplayerAccount() {
+    const token = window.localStorage.getItem('aislopcraft:account-token');
+    if (!token) return null;
+    const client = await this.prepareMultiplayerClient();
+    try {
+      const result = await client.request('auth:resume', { token });
+      this.multiplayerAccount = result.account;
+      client.account = result.account;
+      this.updateMultiplayerAccountUI();
+      this.multiplayerScreen.querySelector('#mp-status').textContent = `Welcome back, ${result.account.username}.`;
+      return result.account;
+    } catch (error) {
+      if (/sign in again|expired/i.test(error.message)) window.localStorage.removeItem('aislopcraft:account-token');
+      this.multiplayerAccount = null;
+      client.account = null;
+      this.updateMultiplayerAccountUI();
+      throw error;
+    }
+  }
+
+  async logoutMultiplayer() {
+    const client = this.multiplayerClient;
+    try {
+      if (client?.account && client.socket?.readyState === WebSocket.OPEN) await client.request('auth:logout');
+    } catch {}
+    client?.disconnect(false);
+    this.multiplayerClient = null;
+    this.multiplayerAccount = null;
+    window.localStorage.removeItem('aislopcraft:account-token');
+    this.updateMultiplayerAccountUI();
+    this.multiplayerScreen.querySelector('#mp-status').textContent = 'You are signed out. Log in or create an account to continue.';
+  }
+
+  async connectMultiplayer() {
+    const status = this.multiplayerScreen.querySelector('#mp-status');
+    const token = window.localStorage.getItem('aislopcraft:account-token');
+    if (!this.multiplayerAccount && !token) throw new Error('Create an account or log in before playing online.');
+    status.textContent = 'Connecting to the room service…';
+    const client = await this.prepareMultiplayerClient();
+    if (!client.account) {
+      const result = await client.request('auth:resume', { token });
+      client.account = result.account;
+      this.multiplayerAccount = result.account;
+      this.updateMultiplayerAccountUI();
+    }
+    return { playerName: client.account.username, status };
   }
 
   async refreshPublicRooms() {
@@ -529,10 +634,15 @@ export class UI {
         const button = document.createElement('button');
         button.className = 'mp-room';
         button.type = 'button';
-        button.textContent = `${room.name} · ${room.players}/${room.maxPlayers} · ${room.gameMode}${room.passwordProtected ? ' · password' : ''}${room.visualMode === 'forced' ? ' · host visuals' : ''}`;
+        button.textContent = `${room.name} · ${room.players}/${room.maxPlayers} · ${room.gameMode}${room.passwordProtected ? ' · password required' : ' · Join'}${room.visualMode === 'forced' ? ' · host visuals' : ''}`;
         button.addEventListener('click', () => {
           screen.querySelector('#mp-code').value = room.code;
-          screen.querySelector('#mp-join-password').focus();
+          if (room.passwordProtected) {
+            screen.querySelector('#mp-join-password').focus();
+            status.textContent = `Enter the password for ${room.name}, then choose Join by code.`;
+          } else {
+            void this.joinMultiplayerRoom();
+          }
         });
         list.appendChild(button);
       }
@@ -543,6 +653,9 @@ export class UI {
   async createMultiplayerRoom() {
     const screen = this.multiplayerScreen;
     const status = screen.querySelector('#mp-status');
+    const button = screen.querySelector('#mp-create');
+    if (button.disabled) return;
+    button.disabled = true;
     try {
       const { playerName } = await this.connectMultiplayer();
       const password = screen.querySelector('#mp-password').value;
@@ -560,19 +673,24 @@ export class UI {
         gameMode: screen.querySelector('#mp-mode').value, access: screen.querySelector('#mp-access').value,
         password, seed: this.game.seed, visuals,
       });
-      const entries = [...this.game.world.edits].map(([key,id]) => [key, id, this.game.world.metaEdits.get(key) || 0]);
-      for (const [key,id,meta] of entries) {
-        const [x,y,z] = key.split(',').map(Number);
-        this.multiplayerClient.send('world:edit', { edit: { x,y,z,id,meta } });
+      const entries = [...this.game.world.edits].map(([key, id]) => [key, [id, this.game.world.metaEdits.get(key) || 0]]);
+      const batchSize = 1000;
+      for (let index = 0; index < entries.length; index += batchSize) {
+        status.textContent = `Preparing your world… ${Math.min(index + batchSize, entries.length).toLocaleString()} / ${entries.length.toLocaleString()} edits`;
+        await this.multiplayerClient.request('world:snapshot', { entries: entries.slice(index, index + batchSize) });
       }
       this.multiplayerClient.send('chat', { text: `${playerName} opened ${result.gameMode} world “${result.name}”.` });
       await this.enterMultiplayer(result);
     } catch (error) { status.textContent = error.message; }
+    finally { button.disabled = false; }
   }
 
   async joinMultiplayerRoom() {
     const screen = this.multiplayerScreen;
     const status = screen.querySelector('#mp-status');
+    const button = screen.querySelector('#mp-join');
+    if (button.disabled) return;
+    button.disabled = true;
     try {
       const { playerName } = await this.connectMultiplayer();
       const result = await this.multiplayerClient.joinRoom({
@@ -581,6 +699,7 @@ export class UI {
       });
       await this.enterMultiplayer(result);
     } catch (error) { status.textContent = error.message; }
+    finally { button.disabled = false; }
   }
 
   async enterMultiplayer(room) {
@@ -727,7 +846,7 @@ export class UI {
     const room = this.game.networkRoom;
     if (this.networkPanel) {
       this.networkPanel.style.display = room ? 'block' : 'none';
-      if (room) this.networkPanel.querySelector('#network-room-label').textContent = `${room.name} · ${room.gameMode} · ${(this.game.remotePlayers?.size || 0) + 1}/8 · ${room.code}`;
+      if (room) this.networkPanel.querySelector('#network-room-label').textContent = `${room.name} · ${room.gameMode} · ${(this.game.remotePlayers?.size || 0) + 1}/5 · ${room.code}`;
     }
     const saveNow = document.getElementById('btn-save-now');
     if (saveNow) saveNow.hidden = !!room;

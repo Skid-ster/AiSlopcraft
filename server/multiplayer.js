@@ -1,10 +1,15 @@
 import { createServer } from 'node:http';
 import { createReadStream, existsSync, realpathSync, statSync } from 'node:fs';
-import { extname, resolve, sep } from 'node:path';
+import { extname, join, resolve, sep } from 'node:path';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
+import { AccountStore } from './accounts.js';
 
+const DEFAULT_DATA_DIR = resolve(process.env.AISLOPCRAFT_DATA_DIR || join(process.env.HOME || process.cwd(), '.aislopcraft'));
+const DEFAULT_ACCOUNT_FILE = resolve(DEFAULT_DATA_DIR, 'accounts.json');
+const AUTH_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
+const MAX_AUTH_ATTEMPTS_PER_WINDOW = 100;
 const DEFAULT_DIST_DIR = resolve(fileURLToPath(new URL('../dist', import.meta.url)));
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -40,9 +45,31 @@ function sanitizeVisualSettings(value) {
   return visuals;
 }
 const validRoom = value => /^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/.test(String(value ?? ''));
-const send = (socket, message) => {
-  if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
-};
+const MAX_SOCKET_BUFFER_BYTES = 2 * 1024 * 1024;
+function sendEncoded(socket, payload) {
+  if (socket.readyState !== WebSocket.OPEN) return;
+  if (socket.bufferedAmount > MAX_SOCKET_BUFFER_BYTES) {
+    socket.close(1013, 'Connection too slow; please rejoin.');
+    return;
+  }
+  socket.send(payload);
+}
+const send = (socket, message) => sendEncoded(socket, JSON.stringify(message));
+function broadcast(peers, message, exclude = null) {
+  const payload = JSON.stringify(message);
+  for (const peer of peers) if (peer !== exclude) sendEncoded(peer, payload);
+}
+function allowRate(socket, key, limit, windowMs) {
+  const now = Date.now();
+  const current = socket.rateLimits.get(key);
+  if (!current || now - current.startedAt >= windowMs) {
+    socket.rateLimits.set(key, { startedAt: now, count: 1 });
+    return true;
+  }
+  if (current.count >= limit) return false;
+  current.count++;
+  return true;
+}
 const roomSummary = room => ({
   code: room.code, name: room.name, players: room.clients.size, maxPlayers: MAX_PLAYERS,
   gameMode: room.gameMode, access: room.access, passwordProtected: Boolean(room.password), visualMode: room.visuals?.mode || 'individual',
@@ -70,8 +97,11 @@ function passwordMatches(record, password) {
   return timingSafeEqual(record.hash, candidate);
 }
 
-export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_DIST_DIR } = {}) {
+export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_DIST_DIR, accountFile = DEFAULT_ACCOUNT_FILE } = {}) {
   const rooms = new Map();
+  const accounts = new AccountStore(accountFile);
+  const authAttempts = new Map();
+  const roomPasswordAttempts = new Map();
   const http = createServer((request, response) => {
     const url = new URL(request.url || '/', 'http://localhost');
     const json = (status, body) => {
@@ -166,6 +196,23 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
     send(socket, { type: 'error', requestId, message });
   }
 
+  function allowRoomPasswordAttempt(address, code) {
+    const now = Date.now();
+    const key = `${address}:${code}`;
+    if (roomPasswordAttempts.size >= 10_000 && !roomPasswordAttempts.has(key)) {
+      for (const [entry, attempt] of roomPasswordAttempts) if (now - attempt.startedAt >= 60_000) roomPasswordAttempts.delete(entry);
+      if (roomPasswordAttempts.size >= 10_000) return false;
+    }
+    let attempt = roomPasswordAttempts.get(key);
+    if (!attempt || now - attempt.startedAt >= 60_000) {
+      attempt = { startedAt: now, count: 0 };
+      roomPasswordAttempts.set(key, attempt);
+    }
+    if (attempt.count >= 12) return false;
+    attempt.count++;
+    return true;
+  }
+
   function sendRoomSnapshot(socket) {
     const publicRooms = [...rooms.values()]
       .filter(room => room.access === 'public' && room.clients.size < MAX_PLAYERS)
@@ -208,7 +255,27 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
     }
   }
 
-  wss.on('connection', socket => {
+  function allowAuthAttempt(address) {
+    const now = Date.now();
+    if (authAttempts.size >= 10_000 && !authAttempts.has(address)) {
+      for (const [key, attempt] of authAttempts) if (now - attempt.startedAt >= AUTH_ATTEMPT_WINDOW_MS) authAttempts.delete(key);
+      if (authAttempts.size >= 10_000) return false;
+    }
+    let attempt = authAttempts.get(address);
+    if (!attempt || now - attempt.startedAt >= AUTH_ATTEMPT_WINDOW_MS) {
+      attempt = { startedAt: now, count: 0 };
+      authAttempts.set(address, attempt);
+    }
+    if (attempt.count >= MAX_AUTH_ATTEMPTS_PER_WINDOW) return false;
+    attempt.count++;
+    return true;
+  }
+
+  wss.on('connection', (socket, request) => {
+    const forwardedFor = request.headers['x-forwarded-for'];
+    socket.authAddress = (typeof forwardedFor === 'string' ? forwardedFor.split(',')[0].trim() : '') || request.socket.remoteAddress || 'unknown';
+    socket.account = null;
+    socket.sessionDigest = null;
     socket.isAlive = true;
     socket.lastStateAt = 0;
     socket.lastChatAt = 0;
@@ -216,21 +283,59 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
     socket.lastTntAt = 0;
     socket.vehicleTimes = new Map();
     socket.projectileTimes = new Map();
+    socket.rateLimits = new Map();
+    socket.authPending = false;
     socket.on('pong', () => { socket.isAlive = true; });
-    socket.on('message', buffer => {
+    socket.on('message', async buffer => {
       if (buffer.length > MAX_MESSAGE) { socket.close(1009, 'Message too large'); return; }
       let message;
       try { message = JSON.parse(buffer.toString()); } catch { return; }
       if (!message || typeof message.type !== 'string') return;
       const requestId = typeof message.requestId === 'string' ? message.requestId.slice(0, 80) : undefined;
 
+      if (message.type === 'auth:signup' || message.type === 'auth:login') {
+        if (socket.account || socket.authPending) return fail(socket, requestId, 'You are already signed in or signing in on this connection.');
+        if (!allowAuthAttempt(socket.authAddress)) return fail(socket, requestId, 'Too many sign-in attempts. Please wait 15 minutes and try again.');
+        socket.authPending = true;
+        try {
+          const result = message.type === 'auth:signup'
+            ? await accounts.signup(message.username, message.password)
+            : await accounts.login(message.username, message.password);
+          socket.account = result.account;
+          socket.sessionDigest = result.sessionDigest;
+          send(socket, { type: 'auth:success', requestId, account: result.account, token: result.token });
+        } catch (error) { fail(socket, requestId, error.message); }
+        finally { socket.authPending = false; }
+        return;
+      }
+      if (message.type === 'auth:resume') {
+        if (socket.account) return fail(socket, requestId, 'You are already signed in on this connection.');
+        try {
+          const result = accounts.resume(message.token);
+          socket.account = result.account;
+          socket.sessionDigest = result.sessionDigest;
+          send(socket, { type: 'auth:success', requestId, account: result.account });
+        } catch (error) { fail(socket, requestId, error.message); }
+        return;
+      }
+      if (message.type === 'auth:logout') {
+        if (!socket.account) return fail(socket, requestId, 'You are not signed in.');
+        if (socket.room) return fail(socket, requestId, 'Leave your multiplayer room before signing out.');
+        accounts.logout(socket.sessionDigest);
+        socket.account = null;
+        socket.sessionDigest = null;
+        send(socket, { type: 'auth:logged-out', requestId });
+        return;
+      }
+      if (!socket.account) return fail(socket, requestId, 'Sign up or log in before using multiplayer.');
+
       if (message.type === 'rooms:list') {
         socket.pendingRequestId = requestId;
         sendRoomSnapshot(socket);
       } else if (message.type === 'room:create') {
         if (socket.room) return fail(socket, requestId, 'Leave your current room first.');
-        const playerName = cleanText(message.playerName, 20);
-        const name = cleanText(message.name, 32) || `${playerName || 'Player'}’s world`;
+        const playerName = socket.account.username;
+        const name = cleanText(message.name, 32) || `${playerName}’s world`;
         const password = String(message.password ?? '').slice(0, 64);
         const access = message.access === 'private' ? 'private' : 'public';
         const gameMode = message.gameMode === 'creative' ? 'creative' : 'survival';
@@ -251,9 +356,9 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
       } else if (message.type === 'room:join') {
         const code = String(message.code ?? '').trim().toUpperCase();
         const room = rooms.get(code);
-        const playerName = cleanText(message.playerName, 20);
+        const playerName = socket.account.username;
         if (!validRoom(code) || !room) return fail(socket, requestId, 'Room not found. Check the code or ask the host to reopen it.');
-        if (!playerName) return fail(socket, requestId, 'Choose a player name.');
+        if (room.password && !allowRoomPasswordAttempt(socket.authAddress, code)) return fail(socket, requestId, 'Too many room password attempts. Wait a minute and try again.');
         if (!passwordMatches(room.password, String(message.password ?? '').slice(0, 64))) return fail(socket, requestId, 'Incorrect room password.');
         join(socket, room, playerName, requestId);
       } else if (message.type === 'room:leave') {
@@ -280,19 +385,45 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
         if (Math.abs(state.x) > 30_000_000 || Math.abs(state.z) > 30_000_000 || state.y < -128 || state.y > 512) return;
         socket.lastStateAt = now;
         socket.lastState = { x: state.x, y: state.y, z: state.z, yaw: state.yaw, pitch: state.pitch, dead: !!state.dead };
-        for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'player:state', id: socket.clientId, name: socket.playerName, ...socket.lastState });
+        broadcast(socket.room.clients, { type: 'player:state', id: socket.clientId, name: socket.playerName, ...socket.lastState }, socket);
+      } else if (message.type === 'world:snapshot') {
+        if (socket.room.host !== socket) return fail(socket, requestId, 'Only the host can publish the initial world snapshot.');
+        if (!allowRate(socket, 'world:snapshot', 60, 15_000)) return fail(socket, requestId, 'World setup is sending too quickly. Please retry.');
+        if (!Array.isArray(message.entries) || message.entries.length > 1000) return fail(socket, requestId, 'Invalid world snapshot batch.');
+        const batch = [];
+        const batchKeys = new Set();
+        for (const entry of message.entries) {
+          if (!Array.isArray(entry) || entry.length < 2) return fail(socket, requestId, 'The world contains an invalid block edit.');
+          const [key, value] = entry;
+          const match = typeof key === 'string' && /^-?\d{1,9},\d{1,3},-?\d{1,9}$/.exec(key);
+          const id = Array.isArray(value) ? value[0] : value;
+          const meta = Array.isArray(value) ? (value[1] ?? 0) : 0;
+          const [x, y, z] = match ? key.split(',').map(Number) : [];
+          if (!match || ![x, y, z, id, meta].every(Number.isInteger) || y < 0 || y >= 128 || id < 0 || id > 255 || meta < 0 || meta > 255 || Math.abs(x) > 30_000_000 || Math.abs(z) > 30_000_000) {
+            return fail(socket, requestId, 'The world contains an invalid block edit.');
+          }
+          batch.push([key, [id, meta]]);
+          batchKeys.add(key);
+        }
+        const newKeys = [...batchKeys].filter(key => !socket.room.edits.has(key));
+        if (socket.room.edits.size + newKeys.length > MAX_EDITS) return fail(socket, requestId, 'The shared world edit limit has been reached.');
+        for (const [key, edit] of batch) socket.room.edits.set(key, edit);
+        broadcast(socket.room.clients, { type: 'world:snapshot', entries: batch, done: false }, socket);
+        send(socket, { type: 'world:snapshot:accepted', requestId, count: batch.length });
       } else if (message.type === 'world:edit') {
         const edit = message.edit;
+        if (!allowRate(socket, 'world:edit', 80, 1000)) return;
         if (!edit || ![edit.x, edit.y, edit.z, edit.id, edit.meta ?? 0].every(Number.isInteger)) return;
         if (edit.y < 0 || edit.y >= 128 || edit.id < 0 || edit.id > 255 || Math.abs(edit.x) > 30_000_000 || Math.abs(edit.z) > 30_000_000) return;
         const key = `${edit.x},${edit.y},${edit.z}`;
+        if (!socket.room.edits.has(key) && socket.room.edits.size >= MAX_EDITS) return fail(socket, requestId, 'The shared world edit limit has been reached.');
         socket.room.edits.set(key, [edit.id, edit.meta || 0]);
-        if (socket.room.edits.size > MAX_EDITS) return fail(socket, requestId, 'The shared world edit limit has been reached.');
-        for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'world:edit', edit });
+        broadcast(socket.room.clients, { type: 'world:edit', edit }, socket);
       } else if (message.type === 'game:state') {
+        if (!allowRate(socket, 'game:state', 8, 1000)) return;
         if (!message.state || typeof message.state !== 'object' || Array.isArray(message.state) || JSON.stringify(message.state).length > 96_000) return fail(socket, requestId, 'Invalid shared world state.');
         socket.room.gameState = message.state;
-        for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'game:state', state: message.state });
+        broadcast(socket.room.clients, { type: 'game:state', state: message.state }, socket);
       } else if (message.type === 'item:snapshot') {
         if (socket.room.host !== socket) return fail(socket, requestId, 'Only the host can publish shared item state.');
         if (!Array.isArray(message.items) || message.items.length > 4096) return fail(socket, requestId, 'Invalid shared item snapshot.');
@@ -304,6 +435,7 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
         socket.room.items = items;
         for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'item:snapshot', items: [...items.values()], done: true });
       } else if (message.type === 'item:spawn') {
+        if (!allowRate(socket, 'item:spawn', 24, 1000)) return;
         const source = message.item;
         if (!source || typeof source.uid !== 'string' || source.uid.length > 80 || !Number.isInteger(source.id) || source.id < 0 || source.id > 4095 || !Number.isInteger(source.count) || source.count < 1 || source.count > 999 || !Array.isArray(source.pos) || source.pos.length !== 3 || !source.pos.every(Number.isFinite) || source.pos.some(value => Math.abs(value) > 30_000_000)) return;
         if (socket.room.items.size >= 4096) return fail(socket, requestId, 'The shared item limit has been reached.');
@@ -312,16 +444,19 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
         socket.room.items.set(uid, item);
         for (const peer of socket.room.clients) send(peer, { type: 'item:spawn', item });
       } else if (message.type === 'item:pickup') {
+        if (!allowRate(socket, 'item:pickup', 12, 1000)) return;
         const item = socket.room.items.get(String(message.uid ?? ''));
-        if (!item) return;
+        if (!item || !socket.lastState || Math.hypot(item.pos[0] - socket.lastState.x, item.pos[1] - socket.lastState.y, item.pos[2] - socket.lastState.z) > 5) return;
         socket.room.items.delete(item.uid);
         send(socket, { type: 'item:pickup', item });
         for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'item:remove', uid: item.uid });
       } else if (message.type === 'projectile:update') {
+        if (!allowRate(socket, 'projectile:update', 40, 1000)) return;
         const now = Date.now();
         const shot = message.projectile;
         if (!shot || typeof shot.uid !== 'string' || shot.uid.length > 100 || !['player','mob'].includes(shot.owner) || !Array.isArray(shot.pos) || shot.pos.length !== 3 || !shot.pos.every(Number.isFinite) || shot.pos.some(value => Math.abs(value) > 30_000_000) || !Array.isArray(shot.vel) || shot.vel.length !== 3 || !shot.vel.every(Number.isFinite) || shot.vel.some(value => Math.abs(value) > 80)) return;
         if (now - (socket.projectileTimes.get(shot.uid) || 0) < 80) return;
+        if (!socket.projectileTimes.has(shot.uid) && socket.projectileTimes.size >= 512) return;
         socket.projectileTimes.set(shot.uid, now);
         if (socket.room.projectiles.size >= 256 && !socket.room.projectiles.has(shot.uid)) return;
         const projectile = { uid: shot.uid, owner: shot.owner, pos: shot.pos, vel: shot.vel, age: Number.isFinite(shot.age) ? Math.max(0, Math.min(6, shot.age)) : 0, targetId: typeof shot.targetId === 'string' ? shot.targetId.slice(0, 80) : null, damage: Number.isFinite(shot.damage) ? Math.max(0, Math.min(40, shot.damage)) : 2, sourceId: socket.clientId };
@@ -331,14 +466,16 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
       } else if (message.type === 'projectile:remove') {
         const uid = typeof message.uid === 'string' ? message.uid.slice(0, 100) : '';
         if (uid && socket.room.projectiles.delete(uid)) {
-          socket.projectileTimes.delete(uid);
-          for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'projectile:remove', uid });
+          for (const peer of socket.room.clients) peer.projectileTimes.delete(uid);
+          broadcast(socket.room.clients, { type: 'projectile:remove', uid }, socket);
         }
       } else if (message.type === 'vehicle:update') {
+        if (!allowRate(socket, 'vehicle:update', 80, 1000)) return;
         const now = Date.now();
         const vehicle = message.vehicle;
         if (!vehicle || typeof vehicle.uid !== 'string' || vehicle.uid.length > 100 || !['boat','minecart','storage','powered'].includes(vehicle.type) || !Array.isArray(vehicle.pos) || vehicle.pos.length !== 3 || !vehicle.pos.every(Number.isFinite) || vehicle.pos.some(value => Math.abs(value) > 30_000_000) || !Number.isFinite(vehicle.rotation)) return;
         if (now - (socket.vehicleTimes.get(vehicle.uid) || 0) < 75) return;
+        if (!socket.vehicleTimes.has(vehicle.uid) && socket.vehicleTimes.size >= 2048) return;
         socket.vehicleTimes.set(vehicle.uid, now);
         if (socket.room.vehicles.size >= 1024 && !socket.room.vehicles.has(vehicle.uid)) return;
         const directions = [[1,0],[-1,0],[0,1],[0,-1]];
@@ -361,8 +498,8 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
       } else if (message.type === 'vehicle:remove') {
         const uid = typeof message.uid === 'string' ? message.uid.slice(0, 100) : '';
         if (uid && socket.room.vehicles.delete(uid)) {
-          socket.vehicleTimes.delete(uid);
-          for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'vehicle:remove', uid });
+          for (const peer of socket.room.clients) peer.vehicleTimes.delete(uid);
+          broadcast(socket.room.clients, { type: 'vehicle:remove', uid }, socket);
         }
       } else if (message.type === 'tnt:ignite') {
         const now = Date.now();
