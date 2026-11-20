@@ -152,6 +152,10 @@ try {
   assert.equal(created.visuals.resourcePack.name, 'Local pack');
   assert.ok(created.visuals.resourcePack.atlasData.startsWith('data:image/png;base64,'));
   assert.match(created.code, /^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/);
+  const initialWorld = await request(host, 'world:snapshot', { entries: [['12,70,-8', [5, 2]], ['13,70,-8', [1, 0]]] });
+  assert.equal(initialWorld.type, 'world:snapshot:accepted', 'host can efficiently publish saved edits in a bounded batch');
+  assert.equal(initialWorld.count, 2);
+  assert.deepEqual(service.rooms.get(created.code).edits.get('12,70,-8'), [5, 2]);
 
   const wrongPass = await connect();
   const rejected = await request(wrongPass, 'room:join', { code: created.code, playerName: 'Intruder', password: 'wrong' });
@@ -173,6 +177,8 @@ try {
   assert.equal(joined.gameMode, 'creative');
   assert.deepEqual(joined.visuals, created.visuals, 'joining clients receive the host shader and texture atlas');
   assert.equal((await joinedEvent).name, 'Builder');
+  const guestSnapshotRejected = await request(guest, 'world:snapshot', { entries: [['1,70,1', [1, 0]]] });
+  assert.equal(guestSnapshotRejected.type, 'error', 'only the host can publish the initial world snapshot');
 
   const remoteEdit = waitFor(guest, message => message.type === 'world:edit');
   host.send(JSON.stringify({ type: 'world:edit', edit: { x: 4, y: 70, z: -3, id: 1, meta: 0 } }));
@@ -227,6 +233,7 @@ try {
   assert.equal(newcomerJoined.type, 'room:joined');
   const savedSnapshot = await snapshot;
   assert.ok(savedSnapshot.entries.some(([key, [id]]) => key === '4,70,-3' && id === 0), 'new players receive current world edits');
+  assert.ok(savedSnapshot.entries.some(([key, [id, meta]]) => key === '12,70,-8' && id === 5 && meta === 2), 'joining snapshots include the host-published saved world batches');
   assert.equal((await lateItems).items[0].uid, 'drop-1', 'late joiners receive current dropped items');
   assert.equal((await lateState).state.timeOfDay, 0.4, 'late joiners receive shared state');
   assert.equal((await lateMobs).mobs[0].uid, 'mob-1', 'late joiners receive current mobs');
@@ -235,8 +242,16 @@ try {
   const projectileRemoved = waitFor(guest, message => message.type === 'projectile:remove' && message.uid === 'arrow-1');
   newcomer.send(JSON.stringify({ type: 'projectile:remove', uid: 'arrow-1' }));
   await projectileRemoved;
+  newcomer.send(JSON.stringify({ type: 'item:pickup', uid: 'drop-1' }));
+  const pickupStateOnHost = waitFor(host, message => message.type === 'player:state' && message.id === newcomerJoined.id);
+  newcomer.send(JSON.stringify({ type: 'player:state', state: { x: 50, y: 70, z: 50, yaw: 0, pitch: 0, dead: false } }));
+  await pickupStateOnHost;
+  assert.equal(service.rooms.get(created.code).items.has('drop-1'), true, 'players cannot claim a shared drop from across the map');
+  await new Promise(resolve => setTimeout(resolve, 45)); // Player-position updates are intentionally capped at 25 Hz.
   const itemRemoved = waitFor(host, message => message.type === 'item:remove' && message.uid === 'drop-1');
   const pickupGrant = waitFor(newcomer, message => message.type === 'item:pickup');
+  newcomer.send(JSON.stringify({ type: 'player:state', state: { x: 4.5, y: 70, z: -2.5, yaw: 0, pitch: 0, dead: false } }));
+  await waitFor(host, message => message.type === 'player:state' && message.id === newcomerJoined.id);
   newcomer.send(JSON.stringify({ type: 'item:pickup', uid: 'drop-1' }));
   assert.equal((await pickupGrant).item.count, 3, 'only a valid shared drop can be claimed');
   await itemRemoved;

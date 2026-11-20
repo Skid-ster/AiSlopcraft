@@ -633,10 +633,15 @@ export class UI {
         const button = document.createElement('button');
         button.className = 'mp-room';
         button.type = 'button';
-        button.textContent = `${room.name} · ${room.players}/${room.maxPlayers} · ${room.gameMode}${room.passwordProtected ? ' · password' : ''}${room.visualMode === 'forced' ? ' · host visuals' : ''}`;
+        button.textContent = `${room.name} · ${room.players}/${room.maxPlayers} · ${room.gameMode}${room.passwordProtected ? ' · password required' : ' · Join'}${room.visualMode === 'forced' ? ' · host visuals' : ''}`;
         button.addEventListener('click', () => {
           screen.querySelector('#mp-code').value = room.code;
-          screen.querySelector('#mp-join-password').focus();
+          if (room.passwordProtected) {
+            screen.querySelector('#mp-join-password').focus();
+            status.textContent = `Enter the password for ${room.name}, then choose Join by code.`;
+          } else {
+            void this.joinMultiplayerRoom();
+          }
         });
         list.appendChild(button);
       }
@@ -647,6 +652,9 @@ export class UI {
   async createMultiplayerRoom() {
     const screen = this.multiplayerScreen;
     const status = screen.querySelector('#mp-status');
+    const button = screen.querySelector('#mp-create');
+    if (button.disabled) return;
+    button.disabled = true;
     try {
       const { playerName } = await this.connectMultiplayer();
       const password = screen.querySelector('#mp-password').value;
@@ -664,19 +672,24 @@ export class UI {
         gameMode: screen.querySelector('#mp-mode').value, access: screen.querySelector('#mp-access').value,
         password, seed: this.game.seed, visuals,
       });
-      const entries = [...this.game.world.edits].map(([key,id]) => [key, id, this.game.world.metaEdits.get(key) || 0]);
-      for (const [key,id,meta] of entries) {
-        const [x,y,z] = key.split(',').map(Number);
-        this.multiplayerClient.send('world:edit', { edit: { x,y,z,id,meta } });
+      const entries = [...this.game.world.edits].map(([key, id]) => [key, [id, this.game.world.metaEdits.get(key) || 0]]);
+      const batchSize = 1000;
+      for (let index = 0; index < entries.length; index += batchSize) {
+        status.textContent = `Preparing your world… ${Math.min(index + batchSize, entries.length).toLocaleString()} / ${entries.length.toLocaleString()} edits`;
+        await this.multiplayerClient.request('world:snapshot', { entries: entries.slice(index, index + batchSize) });
       }
       this.multiplayerClient.send('chat', { text: `${playerName} opened ${result.gameMode} world “${result.name}”.` });
       await this.enterMultiplayer(result);
     } catch (error) { status.textContent = error.message; }
+    finally { button.disabled = false; }
   }
 
   async joinMultiplayerRoom() {
     const screen = this.multiplayerScreen;
     const status = screen.querySelector('#mp-status');
+    const button = screen.querySelector('#mp-join');
+    if (button.disabled) return;
+    button.disabled = true;
     try {
       const { playerName } = await this.connectMultiplayer();
       const result = await this.multiplayerClient.joinRoom({
@@ -685,6 +698,7 @@ export class UI {
       });
       await this.enterMultiplayer(result);
     } catch (error) { status.textContent = error.message; }
+    finally { button.disabled = false; }
   }
 
   async enterMultiplayer(room) {
@@ -831,7 +845,7 @@ export class UI {
     const room = this.game.networkRoom;
     if (this.networkPanel) {
       this.networkPanel.style.display = room ? 'block' : 'none';
-      if (room) this.networkPanel.querySelector('#network-room-label').textContent = `${room.name} · ${room.gameMode} · ${(this.game.remotePlayers?.size || 0) + 1}/8 · ${room.code}`;
+      if (room) this.networkPanel.querySelector('#network-room-label').textContent = `${room.name} · ${room.gameMode} · ${(this.game.remotePlayers?.size || 0) + 1}/5 · ${room.code}`;
     }
     const saveNow = document.getElementById('btn-save-now');
     if (saveNow) saveNow.hidden = !!room;

@@ -1,4 +1,5 @@
-import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
@@ -11,8 +12,9 @@ const DUMMY_SALT = Buffer.alloc(16, 0x5a);
 const sessionDigest = token => createHash('sha256').update(token).digest('hex');
 const usernameKey = username => username.toLowerCase();
 
-function passwordHash(password, salt) {
-  return scryptSync(password, salt, 32);
+const derivePasswordHash = promisify(scrypt);
+async function passwordHash(password, salt) {
+  return derivePasswordHash(password, salt, 32);
 }
 
 export class AccountStore {
@@ -51,7 +53,7 @@ export class AccountStore {
     return { account: { username: account.username }, token, sessionDigest: digest };
   }
 
-  signup(usernameValue, passwordValue) {
+  async signup(usernameValue, passwordValue) {
     const username = String(usernameValue ?? '').trim();
     const password = String(passwordValue ?? '');
     if (!USERNAME_PATTERN.test(username)) throw new Error('Use a username with 3–20 letters, numbers, or underscores.');
@@ -61,10 +63,12 @@ export class AccountStore {
     const key = usernameKey(username);
     if (this.data.accounts[key]) throw new Error('That username is already taken. Try logging in instead.');
     const salt = randomBytes(16);
+    const passwordDigest = await passwordHash(password, salt);
+    if (this.data.accounts[key]) throw new Error('That username is already taken. Try logging in instead.');
     const account = {
       username,
       salt: salt.toString('hex'),
-      passwordHash: passwordHash(password, salt).toString('hex'),
+      passwordHash: passwordDigest.toString('hex'),
       createdAt: Date.now(),
     };
     const next = structuredClone(this.data);
@@ -74,16 +78,16 @@ export class AccountStore {
     return this.#createSession(account);
   }
 
-  login(usernameValue, passwordValue) {
+  async login(usernameValue, passwordValue) {
     const username = String(usernameValue ?? '').trim();
     const password = String(passwordValue ?? '');
     const account = USERNAME_PATTERN.test(username) ? this.data.accounts[usernameKey(username)] : null;
     if (!account || password.length > PASSWORD_MAX_LENGTH) {
-      passwordHash(password.slice(0, PASSWORD_MAX_LENGTH), DUMMY_SALT);
+      await passwordHash(password.slice(0, PASSWORD_MAX_LENGTH), DUMMY_SALT);
       throw new Error('Username or password is incorrect.');
     }
     const expected = Buffer.from(account.passwordHash, 'hex');
-    const actual = passwordHash(password, Buffer.from(account.salt, 'hex'));
+    const actual = await passwordHash(password, Buffer.from(account.salt, 'hex'));
     if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
       throw new Error('Username or password is incorrect.');
     }
