@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import * as THREE from 'three';
 import { JSDOM } from 'jsdom';
-import { Lighting, SHADER_STYLES, shaderStyleId, syncFogUniforms } from '../src/rendering.js';
+import { Lighting, PSXPostProcess, SHADER_STYLES, shaderStyleId, syncFogUniforms } from '../src/rendering.js';
 
 const fog = new THREE.Fog(0x446688, 12, 90);
 const materials = Array.from({ length: 3 }, () => ({ uniforms: {
@@ -27,7 +27,15 @@ assert.equal(lighting.shared.uBrightness.value, 1);
 const overlay = lighting.createMaterial({ fog: false });
 assert.equal(overlay.uniforms.uShadowStrength.value, 0, 'hand overlay does not inherit world shadows');
 assert.notEqual(overlay.uniforms.uShadowStrength, lighting.shared.uShadowStrength);
-assert.deepEqual(SHADER_STYLES, ['classic', 'vibrant', 'cinematic', 'shader']);
+assert.deepEqual(SHADER_STYLES, ['classic', 'vibrant', 'cinematic', 'shader', 'psx']);
+assert.equal(shaderStyleId('psx'), 4);
+const psxPost = new PSXPostProcess(0.25);
+psxPost.setSize(800, 600);
+assert.equal(psxPost.target.width, 200, 'PSX output renders at one-quarter internal width');
+assert.equal(psxPost.target.height, 150, 'PSX output renders at one-quarter internal height');
+assert.match(psxPost.material.fragmentShader, /bayer4/);
+assert.match(psxPost.material.fragmentShader, /#include <colorspace_fragment>/, 'post-process output converts back to the renderer output color space');
+psxPost.dispose();
 assert.equal(shaderStyleId('cinematic'), 2);
 
 const sky = { dayFactor: 1, sunDirection: new THREE.Vector3(0, 1, 0) };
@@ -54,6 +62,12 @@ lighting.setObjectLight(mesh, 0, 14);
 assert.deepEqual(mesh.material.uniforms.uObjectLight.value.toArray(), [0, 14]);
 lighting.forget(mesh);
 assert.equal(lighting.materials.has(mesh.material), false);
+const caster = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial());
+lighting.prepare(caster);
+assert.equal(caster.layers.isEnabled(1), true, 'entity shader meshes participate in the sun-shadow pass');
+const nonCaster = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial());
+lighting.prepare(nonCaster, { castShadow: false });
+assert.equal(nonCaster.layers.isEnabled(1), false, 'transient particles skip shadow rendering');
 
 const vertex = solid.vertexShader, fragment = solid.fragmentShader;
 assert.match(vertex, /attribute vec2 aLight/);
@@ -64,6 +78,9 @@ assert.match(fragment, /fresnel/);
 assert.match(fragment, /uEmissionMap/);
 assert.match(fragment, /#include <colorspace_fragment>/);
 assert.match(fragment, /uTime \* 0\.006/, 'water UV animation is consumed by the shader');
+assert.match(vertex, /uPsxSnap/, 'PSX vertex snapping scales with depth');
+assert.match(vertex, /snapGrid/, 'PSX snapping uses the active internal resolution');
+assert.match(fragment, /vAffineUv/, 'PSX preset enables affine texture mapping');
 
 
 assert.match(fragment, /coord\.z <= 0\.0/, 'points before the shadow frustum remain lit');
@@ -93,6 +110,25 @@ assert.equal(fakeRenderer.currentTarget, priorTarget, 'render target restored af
 assert.equal(fakeRenderer.autoClear, false, 'autoClear restored after shadow failure');
 assert.equal(shadowScene.overrideMaterial, priorOverride, 'override material restored after shadow failure');
 assert.equal(fakeRenderer.clearAlpha, 0.25, 'clear alpha restored after shadow failure');
+const cachedLighting = new Lighting({ shadowSize: 64 });
+const cachedScene = new THREE.Scene();
+const cachedCamera = new THREE.PerspectiveCamera();
+const cacheRenderer = {
+  autoClear: true, currentTarget: null, renders: 0,
+  getRenderTarget() { return this.currentTarget; },
+  getClearColor(target) { return target.set(0x000000); },
+  getClearAlpha() { return 1; },
+  setClearColor() {}, setRenderTarget(target) { this.currentTarget = target; }, clear() {},
+  render() { this.renders++; },
+};
+const cacheSky = { sunDirection: new THREE.Vector3(0.4, 0.8, 0.2) };
+cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'shader', 10);
+cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'shader', 10.3);
+assert.equal(cacheRenderer.renders, 1, 'unchanged shadow maps are cached instead of rendered every frame');
+cachedCamera.position.x = 1;
+cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'shader', 10.4);
+assert.equal(cacheRenderer.renders, 2, 'moving the view refreshes the shadow map promptly');
+cachedLighting.dispose();
 
 // Sky/fog integration: one source of truth, depth-tested celestials, underwater.
 const dom = new JSDOM('<!doctype html><html><body></body></html>');

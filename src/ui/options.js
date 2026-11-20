@@ -2,9 +2,17 @@
 // Every control is wired to game.settings and applied immediately.
 import { DEFAULT_KEYS, KEY_LABELS, keyLabel, rebindKey } from '../settings.js';
 
-const SHADERS = ['classic', 'vibrant', 'cinematic', 'shader'];
-const SHADER_NAMES = { classic: 'OFF', vibrant: 'Vibrant', cinematic: 'Cinematic', shader: 'Shader Lite' };
+const SHADERS = ['classic', 'vibrant', 'cinematic', 'shader', 'psx'];
+const SHADER_NAMES = { classic: 'Classic', vibrant: 'Vibrant', cinematic: 'Cinematic', shader: 'Shader Lite', psx: 'PSX (1.7.10)' };
+const SHADER_HINTS = {
+  classic: 'Beta-style light and fog, with no enhanced sun shadows.',
+  vibrant: 'Brighter, more saturated colors. No sun-shadow pass.',
+  cinematic: 'Warm color grading with soft, filtered block shadows.',
+  shader: 'Shader Lite: dynamic sun shadows and animated reflective water. External OptiFine shaderpack ZIPs are not supported by this WebGL renderer.',
+  psx: 'PSX shader: affine textures, depth-scaled vertex snapping, 25% internal resolution, 24-color grading and ordered dithering. Adapted from an open-source pack tested on 1.7.10; not an arbitrary shader ZIP loader.',
+};
 const FPS_STEPS = [0, 30, 60, 90, 120, 144, 165, 240, 260];
+const DIFFICULTIES = ['Peaceful', 'Easy', 'Normal', 'Hard'];
 
 function pct(v) { return Math.round(v * 100); }
 function onOff(v) { return v ? 'ON' : 'OFF'; }
@@ -76,16 +84,19 @@ export class OptionsMenu {
     </div>`;
   }
 
-  button(id, label, cls = '') {
-    return `<button class="btn mc-btn ${cls}" id="${id}">${label}</button>`;
+  button(id, label, cls = '', disabled = false) {
+    return `<button class="btn mc-btn ${cls}" id="${id}"${disabled ? ' disabled' : ''}>${label}</button>`;
   }
 
   render() {
     const s = this.settings;
+    const forcedVisuals = this.game.networkRoom?.visuals?.mode === 'forced' ? this.game.networkRoom.visuals : null;
+    const shownShaderStyle = forcedVisuals?.shaderStyle || s.shaderStyle;
     let title = 'Options';
     let body = '';
     if (this.page === 'main') {
       body = `<div class="mc-grid">
+        ${this.button('opt-difficulty', `Difficulty: ${DIFFICULTIES[s.difficulty]}`)}
         ${this.button('opt-video', 'Video Settings...')}
         ${this.button('opt-controls', 'Controls...')}
         ${this.button('opt-sound', 'Sound...')}
@@ -103,7 +114,8 @@ export class OptionsMenu {
         ${this.slider('opt-brightness', 'Brightness', 50, 150, 1, pct(s.brightness), v => `Brightness: ${v}%`)}
         ${this.slider('opt-fov', 'FOV', 30, 110, 1, s.fov, v => `FOV: ${v}`)}
         ${this.slider('opt-scale', 'Render Scale', 50, 100, 5, pct(s.renderScale), v => `Render Scale: ${v}%`)}
-        ${this.button('opt-shader', `Shaders: ${SHADER_NAMES[s.shaderStyle]}`)}
+        ${this.button('opt-shader', `Shaders: ${SHADER_NAMES[shownShaderStyle]}${forcedVisuals ? ' (Server)' : ''}`, '', !!forcedVisuals)}
+        <p class="shader-hint" id="shader-hint">${forcedVisuals ? 'The host enforces this shader for the multiplayer room.' : SHADER_HINTS[shownShaderStyle]}</p>
       </div>
       <div class="mc-done-row">${this.button('opt-done', 'Done')}</div>`;
     } else if (this.page === 'controls') {
@@ -164,6 +176,7 @@ export class OptionsMenu {
     };
     const label = (id, text) => { const l = q(`${id}-label`); if (l) l.textContent = text; };
 
+    click('opt-difficulty', () => { s.difficulty = (s.difficulty + 1) % DIFFICULTIES.length; this.apply(); this.render(); });
     click('opt-video', () => { this.page = 'video'; this.render(); });
     click('opt-controls', () => { this.page = 'controls'; this.render(); });
     click('opt-sound', () => { this.page = 'sound'; this.render(); });

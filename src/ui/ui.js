@@ -1,4 +1,4 @@
-const playerPreview = new URL('./player-preview.svg', import.meta.url).href;
+import * as THREE from 'three';
 const logo = new URL('./logo.svg', import.meta.url).href;
 // UI: title screen, hotbar, hearts, armor, inventory, crafting table, furnace, chest,
 // pause, death screen, F3 debug, hover tooltips, shift-click & 3D isometric icons.
@@ -11,6 +11,13 @@ import { OptionsMenu } from './options.js';
 
 function stackLimit(stack) {
   return itemStackLimit(stack.id);
+}
+
+function suggestedMultiplayerRelay() {
+  const host = window.location.hostname;
+  if (host === 'localhost' || host === '127.0.0.1') return `ws://${host}:8787/ws`;
+  const preview = host.match(/^5173-(.+\.e2b\.app)$/);
+  return preview ? `wss://8787-${preview[1]}/ws` : '';
 }
 
 function canStack(a, b) {
@@ -74,47 +81,501 @@ export class UI {
     div.innerHTML = `
       <div class="title-logo">
         <div class="title-main"><img src="${logo}" alt="AiSlopcraft"></div>
-        <div class="title-sub">Java 1.7.3-inspired</div>
+        <div class="title-sub">Java Edition Beta 1.7.3</div>
         <div class="splash">${this.splash}</div>
       </div>
       <div class="title-buttons">
-        <button class="btn" id="btn-singleplayer">Singleplayer</button>
-        <button class="btn" disabled title="Multiplayer is not supported yet">Multiplayer</button>
-        <div class="title-button-row"><button class="btn" id="btn-options">Options...</button><button class="btn" id="btn-pack">Import block textures...</button></div>
-        <div class="pack-controls"><button class="btn" id="btn-pack-reset">Reset textures</button><input id="pack-file" type="file" accept=".zip,.jar,application/zip" hidden><div id="pack-status" role="status">Optional: choose a Java 1.7 resource pack ZIP or client JAR.</div></div>
+        <div class="title-primary-stack">
+          <button class="btn" id="btn-singleplayer">Singleplayer</button>
+          <button class="btn" id="btn-multiplayer">Multiplayer</button>
+        </div>
+        <div class="title-button-row title-secondary-row title-controls-row">
+          <button class="btn language-button" id="btn-language" title="Language settings are not available yet" aria-label="Language settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c5 5 5 13 0 18m0-18c-5 5-5 13 0 18"/></svg></button>
+          <button class="btn" id="btn-options">Options...</button>
+          <button class="btn" id="btn-quit">Quit Game</button>
+        </div>
+        <div class="title-utility-row">
+          <button class="title-link" id="btn-pack">Resource Packs...</button>
+          <button class="title-link" id="btn-saves">World Saves...</button>
+        </div>
       </div>
-      <div class="title-foot">AiSlopcraft · Release-era visuals</div>
-      <div class="title-disclaimer">Not affiliated with Mojang</div>
+      <div class="title-status" id="title-status" role="status" aria-live="polite"></div>
+      <div class="title-foot">AiSlopcraft · Beta 1.7.3-inspired</div>
+      <div class="title-disclaimer">Independent browser game · not affiliated with Mojang</div>
     `;
     this.root.appendChild(div);
+    const worldsScreen = document.createElement('div');
+    worldsScreen.id = 'world-select-screen'; worldsScreen.className = 'screen world-menu-screen'; worldsScreen.style.display = 'none';
+    worldsScreen.innerHTML = `<section class="world-menu-card">
+      <h2>Select World</h2>
+      <div id="world-list" class="world-list" role="listbox" aria-label="Saved worlds"></div>
+      <div class="world-actions world-actions-primary">
+        <button class="btn" id="world-play">Play Selected World</button>
+        <button class="btn" id="world-create">Create New World</button>
+      </div>
+      <div class="world-actions world-actions-secondary">
+        <button class="btn" id="world-rename">Rename</button>
+        <button class="btn btn-danger" id="world-delete">Delete</button>
+        <button class="btn" id="world-recreate">Re-Create</button>
+        <button class="btn" id="world-cancel">Cancel</button>
+      </div>
+      <div class="world-actions world-actions-portable">
+        <button class="title-link" id="world-export">Export Selected Save</button>
+        <button class="title-link" id="world-import">Import Save File...</button>
+      </div>
+    </section>`;
+    this.root.appendChild(worldsScreen);
+    this.worldSelectScreen = worldsScreen;
+    const createScreen = document.createElement('div');
+    createScreen.id = 'world-create-screen'; createScreen.className = 'screen world-menu-screen'; createScreen.style.display = 'none';
+    createScreen.innerHTML = `<section class="world-create-card">
+      <h2>Create New World</h2>
+      <label>World Name<input id="new-world-name" maxlength="48" value="New World" autocomplete="off"></label>
+      <div class="world-save-location" id="world-save-location">Will be saved in New World</div>
+      <button class="btn world-mode-button" id="new-world-mode">Game Mode: Survival</button>
+      <div class="world-mode-description" id="world-mode-description">Explore, mine, build and craft to survive.</div>
+      <button class="btn" id="world-more-options" aria-expanded="false">More World Options...</button>
+      <label class="world-seed-field" id="world-seed-field" hidden>Seed for the World Generator<input id="new-world-seed" maxlength="128" placeholder="Leave blank for a random seed" autocomplete="off"></label>
+      <div class="world-actions world-actions-primary">
+        <button class="btn" id="world-create-confirm">Create New World</button>
+        <button class="btn" id="world-create-cancel">Cancel</button>
+      </div>
+    </section>`;
+    this.root.appendChild(createScreen);
+    this.worldCreateScreen = createScreen;
     div.querySelector('#btn-singleplayer').addEventListener('click', () => {
-      this.game.audio.init();
-      this.game.audio.click();
-      this.hide('title-screen');
-      this.setMode('game');
-      this.game.start();
+      this.game.audio.init(); this.game.audio.click(); this.openWorldSelection();
     });
-    const fileInput = div.querySelector('#pack-file');
-    const status = div.querySelector('#pack-status');
-    div.querySelector('#btn-pack').addEventListener('click', () => fileInput.click());
+    div.querySelector('#btn-language').addEventListener('click', () => {
+      div.querySelector('#title-status').textContent = 'Language selection is not available in this browser build.';
+    });
+    const worldList = worldsScreen.querySelector('#world-list');
+    const refreshWorldList = () => {
+      const worlds = this.game.listSavedWorlds?.() || [];
+      worldList.replaceChildren();
+      if (!worlds.length) {
+        const empty = document.createElement('div'); empty.className = 'world-list-empty';
+        empty.textContent = 'No saved worlds found. Create a new world to begin.'; worldList.appendChild(empty);
+        this.selectedWorld = null;
+      } else {
+        this.selectedWorld = worlds.find(world => world.id === this.selectedWorld?.id) || worlds[0];
+        for (const world of worlds) {
+          const row = document.createElement('button'); row.type = 'button'; row.className = 'world-list-row';
+          row.setAttribute('role', 'option'); row.setAttribute('aria-selected', String(this.selectedWorld?.id === world.id));
+          row.innerHTML = `<strong></strong><span></span>`;
+          row.querySelector('strong').textContent = world.name;
+          row.querySelector('span').textContent = `${world.gameMode === 'creative' ? 'Creative' : 'Survival'} · Seed: ${world.seed}`;
+          row.addEventListener('click', () => { this.selectedWorld = world; refreshWorldList(); });
+          worldList.appendChild(row);
+        }
+      }
+      const active = !!this.selectedWorld;
+      for (const id of ['world-play', 'world-rename', 'world-delete', 'world-recreate', 'world-export']) worldsScreen.querySelector(`#${id}`).disabled = !active;
+    };
+    this.refreshWorldList = refreshWorldList;
+    worldsScreen.querySelector('#world-create').addEventListener('click', () => {
+      this.game.audio.click(); worldsScreen.style.display = 'none'; createScreen.style.display = 'flex';
+      createScreen.querySelector('#new-world-name').focus();
+    });
+    worldsScreen.querySelector('#world-play').addEventListener('click', () => this.playSelectedWorld());
+    worldsScreen.querySelector('#world-cancel').addEventListener('click', () => {
+      worldsScreen.style.display = 'none'; document.getElementById('title-screen').style.display = 'flex';
+    });
+    worldsScreen.querySelector('#world-rename').addEventListener('click', () => {
+      const world = this.selectedWorld; if (!world) return;
+      const name = window.prompt('Rename world', world.name);
+      if (name?.trim()) { this.game.renameLocalWorld?.(world.id, name); refreshWorldList(); }
+    });
+    worldsScreen.querySelector('#world-delete').addEventListener('click', () => {
+      const world = this.selectedWorld; if (!world) return;
+      if (!window.confirm(`Delete “${world.name}”? This cannot be undone.`)) return;
+      this.game.deleteLocalWorld?.(world.id); this.selectedWorld = null; refreshWorldList();
+    });
+    worldsScreen.querySelector('#world-recreate').addEventListener('click', () => {
+      const world = this.selectedWorld; if (!world) return;
+      if (!window.confirm(`Re-create “${world.name}” and erase its saved progress?`)) return;
+      this.game.recreateLocalWorld?.(world.id, world.seed, world.name, world.gameMode);
+    });
+    worldsScreen.querySelector('#world-export').addEventListener('click', () => {
+      if (!this.selectedWorld) return;
+      try { this.game.exportWorldSave?.(this.selectedWorld.id); }
+      catch (error) { this.notify(error.message, 4000); }
+    });
+    worldsScreen.querySelector('#world-import').addEventListener('click', () => {
+      this._saveReturnScreen = 'worlds'; worldsScreen.style.display = 'none'; saves.style.display = 'flex';
+    });
+    createScreen.querySelector('#new-world-name').addEventListener('input', event => {
+      createScreen.querySelector('#world-save-location').textContent = `Will be saved in ${event.target.value.trim() || 'New World'}`;
+    });
+    let newWorldMode = 'survival';
+    createScreen.querySelector('#new-world-mode').addEventListener('click', event => {
+      newWorldMode = newWorldMode === 'survival' ? 'creative' : 'survival';
+      event.currentTarget.textContent = `Game Mode: ${newWorldMode === 'creative' ? 'Creative' : 'Survival'}`;
+      createScreen.querySelector('#world-mode-description').textContent = newWorldMode === 'creative'
+        ? 'Build freely with unlimited resources and instant block breaking.'
+        : 'Explore, mine, build and craft to survive.';
+    });
+    createScreen.querySelector('#world-more-options').addEventListener('click', event => {
+      const field = createScreen.querySelector('#world-seed-field');
+      field.hidden = !field.hidden; event.currentTarget.setAttribute('aria-expanded', String(!field.hidden));
+      event.currentTarget.textContent = field.hidden ? 'More World Options...' : 'Hide World Options';
+    });
+    createScreen.querySelector('#world-create-confirm').addEventListener('click', () => {
+      const name = createScreen.querySelector('#new-world-name').value.trim() || 'New World';
+      const suppliedSeed = createScreen.querySelector('#new-world-seed').value.trim();
+      const unique = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const seed = suppliedSeed || `aislopcraft-${unique}`;
+      this.game.openLocalWorld?.(seed, name, newWorldMode, `world-${unique}`);
+    });
+    createScreen.querySelector('#world-create-cancel').addEventListener('click', () => {
+      createScreen.style.display = 'none'; worldsScreen.style.display = 'flex'; refreshWorldList();
+    });
+    const packs = document.createElement('div');
+    packs.className = 'screen texture-pack-screen';
+    packs.id = 'texture-pack-screen';
+    packs.style.display = 'none';
+    packs.innerHTML = `<section class="texture-pack-panel">
+      <h2>Texture Packs</h2>
+      <p>Import Java Edition 1.7.x packs, including 1.7.10, or a client JAR. Supported block textures are stored locally; packs can be switched or removed below.</p>
+      <div class="resource-pack-list" id="pack-list" aria-live="polite"></div>
+      <div class="texture-pack-actions">
+        <button class="btn" id="pack-import">Open Pack File...</button>
+        <input id="pack-file" type="file" accept=".zip,.jar,application/zip" hidden>
+      </div>
+      <p class="pack-compat-note">This browser game cannot load Java Forge mods or OptiFine shaderpacks. Use Video Settings for its built-in WebGL shader styles.</p>
+      <div id="pack-status" role="status" aria-live="polite">Built-in textures active.</div>
+      <button class="btn" id="pack-done">Done</button>
+    </section>`;
+    this.root.appendChild(packs);
+    this.texturePackScreen = packs;
+    const saves = document.createElement('div');
+    saves.className = 'screen texture-pack-screen'; saves.id = 'world-save-screen'; saves.style.display = 'none';
+    saves.innerHTML = `<section class="texture-pack-panel">
+      <h2>World Saves</h2>
+      <p>Worlds autosave in this browser by seed. Export a portable JSON save to keep a backup or move a world to another browser.</p>
+      <div class="texture-pack-actions">
+        <button class="btn" id="save-export">Download Current World</button>
+        <button class="btn" id="save-import-button">Import World Save...</button>
+        <input id="save-import-file" type="file" accept=".json,application/json" hidden>
+      </div>
+      <div id="save-status" role="status" aria-live="polite">Autosaves are stored only in this browser until exported.</div>
+      <button class="btn" id="save-done">Done</button>
+    </section>`;
+    this.root.appendChild(saves);
+    this.worldSaveScreen = saves;
+    const saveStatus = saves.querySelector('#save-status');
+    const saveInput = saves.querySelector('#save-import-file');
+    div.querySelector('#btn-saves').addEventListener('click', () => { this._saveReturnScreen = null; saves.style.display = 'flex'; });
+    saves.querySelector('#save-done').addEventListener('click', () => {
+      saves.style.display = 'none';
+      if (this._saveReturnScreen === 'worlds') this.worldSelectScreen.style.display = 'flex';
+      this._saveReturnScreen = null;
+    });
+    saves.addEventListener('mousedown', event => { if (event.target === saves) saves.style.display = 'none'; });
+    document.addEventListener('keydown', event => {
+      if (event.code === 'Escape' && saves.style.display === 'flex') { event.preventDefault(); saves.style.display = 'none'; }
+    }, true);
+    saves.querySelector('#save-export').addEventListener('click', () => {
+      try { this.game.exportWorldSave?.(); saveStatus.textContent = 'World save downloaded.'; }
+      catch (error) { saveStatus.textContent = error.message; }
+    });
+    saves.querySelector('#save-import-button').addEventListener('click', () => saveInput.click());
+    saveInput.addEventListener('change', async () => {
+      const file = saveInput.files?.[0]; if (!file) return;
+      saveStatus.textContent = 'Validating world save...';
+      try { await this.game.importWorldSaveFile(file); saveStatus.textContent = 'Save imported. Reloading world...'; }
+      catch (error) { saveStatus.textContent = `Could not import save: ${error.message}`; }
+      saveInput.value = '';
+    });
+    const fileInput = packs.querySelector('#pack-file');
+    const status = packs.querySelector('#pack-status');
+    const packList = packs.querySelector('#pack-list');
+    const renderPackList = () => {
+      const state = this.game.getResourcePackState?.() || { packs: [], activeId: null };
+      const forcedVisuals = this.game.networkRoom?.visuals?.mode === 'forced' ? this.game.networkRoom.visuals : null;
+      packList.replaceChildren();
+      const appendRow = (title, detail, active, use, remove = null, locked = false) => {
+        const row = document.createElement('div'); row.className = 'resource-pack-row';
+        const info = document.createElement('div'); info.className = 'resource-pack-info';
+        const name = document.createElement('strong'); name.textContent = title;
+        const meta = document.createElement('span'); meta.textContent = detail;
+        info.append(name, meta);
+        const actions = document.createElement('div'); actions.className = 'resource-pack-row-actions';
+        const useButton = document.createElement('button'); useButton.className = 'btn'; useButton.textContent = locked ? 'Locked' : active ? 'In Use' : 'Use'; useButton.disabled = active || locked;
+        useButton.addEventListener('click', async () => {
+          useButton.disabled = true;
+          try { await use(); this._iconCache.clear(); status.textContent = `${title} is now active.`; }
+          catch (error) { status.textContent = `Could not use pack: ${error.message}`; }
+          renderPackList();
+        });
+        actions.appendChild(useButton);
+        if (remove) {
+          const deleteButton = document.createElement('button'); deleteButton.className = 'btn'; deleteButton.textContent = 'Delete';
+          deleteButton.addEventListener('click', async () => {
+            await remove(); this._iconCache.clear(); status.textContent = `${title} was removed.`; renderPackList();
+          });
+          actions.appendChild(deleteButton);
+        }
+        row.append(info, actions); packList.appendChild(row);
+      };
+      if (forcedVisuals) {
+        appendRow(`Server enforced · ${forcedVisuals.resourcePack?.name || 'Default textures'}`,
+          `Shader: ${forcedVisuals.shaderStyle || 'classic'} · visuals locked for this room`, true, () => {}, null, true);
+      }
+      appendRow('Default textures', 'Built-in AiSlopcraft art', !forcedVisuals && state.activeId === null,
+        () => this.game.useDefaultResourcePack?.() ?? this.game.resetResourcePack?.(), null, !!forcedVisuals);
+      for (const pack of state.packs) {
+        const details = `${pack.count ? `${pack.count} block textures` : 'Imported pack'}${pack.id === 'legacy' ? ' · older installation' : ''}`;
+        appendRow(pack.name, details, !forcedVisuals && state.activeId === pack.id,
+          () => this.game.useResourcePack(pack.id), forcedVisuals ? null : () => this.game.deleteResourcePack(pack.id), !!forcedVisuals);
+      }
+    };
+    renderPackList();
+    div.querySelector('#btn-pack').addEventListener('click', () => { renderPackList(); packs.style.display = 'flex'; });
+    packs.querySelector('#pack-import').addEventListener('click', () => fileInput.click());
+    packs.querySelector('#pack-done').addEventListener('click', () => { packs.style.display = 'none'; });
+    packs.addEventListener('mousedown', event => { if (event.target === packs) packs.style.display = 'none'; });
+    document.addEventListener('keydown', event => {
+      if (event.code === 'Escape' && packs.style.display === 'flex') { event.preventDefault(); packs.style.display = 'none'; }
+    }, true);
     fileInput.addEventListener('change', async () => {
       const file = fileInput.files?.[0]; if (!file) return;
-      status.textContent = 'Loading block textures...';
+      status.textContent = 'Checking Java 1.7.x block textures...';
       try {
         const result = await this.game.importResourcePack(file);
         this._iconCache.clear();
-        status.textContent = `Loaded ${result.count} block textures locally.${result.saved ? '' : ' Not saved; import again next time.'}`;
+        status.textContent = `${result.name}: installed ${result.count} supported block textures.${result.saved ? '' : ' Applied this session, but browser storage could not save it.'}`;
+        renderPackList();
       } catch (error) { status.textContent = `Could not load pack: ${error.message}`; }
       fileInput.value = '';
     });
-    div.querySelector('#btn-pack-reset').addEventListener('click', () => {
-      this.game.resetResourcePack(); this._iconCache.clear(); status.textContent = 'Default block textures restored.';
+    div.querySelector('#btn-quit').addEventListener('click', () => {
+      this.game.audio.click();
+      window.close();
+      div.querySelector('#title-status').textContent = 'You can close this browser tab to quit.';
     });
     div.querySelector('#btn-options').addEventListener('click', () => {
       this.game.audio.init();
       this.game.audio.click();
       this.showOptions();
     });
+
+    const multiplayer = document.createElement('div');
+    multiplayer.className = 'screen multiplayer-screen';
+    multiplayer.id = 'multiplayer-screen';
+    multiplayer.style.display = 'none';
+    multiplayer.innerHTML = `
+      <div class="multiplayer-card">
+        <h2>Multiplayer</h2>
+        <label>Public server address
+          <input id="mp-relay" type="url" placeholder="wss://your-server.example/ws" autocomplete="url">
+        </label>
+        <label>Your player name
+          <input id="mp-player-name" maxlength="20" placeholder="Player" autocomplete="nickname">
+        </label>
+        <div class="mp-columns">
+          <section>
+            <h3>Create a world</h3>
+            <label>World name <input id="mp-world-name" maxlength="32" placeholder="My world"></label>
+            <label>Game mode
+              <select id="mp-mode"><option value="survival">Survival</option><option value="creative">Creative</option></select>
+            </label>
+            <label>Visibility
+              <select id="mp-access"><option value="public">Public — listed</option><option value="private">Private — invite code only</option></select>
+            </label>
+            <label>Optional password <input id="mp-password" type="password" maxlength="64" autocomplete="new-password" placeholder="At least 4 characters"></label>
+            <label>Visual settings
+              <select id="mp-visual-policy"><option value="individual">Let each player choose</option><option value="forced">Force the host's shader and texture pack</option></select>
+            </label>
+            <label>Forced shader
+              <select id="mp-host-shader" data-forced-visual disabled>
+                <option value="classic">Classic</option><option value="vibrant">Vibrant</option><option value="cinematic">Cinematic</option><option value="shader">Shader Lite</option><option value="psx">PSX (1.7.10)</option>
+              </select>
+            </label>
+            <label>Forced texture pack
+              <select id="mp-host-texture-pack" data-forced-visual disabled><option value="__default__">Default textures</option></select>
+            </label>
+            <small class="mp-visual-help">Individual mode leaves each player's shader and textures alone. Forced mode sends the selected built-in shader and supported block textures to everyone, then restores personal visuals when they leave.</small>
+            <button class="btn" id="mp-create">Create world</button>
+          </section>
+          <section>
+            <h3>Join a world</h3>
+            <div class="mp-room-list" id="mp-room-list"><span>Connect to a server to browse public worlds.</span></div>
+            <button class="btn" id="mp-refresh">Refresh public worlds</button>
+            <label>Invite code <input id="mp-code" maxlength="6" placeholder="6-character code" autocomplete="off"></label>
+            <label>World password <input id="mp-join-password" type="password" maxlength="64" autocomplete="current-password"></label>
+            <button class="btn" id="mp-join">Join by code</button>
+          </section>
+        </div>
+        <div class="mp-status" id="mp-status" role="status">A public multiplayer relay is required. See README for the quick deploy guide.</div>
+        <div class="mp-footer"><button class="btn btn-half" id="mp-back">Back</button><span>Up to 8 players · The host's relay stays online while hosting.</span></div>
+      </div>`;
+    this.root.appendChild(multiplayer);
+    div.querySelector('#btn-multiplayer').addEventListener('click', () => this.openMultiplayer());
+    multiplayer.querySelector('#mp-back').addEventListener('click', () => { multiplayer.style.display = 'none'; });
+    multiplayer.querySelector('#mp-refresh').addEventListener('click', () => this.refreshPublicRooms());
+    multiplayer.querySelector('#mp-create').addEventListener('click', () => this.createMultiplayerRoom());
+    multiplayer.querySelector('#mp-join').addEventListener('click', () => this.joinMultiplayerRoom());
+    multiplayer.querySelector('#mp-access').addEventListener('change', () => {
+      multiplayer.querySelector('#mp-password').placeholder = multiplayer.querySelector('#mp-access').value === 'private' ? 'Optional (invite code also required)' : 'At least 4 characters, optional';
+    });
+    this.multiplayerScreen = multiplayer;
+    multiplayer.querySelector('#mp-visual-policy').addEventListener('change', event => {
+      for (const control of multiplayer.querySelectorAll('[data-forced-visual]')) control.disabled = event.target.value !== 'forced';
+    });
+    this.multiplayerClient = this.game.multiplayerClient || null;
+    multiplayer.querySelector('#mp-relay').value = this.game.multiplayerRelay || window.localStorage.getItem('aislopcraft:multiplayer-relay') || suggestedMultiplayerRelay();
+    multiplayer.querySelector('#mp-player-name').value = window.localStorage.getItem('aislopcraft:multiplayer-name') || '';
+    multiplayer.querySelector('#mp-code').value = new URLSearchParams(window.location.search).get('room') || '';
+  }
+
+  openWorldSelection() {
+    this.selectedWorld = null;
+    this.refreshWorldList?.();
+    this.hide('title-screen');
+    this.worldSelectScreen.style.display = 'flex';
+  }
+
+  playSelectedWorld() {
+    const world = this.selectedWorld;
+    if (!world) return;
+    this.game.audio?.click?.();
+    if (this.game.openLocalWorld) this.game.openLocalWorld(world.seed, world.name, world.gameMode, world.id);
+    else {
+      this.hide('title-screen'); this.setMode('game'); this.game.start?.();
+    }
+  }
+
+  openMultiplayer() {
+    this.multiplayerScreen.style.display = 'flex';
+    const shader = this.multiplayerScreen.querySelector('#mp-host-shader');
+    shader.value = [...shader.options].some(option => option.value === this.game.shaderStyle) ? this.game.shaderStyle : 'classic';
+    const texturePack = this.multiplayerScreen.querySelector('#mp-host-texture-pack');
+    const defaultOption = document.createElement('option');
+    defaultOption.textContent = 'Default textures'; defaultOption.value = '__default__';
+    texturePack.replaceChildren(defaultOption);
+    const packState = this.game.getResourcePackState?.() || { packs: [], activeId: null };
+    for (const pack of packState.packs) {
+      const option = document.createElement('option');
+      option.textContent = pack.name; option.value = pack.id;
+      texturePack.appendChild(option);
+    }
+    texturePack.value = packState.activeId || '__default__';
+    const policy = this.multiplayerScreen.querySelector('#mp-visual-policy');
+    for (const control of this.multiplayerScreen.querySelectorAll('[data-forced-visual]')) control.disabled = policy.value !== 'forced';
+    const status = this.multiplayerScreen.querySelector('#mp-status');
+    if (this.game.multiplayerClient) this.multiplayerClient = this.game.multiplayerClient;
+    if (!this.multiplayerScreen.querySelector('#mp-player-name').value) {
+      this.multiplayerScreen.querySelector('#mp-player-name').value = `Player${Math.floor(Math.random() * 900 + 100)}`;
+    }
+    if (!this.multiplayerScreen.querySelector('#mp-relay').value) {
+      status.textContent = 'Set a public wss:// relay URL. See README for one-click deployment and setup.';
+    }
+  }
+
+  async connectMultiplayer() {
+    const screen = this.multiplayerScreen;
+    const relay = screen.querySelector('#mp-relay').value.trim();
+    const playerName = screen.querySelector('#mp-player-name').value.trim();
+    const status = screen.querySelector('#mp-status');
+    if (!playerName) throw new Error('Enter a player name.');
+    if (!relay) throw new Error('Enter the public multiplayer relay address first.');
+    window.localStorage.setItem('aislopcraft:multiplayer-name', playerName);
+    window.localStorage.setItem('aislopcraft:multiplayer-relay', relay);
+    const { MultiplayerClient } = await import('../network/multiplayer.js');
+    if (!this.multiplayerClient) this.multiplayerClient = new MultiplayerClient();
+    status.textContent = 'Connecting to multiplayer relay...';
+    await this.multiplayerClient.connect(relay);
+    return { playerName, status };
+  }
+
+  async refreshPublicRooms() {
+    const screen = this.multiplayerScreen;
+    const list = screen.querySelector('#mp-room-list');
+    const status = screen.querySelector('#mp-status');
+    try {
+      await this.connectMultiplayer();
+      const result = await this.multiplayerClient.listRooms();
+      list.replaceChildren();
+      if (!result.rooms.length) { list.textContent = 'No public worlds are online right now.'; return; }
+      for (const room of result.rooms) {
+        const button = document.createElement('button');
+        button.className = 'mp-room';
+        button.type = 'button';
+        button.textContent = `${room.name} · ${room.players}/${room.maxPlayers} · ${room.gameMode}${room.passwordProtected ? ' · password' : ''}${room.visualMode === 'forced' ? ' · host visuals' : ''}`;
+        button.addEventListener('click', () => {
+          screen.querySelector('#mp-code').value = room.code;
+          screen.querySelector('#mp-join-password').focus();
+        });
+        list.appendChild(button);
+      }
+      status.textContent = `Found ${result.rooms.length} public world${result.rooms.length === 1 ? '' : 's'}.`;
+    } catch (error) { status.textContent = error.message; }
+  }
+
+  async createMultiplayerRoom() {
+    const screen = this.multiplayerScreen;
+    const status = screen.querySelector('#mp-status');
+    try {
+      const { playerName } = await this.connectMultiplayer();
+      const password = screen.querySelector('#mp-password').value;
+      const visualMode = screen.querySelector('#mp-visual-policy').value;
+      const visuals = visualMode === 'forced' ? {
+        mode: 'forced',
+        shaderStyle: screen.querySelector('#mp-host-shader').value,
+        resourcePack: this.game.getResourcePackForSharing?.(
+          screen.querySelector('#mp-host-texture-pack').value === '__default__'
+            ? null : screen.querySelector('#mp-host-texture-pack').value,
+        ) || null,
+      } : { mode: 'individual' };
+      const result = await this.multiplayerClient.createRoom({
+        playerName, name: screen.querySelector('#mp-world-name').value.trim(),
+        gameMode: screen.querySelector('#mp-mode').value, access: screen.querySelector('#mp-access').value,
+        password, seed: this.game.seed, visuals,
+      });
+      const entries = [...this.game.world.edits].map(([key,id]) => [key, id, this.game.world.metaEdits.get(key) || 0]);
+      for (const [key,id,meta] of entries) {
+        const [x,y,z] = key.split(',').map(Number);
+        this.multiplayerClient.send('world:edit', { edit: { x,y,z,id,meta } });
+      }
+      this.multiplayerClient.send('chat', { text: `${playerName} opened ${result.gameMode} world “${result.name}”.` });
+      await this.enterMultiplayer(result);
+    } catch (error) { status.textContent = error.message; }
+  }
+
+  async joinMultiplayerRoom() {
+    const screen = this.multiplayerScreen;
+    const status = screen.querySelector('#mp-status');
+    try {
+      const { playerName } = await this.connectMultiplayer();
+      const result = await this.multiplayerClient.joinRoom({
+        code: screen.querySelector('#mp-code').value.trim().toUpperCase(),
+        password: screen.querySelector('#mp-join-password').value, playerName,
+      });
+      await this.enterMultiplayer(result);
+    } catch (error) { status.textContent = error.message; }
+  }
+
+  async enterMultiplayer(room) {
+    if (room.seed !== this.game.seed) {
+      await this.multiplayerClient.leave();
+      throw new Error(`This world uses seed “${room.seed}”. Open the same world seed with ?seed=${encodeURIComponent(room.seed)}, then join again.`);
+    }
+    const edits = room.worldEdits || [];
+    this.game.applyNetworkEdits?.(edits);
+    this.game.setMultiplayerRoom?.(room, this.multiplayerClient);
+    try { await this.game.applyMultiplayerVisuals?.(room.visuals); }
+    catch (error) {
+      await this.game.leaveMultiplayer?.();
+      throw new Error(`Could not apply the host's forced visuals: ${error.message}`);
+    }
+    this.multiplayerScreen.style.display = 'none';
+    this.hide('title-screen');
+    this.game.audio.init();
+    this.game.audio.click();
+    this.setMode('game');
+    this.game.start();
+    this.notify(`Joined ${room.name} · ${room.gameMode} · code ${room.code}`, 5000);
   }
 
   showOptions() {
@@ -155,6 +616,12 @@ export class UI {
       <div class="held-name" id="held-name"></div>
       <div class="toast-msg" id="toast-msg"></div>
       <div class="hint" id="hint">Click to play &nbsp;|&nbsp; WASD move · Space jump · Shift sneak · Q drop · E inventory · F3 debug · Esc pause</div>
+      <div class="network-panel" id="network-panel" style="display:none">
+        <div class="network-room-line"><span id="network-room-label"></span><button id="network-copy" type="button">Copy invite</button><button id="network-leave" type="button">Leave</button></div>
+        <div class="network-chat-log" id="network-chat-log" aria-live="polite"></div>
+        <form id="network-chat-form" style="display:none"><input id="network-chat-input" maxlength="240" placeholder="Message…" autocomplete="off"><button type="submit">Send</button></form>
+        <button id="network-chat-open" type="button">Chat (T)</button>
+      </div>
     `;
     this.root.appendChild(div);
     this.hotbarEl = div.querySelector('#hotbar');
@@ -178,6 +645,67 @@ export class UI {
       });
       this.hotbarEl.appendChild(s);
     }
+    const networkPanel = div.querySelector('#network-panel');
+    div.querySelector('#network-copy').addEventListener('click', async () => {
+      const room = this.game.networkRoom;
+      if (!room) return;
+      const invite = new URL(window.location.href);
+      invite.searchParams.set('seed', room.seed);
+      invite.searchParams.set('room', room.code);
+      invite.searchParams.set('relay', this.game.multiplayerClient?.relayUrl || '');
+      try { await navigator.clipboard.writeText(invite.toString()); this.notify('Invite link copied. Share the code and password separately.'); }
+      catch { window.prompt('Copy this invite link:', invite.toString()); }
+    });
+    div.querySelector('#network-leave').addEventListener('click', () => this.game.leaveMultiplayer?.());
+    div.querySelector('#network-chat-open').addEventListener('click', () => this.openNetworkChat());
+    div.querySelector('#network-chat-form').addEventListener('submit', event => {
+      event.preventDefault();
+      const input = div.querySelector('#network-chat-input');
+      const text = input.value.trim();
+      if (text) this.game.multiplayerClient?.send('chat', { text });
+      input.value = '';
+      div.querySelector('#network-chat-form').style.display = 'none';
+      div.querySelector('#network-chat-open').style.display = 'block';
+      input.blur();
+      if (this.mode === 'game') document.getElementById('game-canvas')?.requestPointerLock?.();
+    });
+    this.networkPanel = networkPanel;
+  }
+
+  openNetworkChat() {
+    if (!this.game.networkRoom) return;
+    const form = this.networkPanel.querySelector('#network-chat-form');
+    form.style.display = 'flex';
+    this.networkPanel.querySelector('#network-chat-open').style.display = 'none';
+    document.exitPointerLock?.();
+    this.networkPanel.querySelector('#network-chat-input').focus();
+  }
+
+  appendNetworkChat(name, text) {
+    const log = this.networkPanel?.querySelector('#network-chat-log');
+    if (!log) return;
+    const line = document.createElement('div');
+    const author = document.createElement('strong');
+    author.textContent = `${name}: `;
+    const message = document.createElement('span');
+    message.textContent = text;
+    line.append(author, message);
+    log.appendChild(line);
+    while (log.children.length > 8) log.firstElementChild.remove();
+    log.scrollTop = log.scrollHeight;
+    this.networkPanel.style.display = 'block';
+  }
+
+  updateNetworkPanel() {
+    const room = this.game.networkRoom;
+    if (this.networkPanel) {
+      this.networkPanel.style.display = room ? 'block' : 'none';
+      if (room) this.networkPanel.querySelector('#network-room-label').textContent = `${room.name} · ${room.gameMode} · ${(this.game.remotePlayers?.size || 0) + 1}/8 · ${room.code}`;
+    }
+    const saveNow = document.getElementById('btn-save-now');
+    if (saveNow) saveNow.hidden = !!room;
+    const saveQuit = document.getElementById('btn-save-quit');
+    if (saveQuit) saveQuit.textContent = room ? 'Leave Multiplayer & Quit to Title' : 'Save & Quit to Title';
   }
 
   notify(message, duration = 2400) {
@@ -188,6 +716,55 @@ export class UI {
     this._toastTimer = setTimeout(() => {
       if (this.toastEl) this.toastEl.style.opacity = '0';
     }, duration);
+  }
+
+  initPlayerPreview(canvas) {
+    if (!canvas) return;
+    try {
+      const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: false, powerPreference: 'low-power' });
+      renderer.setPixelRatio(1);
+      renderer.setSize(120, 176, false);
+      renderer.setClearColor(0x080808, 1);
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x080808);
+      const camera = new THREE.PerspectiveCamera(32, 120 / 176, 0.1, 20);
+      camera.position.set(0, 1.05, 4.1); camera.lookAt(0, 1.05, 0);
+      const avatar = new THREE.Group(); scene.add(avatar);
+      const part = (w, h, d, color, x, y, z) => {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshBasicMaterial({ color }));
+        mesh.position.set(x, y, z); avatar.add(mesh); return mesh;
+      };
+      // A small, original block-character preview, built from voxel shapes.
+      part(.48, .68, .27, 0x167f9c, 0, 1.02, 0); // tunic
+      part(.235, .71, .25, 0x253b83, -.13, .325, 0); // left leg
+      part(.235, .71, .25, 0x253b83, .13, .325, 0); // right leg
+      part(.19, .68, .23, 0xc78d67, -.36, 1.02, 0); // arms
+      part(.19, .68, .23, 0xc78d67, .36, 1.02, 0);
+      part(.47, .47, .47, 0xc78d67, 0, 1.62, 0); // head
+      part(.475, .12, .48, 0x513927, 0, 1.91, 0); // hair cap
+      part(.13, .045, .025, 0xeee7d5, -.105, 1.66, .247); // eyes
+      part(.13, .045, .025, 0xeee7d5, .105, 1.66, .247);
+      part(.055, .055, .012, 0x3c74a6, -.105, 1.66, .264);
+      part(.055, .055, .012, 0x3c74a6, .105, 1.66, .264);
+      this.playerPreviewRenderer = renderer;
+      this.playerPreviewScene = scene; this.playerPreviewCamera = camera; this.playerPreviewAvatar = avatar;
+      this.renderPlayerPreview();
+      canvas.addEventListener('pointermove', event => {
+        const rect = canvas.getBoundingClientRect();
+        if (rect.width) avatar.rotation.y = Math.max(-1.25, Math.min(1.25, ((event.clientX - rect.left) / rect.width - .5) * 2.5));
+        this.renderPlayerPreview();
+      });
+      canvas.addEventListener('pointerleave', () => { avatar.rotation.y = 0; this.renderPlayerPreview(); });
+    } catch {
+      // Keep the inventory usable on browsers without a second WebGL context.
+      canvas.setAttribute('aria-label', 'Player preview unavailable on this device');
+    }
+  }
+
+  renderPlayerPreview() {
+    if (this.playerPreviewRenderer && this.playerPreviewScene && this.playerPreviewCamera) {
+      this.playerPreviewRenderer.render(this.playerPreviewScene, this.playerPreviewCamera);
+    }
   }
 
   buildTooltip() {
@@ -267,7 +844,7 @@ export class UI {
         <div class="inv-top-row">
           <div class="armor-section" id="armor-section">
             <div class="armor-layout"><div class="armor-grid" id="armor-grid"></div>
-              <div class="player-preview"><img src="${playerPreview}" alt="Player preview"></div></div>
+              <div class="player-preview"><canvas id="player-preview-canvas" data-player-preview="rotating" width="120" height="176" aria-label="Player model preview; move the pointer to rotate"></canvas></div></div>
           </div>
           <div class="craft-section">
             <div class="inv-title" id="craft-title">Crafting</div>
@@ -284,6 +861,7 @@ export class UI {
       </div>
     `;
     this.root.appendChild(inv);
+    this.initPlayerPreview(inv.querySelector('#player-preview-canvas'));
     this.bindBackdropDrop(inv);
 
     // pause
@@ -297,6 +875,7 @@ export class UI {
         <button class="btn btn-big" id="btn-back">Back to game</button>
         <button class="btn" id="btn-options2">Options...</button>
         <button class="btn" id="btn-respawn">Respawn</button>
+        ${this.game.saveGame ? '<button class="btn" id="btn-save-now">Save World Now</button>' : ''}
         ${this.game.saveAndQuit ? '<button class="btn" id="btn-save-quit">Save & Quit to Title</button>' : ''}
         <div class="pause-hint">Beta 1.7.3 — no hunger, no sprint. Eat food or cake to heal!</div>
       </div>
@@ -314,6 +893,11 @@ export class UI {
       this.game.audio.click();
       this.game.respawn();
       this.setMode('game');
+    });
+    pause.querySelector('#btn-save-now')?.addEventListener('click', () => {
+      this.game.audio.click();
+      const saved = this.game.saveGame?.();
+      this.notify(saved ? 'World saved in this browser.' : 'World saves are unavailable during multiplayer.');
     });
     const saveQuitBtn = pause.querySelector('#btn-save-quit');
     if (saveQuitBtn) {
@@ -654,9 +1238,25 @@ export class UI {
       }
     }
     this.refresh();
+    if (this.mode === 'chest' || this.mode === 'furnace') this.game.syncSharedState?.();
   }
 
   onKey(e) {
+    if (e.target?.id === 'network-chat-input') {
+      if (e.code === 'Escape') {
+        e.preventDefault();
+        this.networkPanel.querySelector('#network-chat-form').style.display = 'none';
+        this.networkPanel.querySelector('#network-chat-open').style.display = 'block';
+        e.target.blur();
+        if (this.mode === 'game') document.getElementById('game-canvas')?.requestPointerLock?.();
+      }
+      return;
+    }
+    if (e.code === 'KeyT' && this.mode === 'game' && this.game.networkRoom) {
+      e.preventDefault();
+      this.openNetworkChat();
+      return;
+    }
     if (e.code === (this.game.settings?.keys ? this.game.settings.keys.inventory : 'KeyE')) {
       if (this.mode === 'game') {
         e.preventDefault();

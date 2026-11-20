@@ -13,15 +13,16 @@ import {
 } from './world/blocks.js';
 import { Player } from './entities/player.js';
 import { advanceEating } from './entities/eating.js';
-import { MobManager, findSafeGround, rollMobDrops } from './entities/mobs.js';
+import { MobManager, findSafeGround, rollMobDrops, mobAttackDamage } from './entities/mobs.js';
 import { UI } from './ui/ui.js';
 import { Audio } from './audio.js';
 import { Sky } from './sky.js';
 import { createFurnaceState, tickFurnace, interactWithFurnaceSlot } from './ui/furnace.js';
 import { ParticleManager } from './particles.js';
 import { FirstPersonArm } from './arm.js';
-import { Lighting, SHADER_STYLES, shaderStyleId } from './rendering.js';
+import { Lighting, PSXPostProcess, SHADER_STYLES, shaderStyleId } from './rendering.js';
 import { loadSettings, persistSettings, sensitivityToRadians, keyLabel } from './settings.js';
+import { decodeWorldSave, encodeWorldSave, MAX_WORLD_SAVE_BYTES, normalizeWorldSave } from './save.js';
 import { useOnBlock, useOnMob, growCrop, cropDrops } from './interactions.js';
 import { FluidSimulator } from './world/fluids.js';
 import { RedstoneSimulator } from './world/redstone.js';
@@ -80,7 +81,42 @@ defaultAtlas.getContext('2d').clearRect(waterX, waterY, 16, 16);
 defaultAtlas.getContext('2d').drawImage(waterCanvas, waterX, waterY);
 
 const lighting = new Lighting({ atlasTexture: atlasTex, emissionTexture: buildEmissionAtlas(atlasCanvas) });
+const psxPostProcess = new PSXPostProcess(0.25);
+const renderBufferSize = new THREE.Vector2();
 let atlasGeneration = 0;
+const RESOURCE_PACKS_KEY = 'aislopcraft:resource-packs';
+const ACTIVE_RESOURCE_PACK_KEY = 'aislopcraft:active-resource-pack';
+const resourcePackMemory = new Map();
+let memoryActiveResourcePackId = null;
+let memoryResourcePackSelectionSet = false;
+let multiplayerVisualRestore = null;
+function storedResourcePacks() {
+  try {
+    const value = JSON.parse(localStorage.getItem(RESOURCE_PACKS_KEY) || '[]');
+    return Array.isArray(value) ? value.filter(pack => pack && typeof pack.id === 'string' && typeof pack.name === 'string') : [];
+  } catch { return []; }
+}
+function hasLegacyResourcePack() {
+  try { return !!localStorage.getItem('aislopcraft:block-atlas'); } catch { return false; }
+}
+function resourcePackState() {
+  const packs = storedResourcePacks();
+  if (hasLegacyResourcePack() && !packs.some(pack => pack.id === 'legacy')) packs.unshift({ id: 'legacy', name: 'Previously imported textures', count: 0 });
+  for (const pack of resourcePackMemory.values()) if (!packs.some(item => item.id === pack.id)) packs.push(pack);
+  let activeId = null, explicitlyDefault = false;
+  try {
+    const storedActive = localStorage.getItem(ACTIVE_RESOURCE_PACK_KEY);
+    explicitlyDefault = storedActive === '__default__';
+    activeId = explicitlyDefault ? null : storedActive;
+  } catch {}
+  if (memoryResourcePackSelectionSet) {
+    activeId = memoryActiveResourcePackId;
+    explicitlyDefault = activeId === null;
+  }
+  if (!activeId && !explicitlyDefault && hasLegacyResourcePack()) activeId = 'legacy';
+  if (!packs.some(pack => pack.id === activeId)) activeId = null;
+  return { packs, activeId };
+}
 function refreshAtlas() {
   atlasTex.needsUpdate = true;
   waterCanvas.getContext('2d').clearRect(0, 0, 16, 16);
@@ -92,16 +128,45 @@ function refreshAtlas() {
   emission.needsUpdate = true;
   updated.dispose();
 }
+async function applyTransientAtlas(atlasData) {
+  if (typeof atlasData !== 'string' || !atlasData.startsWith('data:image/png;base64,') || atlasData.length > 700_000) throw new Error('The host texture atlas is missing or too large to share.');
+  const generation = ++atlasGeneration;
+  const image = new Image();
+  await new Promise((resolve, reject) => {
+    image.onload = resolve;
+    image.onerror = () => reject(new Error('Could not decode the host texture atlas.'));
+    image.src = atlasData;
+  });
+  if (generation !== atlasGeneration) return false;
+  if (image.width !== 256 || image.height !== 256) throw new Error('The host texture atlas has invalid dimensions.');
+  atlasCanvas.getContext('2d').clearRect(0, 0, 256, 256);
+  atlasCanvas.getContext('2d').drawImage(image, 0, 0);
+  refreshAtlas();
+  return true;
+}
+function applyTransientDefaultAtlas() {
+  atlasGeneration++;
+  atlasCanvas.getContext('2d').clearRect(0, 0, 256, 256);
+  atlasCanvas.getContext('2d').drawImage(defaultAtlas, 0, 0);
+  refreshAtlas();
+}
 
 const solidMat = lighting.createMaterial({ name: 'Terrain', voxel: true, map: atlasTex, emissionMap: true });
 const cutoutMat = lighting.createMaterial({ name: 'TerrainCutout', voxel: true, map: atlasTex, emissionMap: true, cutout: true, doubleSide: true });
 const waterMat = lighting.createMaterial({ name: 'Water', voxel: true, map: waterTex, water: true, transparent: true, opacity: 0.78, doubleSide: true, depthWrite: false });
 
 // ---- game state ----
-const SEED = new URLSearchParams(location.search).get('seed') || 'Beta 1.7.3';
-const SAVE_KEY = `aislopcraft:world:${SEED}`;
+const WORLD_PARAMS = new URLSearchParams(location.search);
+const SEED = WORLD_PARAMS.get('seed') || 'Beta 1.7.3';
+const WORLD_ID = WORLD_PARAMS.get('id') || SEED;
+const WORLD_NAME = WORLD_PARAMS.get('world') || SEED;
+const START_GAME_MODE = WORLD_PARAMS.get('mode') === 'creative' ? 'creative' : 'survival';
+const SAVE_KEY = `aislopcraft:world:${WORLD_ID}`;
 function readSave() {
-  try { return JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); } catch { return null; }
+  try {
+    const save = normalizeWorldSave(JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'));
+    return save?.seed === SEED && save.worldId === WORLD_ID ? save : null;
+  } catch { return null; }
 }
 const savedGame = readSave();
 const legacySettings = { ...savedGame?.settings };
@@ -127,9 +192,92 @@ const sky = new Sky(scene, camera);
 const mobs = new MobManager(world, scene, lighting);
 const vehicles = new VehicleManager(world, scene, lighting);
 vehicles.load(savedGame?.vehicles);
+const remotePlayers = new Map();
+let applyingNetworkEdit = false;
+let networkStateTimer = 0;
+let networkItemTimer = 0;
+let networkVehicleTimer = 0;
+let sharedStateTimer = 0;
 const game = {
   world, player, audio, sky, mobs, renderer, lighting, fluids, redstone, vehicles,
   atlasCanvas,
+  worldName: savedGame?.worldName || WORLD_NAME,
+  getResourcePackState() { return resourcePackState(); },
+  listSavedWorlds() {
+    const worlds = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (!key?.startsWith('aislopcraft:world:')) continue;
+        try {
+          const save = normalizeWorldSave(JSON.parse(localStorage.getItem(key) || 'null'));
+          if (save && key === `aislopcraft:world:${save.worldId}`) worlds.push({ id: save.worldId, seed: save.seed, name: save.worldName || save.seed, gameMode: save.gameMode });
+        } catch { /* ignore just the one corrupt save and keep listing the rest */ }
+      }
+    } catch { /* storage may be disabled by the browser */ }
+    return worlds;
+  },
+
+  openLocalWorld(seed, name, gameMode = 'survival', worldId = seed) {
+    const url = new URL(location.href);
+    url.searchParams.set('id', String(worldId));
+    url.searchParams.set('seed', String(seed));
+    url.searchParams.set('world', String(name || seed));
+    url.searchParams.set('mode', gameMode === 'creative' ? 'creative' : 'survival');
+    url.searchParams.delete('room');
+    location.assign(url.href);
+  },
+  renameLocalWorld(worldId, name) {
+    const key = `aislopcraft:world:${worldId}`;
+    const save = normalizeWorldSave(JSON.parse(localStorage.getItem(key) || 'null'));
+    if (!save) throw new Error('Could not find that saved world.');
+    save.worldName = String(name || '').trim().slice(0, 48) || save.worldName;
+    localStorage.setItem(key, JSON.stringify(save));
+  },
+  deleteLocalWorld(worldId) {
+    localStorage.removeItem(`aislopcraft:world:${worldId}`);
+    return true;
+  },
+  recreateLocalWorld(worldId, seed, name, gameMode = 'survival') {
+    this.deleteLocalWorld(worldId);
+    this.openLocalWorld(seed, name, gameMode, worldId);
+  },
+  getResourcePackForSharing(requestedId = resourcePackState().activeId) {
+    if (requestedId == null) return null;
+    const { packs } = resourcePackState();
+    const pack = packs.find(item => item.id === requestedId);
+    if (!pack) throw new Error('That texture pack is no longer installed. Reopen the multiplayer screen and choose another pack.');
+    let atlasData = resourcePackMemory.get(requestedId)?.atlasData;
+    try { atlasData ||= requestedId === 'legacy' ? localStorage.getItem('aislopcraft:block-atlas') : localStorage.getItem(`aislopcraft:resource-pack:${requestedId}`); } catch {}
+    if (!atlasData || atlasData.length > 700_000) throw new Error('The selected texture pack is too large to share in a multiplayer room. Choose another pack or use built-in textures.');
+    return { name: pack.name || 'Host texture pack', atlasData };
+  },
+  async applyMultiplayerVisuals(visuals) {
+    await this.clearMultiplayerVisuals();
+    if (visuals?.mode !== 'forced') return true;
+    multiplayerVisualRestore = { shaderStyle: this.shaderStyle, atlasData: atlasCanvas.toDataURL('image/png') };
+    const style = SHADER_STYLES.includes(visuals.shaderStyle) ? visuals.shaderStyle : 'classic';
+    try {
+      if (visuals.resourcePack?.atlasData) await applyTransientAtlas(visuals.resourcePack.atlasData);
+      else applyTransientDefaultAtlas();
+      this.setShaderStyle(style);
+      this.ui?._iconCache?.clear();
+      return true;
+    } catch (error) {
+      await this.clearMultiplayerVisuals();
+      throw error;
+    }
+  },
+  async clearMultiplayerVisuals() {
+    if (!multiplayerVisualRestore) return false;
+    const restore = multiplayerVisualRestore;
+    multiplayerVisualRestore = null;
+    this.setShaderStyle(restore.shaderStyle);
+    try { await applyTransientAtlas(restore.atlasData); }
+    catch { applyTransientDefaultAtlas(); }
+    this.ui?._iconCache?.clear();
+    return true;
+  },
   async importResourcePack(file) {
     if (file.size > 32 * 1024 * 1024) throw new Error('Pack is too large (maximum 32 MB).');
     const generation = ++atlasGeneration;
@@ -138,20 +286,82 @@ const game = {
     staged.getContext('2d').drawImage(defaultAtlas, 0, 0);
     const count = await paintBlockSprites(staged, sprites);
     if (generation !== atlasGeneration) throw new Error('Import cancelled.');
+    const id = `pack-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
+    const name = String(file.name || 'Java 1.7 resource pack').replace(/\.[^.]+$/, '').slice(0, 60) || 'Java 1.7 resource pack';
+    const pack = { id, name, count };
+    const atlasData = staged.toDataURL('image/png');
+    resourcePackMemory.set(id, { ...pack, atlasData });
+    memoryActiveResourcePackId = id;
+    memoryResourcePackSelectionSet = true;
+    let saved = true;
+    try {
+      const list = storedResourcePacks().filter(item => item.id !== id);
+      list.push(pack);
+      localStorage.setItem(`aislopcraft:resource-pack:${id}`, atlasData);
+      localStorage.setItem(RESOURCE_PACKS_KEY, JSON.stringify(list));
+      localStorage.setItem(ACTIVE_RESOURCE_PACK_KEY, id);
+    } catch { saved = false; }
     atlasCanvas.getContext('2d').clearRect(0, 0, 256, 256);
     atlasCanvas.getContext('2d').drawImage(staged, 0, 0);
     refreshAtlas();
-    let saved = true;
-    try { localStorage.setItem('aislopcraft:block-atlas', atlasCanvas.toDataURL('image/png')); } catch { saved = false; }
-    return { count, saved };
+    return { ...pack, saved };
   },
-  resetResourcePack() {
+  async useResourcePack(id) {
+    const pack = resourcePackState().packs.find(item => item.id === id);
+    if (!pack) throw new Error('That texture pack is no longer installed.');
+    let atlasData = resourcePackMemory.get(id)?.atlasData;
+    try { atlasData ||= id === 'legacy' ? localStorage.getItem('aislopcraft:block-atlas') : localStorage.getItem(`aislopcraft:resource-pack:${id}`); } catch {}
+    if (!atlasData?.startsWith('data:image/png;base64,') || atlasData.length > 2_000_000) throw new Error('Saved texture pack data is missing or invalid.');
+    const generation = ++atlasGeneration;
+    const image = new Image();
+    await new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = () => reject(new Error('Could not read the saved texture pack.'));
+      image.src = atlasData;
+    });
+    if (generation !== atlasGeneration) return false;
+    if (image.width !== 256 || image.height !== 256) throw new Error('Saved texture pack has invalid dimensions.');
+    atlasCanvas.getContext('2d').clearRect(0, 0, 256, 256);
+    atlasCanvas.getContext('2d').drawImage(image, 0, 0);
+    refreshAtlas();
+    memoryActiveResourcePackId = id;
+    memoryResourcePackSelectionSet = true;
+    try { localStorage.setItem(ACTIVE_RESOURCE_PACK_KEY, id); } catch {}
+    return true;
+  },
+  useDefaultResourcePack() {
+    memoryActiveResourcePackId = null;
+    memoryResourcePackSelectionSet = true;
     atlasGeneration++;
     atlasCanvas.getContext('2d').clearRect(0, 0, 256, 256);
     atlasCanvas.getContext('2d').drawImage(defaultAtlas, 0, 0);
     refreshAtlas();
-    try { localStorage.removeItem('aislopcraft:block-atlas'); } catch {}
+    try { localStorage.setItem(ACTIVE_RESOURCE_PACK_KEY, '__default__'); } catch {}
+    return true;
   },
+  async deleteResourcePack(id) {
+    atlasGeneration++;
+    const wasActive = resourcePackState().activeId === id;
+    resourcePackMemory.delete(id);
+    if (id === 'legacy') {
+      try { localStorage.removeItem('aislopcraft:block-atlas'); } catch {}
+    } else {
+      try { localStorage.removeItem(`aislopcraft:resource-pack:${id}`); } catch {}
+    }
+    const list = storedResourcePacks().filter(pack => pack.id !== id);
+    try { localStorage.setItem(RESOURCE_PACKS_KEY, JSON.stringify(list)); } catch {}
+    if (wasActive) this.useDefaultResourcePack();
+    return resourcePackState();
+  },
+  async restoreResourcePack() {
+    const { activeId } = resourcePackState();
+    if (!activeId) return false;
+    try { return await this.useResourcePack(activeId); } catch {
+      this.useDefaultResourcePack();
+      return false;
+    }
+  },
+  resetResourcePack() { return this.useDefaultResourcePack(); },
   itemIconsCanvas: buildItemIcons(),
   settings,
   renderDistance: settings.renderDistance,
@@ -163,7 +373,8 @@ const game = {
     const distanceChanged = this.renderDistance !== s.renderDistance;
     this.renderDistance = s.renderDistance;
     this.keepInventory = s.keepInventory;
-    this.setShaderStyle(s.shaderStyle);
+    mobs.difficulty = s.difficulty;
+    this.setShaderStyle(this.networkRoom?.visuals?.mode === 'forced' ? this.networkRoom.visuals.shaderStyle : s.shaderStyle);
     this.setBrightness(s.brightness);
     player.sensitivity = sensitivityToRadians(s.sensitivity);
     player.invertMouse = s.invertMouse;
@@ -192,15 +403,139 @@ const game = {
     this.shaderStyle = style;
     lighting.shared.uShaderStyle.value = shaderStyleId(style);
   },
+  applyNetworkEdits(entries) {
+    if (!Array.isArray(entries)) return;
+    applyingNetworkEdit = true;
+    try {
+      for (const entry of entries) {
+        let key, id, meta;
+        if (Array.isArray(entry) && typeof entry[0] === 'string') {
+          [key] = entry;
+          if (Array.isArray(entry[1])) [id, meta] = entry[1];
+          else [key, id, meta] = entry;
+        } else if (entry && Number.isInteger(entry.x)) {
+          key = `${entry.x},${entry.y},${entry.z}`; id = entry.id; meta = entry.meta || 0;
+        }
+        if (typeof key !== 'string' || !Number.isInteger(id) || !Number.isInteger(meta ?? 0)) continue;
+        const [x,y,z] = key.split(',').map(Number);
+        if (![x,y,z].every(Number.isInteger) || y < 0 || y >= WORLD_H) continue;
+        world.recordEdit(x,y,z,id,meta || 0);
+        if (world.getChunk(Math.floor(x / CH), Math.floor(z / CH))?.generated) world.setBlock(x,y,z,id,meta || 0);
+      }
+    } finally { applyingNetworkEdit = false; }
+  },
+  setMultiplayerRoom(room, client) {
+    this.networkOffs?.forEach(off => off());
+    this.networkOffs = [];
+    this.networkRoom = { ...room };
+    this.multiplayerClient = client;
+    player.gameMode = room.gameMode === 'creative' ? 'creative' : 'survival';
+    for (const peer of room.players || []) if (peer.id !== room.id) createRemoteAvatar(peer.id, peer.name);
+    const on = (type, handler) => this.networkOffs.push(client.on(type, handler));
+    on('player:joined', message => {
+      if (!this.networkRoom) return;
+      createRemoteAvatar(message.id, message.name);
+      ui?.notify?.(`${message.name} joined the world.`);
+      ui?.updateNetworkPanel?.();
+    });
+    on('player:left', message => {
+      removeRemoteAvatar(message.id);
+      ui?.notify?.(`${message.name} left the world.`);
+      ui?.updateNetworkPanel?.();
+    });
+    on('player:state', message => updateRemoteAvatar(message));
+    on('player:damage', message => { if (Number.isFinite(message.amount) && message.amount > 0) player.damage(message.amount, audio); });
+    on('world:snapshot', message => this.applyNetworkEdits(message.entries));
+    on('world:edit', message => this.applyNetworkEdits([message.edit]));
+    on('item:snapshot', message => applyNetworkItems(message.items));
+    on('item:spawn', message => upsertNetworkItem(message.item));
+    on('item:remove', message => removeNetworkItem(message.uid));
+    on('item:pickup', message => {
+      removeNetworkItem(message.item?.uid);
+      const stack = message.item;
+      if (stack) {
+        const inserted = player.insertItem(stack.id, stack.count, stack.damage || 0);
+        if (inserted < stack.count) spawnItem(player.pos.x, player.pos.y, player.pos.z, stack.id, stack.count - inserted, stack.damage || 0);
+        audio.pop(); ui?.refresh?.();
+      }
+    });
+    on('mob:snapshot', message => { if (room.role !== 'host') mobs.applyNetworkSnapshot(message.mobs); });
+    on('vehicle:snapshot', message => { if (room.role !== 'host') vehicles.applyNetworkSnapshot(message.vehicles); });
+    on('vehicle:update', message => vehicles.applyNetworkUpdate(message.vehicle, message.riding));
+    on('vehicle:remove', message => vehicles.removeNetworkVehicle(message.uid));
+    on('projectile:snapshot', message => applyNetworkProjectiles(message.projectiles));
+    on('projectile:update', message => upsertNetworkProjectile(message.projectile));
+    on('projectile:remove', message => removeNetworkProjectile(message.uid));
+    on('mob:attack', message => {
+      if (room.role !== 'host' || !message.attacker || ![message.attacker.x, message.attacker.y, message.attacker.z, message.attacker.yaw, message.attacker.pitch].every(Number.isFinite)) return;
+      const attacker = message.attacker;
+      const fakePlayer = { pos: new THREE.Vector3(attacker.x, attacker.y, attacker.z), yaw: attacker.yaw, pitch: attacker.pitch,
+        camera: { position: new THREE.Vector3(attacker.x, attacker.y + 1.62, attacker.z) },
+        _solidBlockAt: (...args) => player._solidBlockAt(...args),
+        raycast: (sharedWorld, distance, options) => Player.prototype.raycast.call(fakePlayer, sharedWorld, distance, options) };
+      const ranged = !!message.ranged;
+      const target = mobs.raycastTarget(fakePlayer, ranged ? 24 : 3.5);
+      if (!target || target.networkId !== message.uid || Math.hypot(target.pos.x - attacker.x, target.pos.z - attacker.z) > (ranged ? 24 : 4)) return;
+      const dx = target.pos.x - attacker.x, dz = target.pos.z - attacker.z, length = Math.hypot(dx, dz) || 1;
+      target.damage(ranged ? 4 : mobAttackDamage(message.heldId), audio, { knockback: new THREE.Vector3(dx / length * (ranged ? 2 : 3.4), ranged ? 0.7 : 1.15, dz / length * (ranged ? 2 : 3.4)) });
+    });
+    on('game:state', message => applySharedGameState(message.state));
+    on('tnt:ignite', message => {
+      if (room.role === 'host' && Number.isInteger(message.x) && Number.isInteger(message.y) && Number.isInteger(message.z) && world.getBlock(message.x, message.y, message.z) === TNT && !tntFuses.some(fuse => fuse.x === message.x && fuse.y === message.y && fuse.z === message.z)) {
+        tntFuses.push({ x: message.x, y: message.y, z: message.z, timer: 3.2 }); audio.fuse();
+      }
+    });
+    on('chat', message => ui?.appendNetworkChat?.(message.name, message.text));
+    const disconnectRoom = message => {
+      if (!this.networkRoom) return;
+      const closedName = this.networkRoom.name;
+      this.networkRoom = null;
+      this.networkOffs?.forEach(off => off()); this.networkOffs = [];
+      void this.clearMultiplayerVisuals();
+      player.gameMode = 'survival';
+      for (const id of [...remotePlayers.keys()]) removeRemoteAvatar(id);
+      ui?.updateNetworkPanel?.();
+      ui?.notify?.(message?.reason || `Disconnected from ${closedName}.`);
+    };
+    on('room:closed', disconnectRoom);
+    on('disconnected', disconnectRoom);
+    ui?.updateNetworkPanel?.();
+  },
+  async leaveMultiplayer() {
+    const client = this.multiplayerClient;
+    if (!client || !this.networkRoom) return;
+    const host = this.networkRoom.role === 'host';
+    if (!host && vehicles.mounted) this.publishVehicleState(vehicles.mounted, false);
+    if (host) await client.closeRoom(); else await client.leave();
+    client.disconnect(false);
+    this.networkRoom = null;
+    this.multiplayerClient = null;
+    await this.clearMultiplayerVisuals();
+    player.gameMode = 'survival';
+    for (const id of [...remotePlayers.keys()]) removeRemoteAvatar(id);
+    ui?.updateNetworkPanel?.();
+    ui?.notify?.('Left multiplayer. You are now in singleplayer.');
+  },
   onRenderDistanceChange() {
     updateChunks(true);
   },
   started: false,
   time: 0,
   seed: SEED,
+  multiplayerRelay: new URLSearchParams(location.search).get('relay') || '',
   spawnBed: savedGame?.spawnBed || null,
   dropItem(stack) {
     spawnItem(player.pos.x, player.pos.y, player.pos.z, stack.id, stack.count, stack.damage || 0);
+  },
+  publishVehicleState(vehicle, riding = false) {
+    if (!this.networkRoom || !this.multiplayerClient || !vehicle) return;
+    const state = vehicles.serialize().find(item => item.uid === vehicle.networkId);
+    if (state) this.multiplayerClient.send('vehicle:update', { vehicle: state, riding });
+  },
+  syncSharedState() {
+    if (!this.networkRoom || !this.multiplayerClient) return;
+    this.multiplayerClient.send('game:state', { state: { timeOfDay: sky.timeOfDay, chests: [...chests], furnaces: [...furnaces] } });
+    if (game.openChestData?.vehicle) this.publishVehicleState(game.openChestData.vehicle, false);
   },
   dropHeld(all = false) {
     const stack = player.heldStack;
@@ -270,19 +605,61 @@ const game = {
   saveSettings() {
     persistSettings(localStorage, this.settings);
   },
-  saveAndQuit() {
-    this.saveGame();
+  async saveAndQuit() {
+    if (this.networkRoom) await this.leaveMultiplayer();
+    else this.saveGame();
     this.started = false;
     clearFishing();
     ui.setMode('title');
   },
   saveGame() {
-    const payload = { version: 1, seed: SEED, edits: [...world.edits].map(([key, id]) => [key, id, world.metaEdits.get(key) || 0]),
+    // Multiplayer rooms are temporary shared sessions. Never overwrite a
+    // player's personal singleplayer save with the host's world state.
+    if (this.networkRoom) return false;
+    const payload = { version: 1, worldId: WORLD_ID, seed: SEED, worldName: this.worldName, gameMode: player.gameMode === 'creative' ? 'creative' : 'survival',
+      edits: [...world.edits].map(([key, id]) => [key, id, world.metaEdits.get(key) || 0]),
       settings: this.settings, spawnBed: this.spawnBed, timeOfDay: sky.timeOfDay, furnaces: [...furnaces], chests: [...chests], vehicles: vehicles.serialize(),
       items: itemEntities.filter(it => !it.dead).map(it => ({ id: it.id, count: it.count, damage: it.damage, pos: it.mesh.position.toArray(), vy: it.vy, age: it.age })),
       player: { pos: player.pos.toArray(), yaw: player.yaw, pitch: player.pitch, health: player.health, inventory: player.inventory, armor: player.armor, hotbarIndex: player.hotbarIndex, stats: player.stats } };
-    try { localStorage.setItem(SAVE_KEY, JSON.stringify(payload)); return true; }
-    catch (error) { console.warn('Could not save world', error); ui?.notify('Save failed — browser storage may be full'); return false; }
+    try {
+      const save = normalizeWorldSave(payload);
+      if (!save) throw new Error('The current world state is incomplete.');
+      localStorage.setItem(SAVE_KEY, JSON.stringify(save));
+      return true;
+    } catch (error) { console.warn('Could not save world', error); ui?.notify('Save failed — browser storage may be full'); return false; }
+  },
+  exportWorldSave(requestedWorldId = WORLD_ID) {
+    if (this.networkRoom && requestedWorldId === WORLD_ID) throw new Error('Leave the multiplayer room before exporting a local world save.');
+    if (this.started && requestedWorldId === WORLD_ID && !this.saveGame()) throw new Error('Could not save this world before exporting.');
+    const save = normalizeWorldSave(JSON.parse(localStorage.getItem(`aislopcraft:world:${requestedWorldId}`) || 'null'));
+    if (!save || save.worldId !== requestedWorldId) throw new Error('There is no saved world for that selection yet.');
+    const blob = new Blob([encodeWorldSave(save)], { type: 'application/json' });
+    const href = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const slug = (save.worldName || save.seed).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'world';
+    link.href = href; link.download = `aislopcraft-${slug}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(href), 1000);
+    return true;
+  },
+  async importWorldSaveFile(file) {
+    if (!file || file.size > MAX_WORLD_SAVE_BYTES) throw new Error('Save file is too large (maximum 16 MB).');
+    let save = decodeWorldSave(await file.text());
+    if (localStorage.getItem(`aislopcraft:world:${save.worldId}`)) {
+      const newId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      save = { ...save, worldId: `import-${newId}`.slice(0, 128) };
+    }
+    try { localStorage.setItem(`aislopcraft:world:${save.worldId}`, JSON.stringify(save)); }
+    catch { throw new Error('Browser storage is full. Remove another saved world or clear browser site data, then try again.'); }
+    persistSettings(localStorage, save.settings);
+    const url = new URL(location.href);
+    url.searchParams.set('id', save.worldId);
+    url.searchParams.set('seed', save.seed);
+    url.searchParams.set('world', save.worldName || save.seed);
+    url.searchParams.set('mode', save.gameMode);
+    url.searchParams.delete('room');
+    location.assign(url.href);
+    return true;
   },
   resetWorld() {
     try { localStorage.removeItem(SAVE_KEY); } catch {}
@@ -308,9 +685,17 @@ const game = {
           if (saved.stats && typeof saved.stats === 'object') Object.assign(player.stats, saved.stats);
           camera.position.set(player.pos.x, player.pos.y + 1.62, player.pos.z);
         }
+        player.gameMode = this.networkRoom?.gameMode || savedGame?.gameMode || START_GAME_MODE;
+        if (this.networkRoom) {
+          player.gameMode = this.networkRoom.gameMode;
+          if (player.gameMode === 'creative') {
+            const palette = [STONE, DIRT, GRASS, COBBLE, PLANKS, SAND, GLASS, LOG, TORCH, LEAVES, BRICK, WOOL_BASE];
+            for (let i = 0; i < palette.length; i++) if (!player.inventory[i]) player.inventory[i] = { id: palette[i], count: 1, damage: 0 };
+          }
+        }
         updateChunks(true);
         processChunkQueue();
-        if (mobs.mobs.length === 0) mobs.spawnInitial(player);
+        if (mobs.mobs.length === 0 && this.networkRoom?.role !== 'guest') mobs.spawnInitial(player);
         if (!loadedItems) {
           loadedItems = true;
           if (Array.isArray(savedGame?.items)) for (const item of savedGame.items.slice(0, 4096)) {
@@ -333,30 +718,92 @@ const game = {
     }, 0));
   },
 };
+function createRemoteAvatar(id, name) {
+  if (remotePlayers.has(id)) return remotePlayers.get(id);
+  const root = new THREE.Group();
+  const hash = [...String(id)].reduce((value, char) => (value * 31 + char.charCodeAt(0)) | 0, 7) >>> 0;
+  const shirt = new THREE.MeshBasicMaterial({ color: new THREE.Color().setHSL((hash % 360) / 360, 0.58, 0.48) });
+  const pants = new THREE.MeshBasicMaterial({ color: 0x394c82 });
+  const skin = new THREE.MeshBasicMaterial({ color: 0xc99a73 });
+  const addPart = (w,h,d,material,y,z=0) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), material);
+    mesh.position.set(0,y,z); root.add(mesh); return mesh;
+  };
+  addPart(0.56,0.7,0.3,shirt,1.05);
+  addPart(0.27,0.72,0.28,pants,-0.2,-0.02).position.x = -0.15;
+  addPart(0.27,0.72,0.28,pants,-0.2,-0.02).position.x = 0.15;
+  addPart(0.42,0.42,0.42,skin,1.62);
+  const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0x242424 });
+  const eye1 = new THREE.Mesh(new THREE.BoxGeometry(0.045,0.05,0.025), eyeMaterial);
+  eye1.position.set(-0.09,1.66,-0.22); root.add(eye1);
+  const eye2 = eye1.clone(); eye2.position.x = 0.09; root.add(eye2);
+  const labelCanvas = document.createElement('canvas'); labelCanvas.width = 256; labelCanvas.height = 48;
+  const context = labelCanvas.getContext('2d');
+  if (context) {
+    context.font = 'bold 26px Arial'; context.textAlign = 'center'; context.textBaseline = 'middle';
+    context.lineWidth = 5; context.strokeStyle = '#171717'; context.fillStyle = '#fff';
+    context.strokeText(String(name).slice(0,20),128,24); context.fillText(String(name).slice(0,20),128,24);
+  }
+  const labelTexture = new THREE.CanvasTexture(labelCanvas);
+  labelTexture.colorSpace = THREE.SRGBColorSpace;
+  const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture, transparent: true, depthTest: false }));
+  label.position.y = 2.25; label.scale.set(1.9,0.36,1); root.add(label);
+  lighting.prepare(root);
+  lighting.setObjectLight(root, 15, 0);
+  scene.add(root);
+  root.visible = false;
+  const record = { root, target: new THREE.Vector3(), yaw: 0, pitch: 0, name, labelTexture };
+  remotePlayers.set(id,record);
+  return record;
+}
+
+function updateRemoteAvatar(message) {
+  const avatar = createRemoteAvatar(message.id,message.name);
+  if (![message.x,message.y,message.z,message.yaw,message.pitch].every(Number.isFinite)) return;
+  avatar.target.set(message.x,message.y,message.z);
+  avatar.yaw = message.yaw;
+  avatar.pitch = message.pitch;
+  avatar.dead = !!message.dead;
+  avatar.root.visible = true;
+}
+
+function remoteMobTargets() {
+  return [...remotePlayers.entries()].map(([id, avatar]) => ({
+    id, pos: avatar.target.clone(), vel: new THREE.Vector3(), dead: !!avatar.dead,
+    damage: amount => game.multiplayerClient?.send('player:damage', { targetId: id, amount }),
+  }));
+}
+
+function removeRemoteAvatar(id) {
+  const avatar = remotePlayers.get(id);
+  if (!avatar) return;
+  scene.remove(avatar.root);
+  lighting.forget(avatar.root);
+  avatar.root.traverse(object => object.geometry?.dispose());
+  avatar.labelTexture.dispose();
+  for (const material of avatar.root.children.flatMap(object => Array.isArray(object.material) ? object.material : [object.material])) material?.dispose?.();
+  remotePlayers.delete(id);
+}
+
+world.onBlockChange((x,y,z,previousId,id,previousMeta,meta) => {
+  if (!applyingNetworkEdit && game.networkRoom) {
+    game.multiplayerClient?.send('world:edit', { edit: { x,y,z,id,meta:meta || 0 } });
+  }
+});
+
 const ui = new UI(game);
 game.ui = ui;
-// Restore the locally imported atlas, never upload the pack to a server.
-try {
-  const savedAtlas = localStorage.getItem('aislopcraft:block-atlas');
-  if (savedAtlas?.startsWith('data:image/png;base64,') && savedAtlas.length < 2_000_000) {
-    const img = new Image();
-    const generation = atlasGeneration;
-    img.onload = () => {
-      if (generation !== atlasGeneration) return;
-      if (img.width !== 256 || img.height !== 256) return;
-      atlasCanvas.getContext('2d').clearRect(0, 0, 256, 256);
-      atlasCanvas.getContext('2d').drawImage(img, 0, 0);
-      refreshAtlas(); ui._iconCache.clear();
-    };
-    img.src = savedAtlas;
-  }
-} catch {}
+// Restore the selected local 1.7.x texture pack; packs are never uploaded.
+void game.restoreResourcePack().then(() => ui._iconCache.clear());
 game.applySettings();
 if (Number.isFinite(savedGame?.timeOfDay)) sky.time = ((savedGame.timeOfDay % 1) + 1) % 1;
 let saveClock = 0;
-window.addEventListener('beforeunload', () => { if (game.started) game.saveGame(); });
+window.addEventListener('beforeunload', () => { if (game.started && !game.networkRoom) game.saveGame(); });
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && game.started && ui.mode === 'game') { game.saveGame(); ui.setMode('pause'); }
+  if (document.hidden && game.started && ui.mode === 'game') {
+    if (!game.networkRoom) game.saveGame();
+    ui.setMode('pause');
+  }
 });
 
 // ---- particles, first-person arm, target wireframe & crack overlay ----
@@ -493,7 +940,7 @@ let loadedItems = false;
 const itemGroup = new THREE.Group();
 scene.add(itemGroup);
 
-function spawnItem(x, y, z, id, count = 1, damage = 0) {
+function spawnItem(x, y, z, id, count = 1, damage = 0, uid = null) {
   // Geometry/UVs are immutable per item ID. Materials remain per entity so
   // local light uniforms can differ without one dropped item affecting another.
   let geometry = dropGeometryCache.get(id);
@@ -521,7 +968,14 @@ function spawnItem(x, y, z, id, count = 1, damage = 0) {
   mesh.position.set(x + 0.5, y + 0.3, z + 0.5);
   lighting.refreshObject(mesh, world, mesh.position, 0);
   itemGroup.add(mesh);
-  itemEntities.push({ mesh, id, count, damage, vy: 2, age: 0, onGround: false });
+  const sourceUid = uid || globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+  const entity = { mesh, id, count, damage, vy: 2, age: 0, onGround: false, uid: sourceUid };
+  itemEntities.push(entity);
+  if (!uid && game.networkRoom?.role === 'guest') {
+    entity.uid = `${game.networkRoom.id}:${sourceUid}`;
+    game.multiplayerClient?.send('item:spawn', { item: { uid: sourceUid, id, count, damage: damage || 0, pos: mesh.position.toArray(), vy: entity.vy, age: entity.age } });
+  }
+  return entity;
 }
 
 let _itemTex = null;
@@ -539,32 +993,83 @@ function itemTexFromCanvas(canvas) {
 import { ITEM_ICON_INDEX } from './ui/ui.js';
 const ITEM_ICON_INDEX_LOCAL = ITEM_ICON_INDEX;
 
+function removeNetworkItem(uid) {
+  if (typeof uid !== 'string') return;
+  const index = itemEntities.findIndex(item => item.uid === uid);
+  if (index < 0) return;
+  const [item] = itemEntities.splice(index, 1);
+  itemGroup.remove(item.mesh); lighting.forget(item.mesh);
+  item.mesh.material?.dispose?.();
+}
+
+function upsertNetworkItem(item) {
+  if (!item || typeof item.uid !== 'string' || !Number.isInteger(item.id) || !Number.isFinite(item.count) || !Array.isArray(item.pos) || item.pos.length !== 3 || !item.pos.every(Number.isFinite)) return;
+  let entity = itemEntities.find(candidate => candidate.uid === item.uid);
+  if (!entity) entity = spawnItem(item.pos[0] - 0.5, item.pos[1] - 0.3, item.pos[2] - 0.5, item.id, item.count, item.damage || 0, item.uid);
+  entity.count = item.count; entity.mesh.position.fromArray(item.pos);
+  entity.vy = Number.isFinite(item.vy) ? item.vy : 0;
+  entity.age = Number.isFinite(item.age) ? item.age : 0;
+}
+
+function applyNetworkItems(items) {
+  if (!Array.isArray(items)) return;
+  const seen = new Set();
+  for (const item of items) {
+    if (!item || typeof item.uid !== 'string' || !Number.isInteger(item.id) || !Number.isFinite(item.count) || !Array.isArray(item.pos) || item.pos.length !== 3 || !item.pos.every(Number.isFinite)) continue;
+    seen.add(item.uid);
+    upsertNetworkItem(item);
+  }
+  for (const item of [...itemEntities]) if (!seen.has(item.uid)) removeNetworkItem(item.uid);
+}
+
+function applySharedGameState(state) {
+  if (!state || typeof state !== 'object') return;
+  if (Array.isArray(state.chests)) {
+    chests.clear();
+    for (const [key, slots] of state.chests) if (typeof key === 'string' && Array.isArray(slots) && slots.length === 27) chests.set(key, slots);
+  }
+  if (Array.isArray(state.furnaces)) {
+    furnaces.clear();
+    for (const [key, furnace] of state.furnaces) if (typeof key === 'string' && furnace && typeof furnace === 'object') furnaces.set(key, furnace);
+  }
+  if (Number.isFinite(state.timeOfDay)) sky.time = ((state.timeOfDay % 1) + 1) % 1;
+  if (ui?.mode === 'chest') refreshChest();
+  if (ui?.mode === 'furnace') refreshFurnace();
+}
+
 function updateItems(dt) {
   for (const it of itemEntities) {
     const loaded = world.getChunk(Math.floor(it.mesh.position.x / CH), Math.floor(it.mesh.position.z / CH));
     it.mesh.visible = !!loaded?.generated;
     if (!loaded?.generated) continue; // preserve drops rather than falling through unloaded terrain
-    it.age += dt;
-    // physics
-    if (!it.onGround) it.vy -= 14 * dt;
-    it.mesh.position.y += it.vy * dt;
-    const bx = Math.floor(it.mesh.position.x), by = Math.floor(it.mesh.position.y - 0.14), bz = Math.floor(it.mesh.position.z);
-    if (getBlock(world.getBlock(bx, by, bz)).solid && it.vy <= 0) {
-      it.mesh.position.y = by + 1.15;
-      it.vy = 0;
-      it.onGround = true;
+    const networked = !!game.networkRoom;
+    const networkGuest = networked && game.networkRoom.role !== 'host';
+    if (!networkGuest) {
+      it.age += dt;
+      if (!it.onGround) it.vy -= 14 * dt;
+      it.mesh.position.y += it.vy * dt;
+      const bx = Math.floor(it.mesh.position.x), by = Math.floor(it.mesh.position.y - 0.14), bz = Math.floor(it.mesh.position.z);
+      if (getBlock(world.getBlock(bx, by, bz)).solid && it.vy <= 0) {
+        it.mesh.position.y = by + 1.15;
+        it.vy = 0;
+        it.onGround = true;
+      }
+      it.mesh.rotation.y += dt * 1.6;
+      lighting.refreshObject(it.mesh, world, it.mesh.position, 0);
     }
-    it.mesh.rotation.y += dt * 1.6;
-    lighting.refreshObject(it.mesh, world, it.mesh.position, 0);
 
     // pickup
     const dx = it.mesh.position.x - player.pos.x, dy = it.mesh.position.y - player.pos.y - 0.8, dz = it.mesh.position.z - player.pos.z;
-    if (!player.dead && dx * dx + dy * dy + dz * dz < 1.4 * 1.4 && it.age > 0.4) {
-      const inserted = player.insertItem(it.id, it.count, it.damage || 0);
-      if (inserted > 0) {
-        it.count -= inserted;
-        audio.pop();
-        if (it.count <= 0) it.dead = true;
+    if (!player.dead && dx * dx + dy * dy + dz * dz < 1.4 * 1.4 && it.age > 0.4 && !it.pendingPickup) {
+      if (networked) {
+        it.pendingPickup = game.multiplayerClient?.send('item:pickup', { uid: it.uid }) || false;
+      } else {
+        const inserted = player.insertItem(it.id, it.count, it.damage || 0);
+        if (inserted > 0) {
+          it.count -= inserted;
+          audio.pop();
+          if (it.count <= 0) it.dead = true;
+        }
       }
     }
     if (it.age > 300) it.dead = true;
@@ -618,7 +1123,7 @@ function tryBreakBlock(dt) {
   }
   const id = world.getBlock(hit.x, hit.y, hit.z);
   const held = player.heldStack;
-  const total = breakTime(id, held ? held.id : null);
+  const total = player.gameMode === 'creative' ? 0 : breakTime(id, held ? held.id : null);
 
   if (!player.mining.active || player.mining.x !== hit.x || player.mining.y !== hit.y || player.mining.z !== hit.z) {
     player.mining.active = true;
@@ -641,13 +1146,15 @@ function tryBreakBlock(dt) {
     const containerKey = `${hit.x},${hit.y},${hit.z}`;
     releaseContainer(hit.x, hit.y, hit.z, id);
     world.setBlock(hit.x, hit.y, hit.z, AIR);
-    if (id === CROPS) {
-      cropLocations.delete(containerKey);
-      for (const stack of cropDrops(previousMeta)) spawnItem(hit.x, hit.y, hit.z, stack.id, stack.count);
-    } else if (id === LEAVES && held?.id === 359) {
-      spawnItem(hit.x, hit.y, hit.z, LEAVES, 1);
-    } else if (canHarvest(id, held ? held.id : null)) dropBlock(hit.x, hit.y, hit.z, id);
-    if (held) player.useHeldOn(id);
+    if (player.gameMode !== 'creative') {
+      if (id === CROPS) {
+        cropLocations.delete(containerKey);
+        for (const stack of cropDrops(previousMeta)) spawnItem(hit.x, hit.y, hit.z, stack.id, stack.count);
+      } else if (id === LEAVES && held?.id === 359) {
+        spawnItem(hit.x, hit.y, hit.z, LEAVES, 1);
+      } else if (canHarvest(id, held ? held.id : null)) dropBlock(hit.x, hit.y, hit.z, id);
+      if (held) player.useHeldOn(id);
+    }
     audio.breakBlock(id);
     player.stats.blocksMined++;
     player.mining.active = false;
@@ -721,7 +1228,7 @@ function tryPlaceBlock() {
     if (!world.setBlock(px,py,pz,placeId,meta)) return;
     if (!world.setBlock(hx,hy,hz,placeId,meta | 8)) { world.setBlock(px,py,pz,AIR); return; }
   } else if (!world.setBlock(px, py, pz, placeId, meta)) return;
-  player.consumeHeld();
+  if (player.gameMode !== 'creative') player.consumeHeld();
   audio.place(placeId);
   player.stats.blocksPlaced++;
   firstPersonArm.triggerPlaceSwing();
@@ -731,7 +1238,7 @@ function tryPlaceBlock() {
 
 
 // ---- explosions (creepers, TNT) ----
-function explode(pos, radius, player) {
+function explode(pos, radius, player, damageMultiplier = 1) {
   audio.explosion();
   const r2 = radius * radius;
   for (let dx = -radius; dx <= radius; dx++) {
@@ -757,7 +1264,7 @@ function explode(pos, radius, player) {
   // damage player
   const dist = player.pos.distanceTo(pos);
   if (dist < radius * 1.6) {
-    player.damage(Math.ceil((1 - dist / (radius * 1.6)) * 12), audio);
+    player.damage(Math.ceil((1 - dist / (radius * 1.6)) * 12 * damageMultiplier), audio);
   }
   // knockback
   const kb = player.pos.clone().sub(pos).normalize().multiplyScalar(Math.max(0, 8 - dist * 1.6));
@@ -767,26 +1274,55 @@ function explode(pos, radius, player) {
 // ---- arrows ----
 const arrows = [];
 const arrowGeometry = new THREE.BoxGeometry(0.08, 0.08, 0.5);
-function createArrow(from, velocity, owner) {
+function createArrow(from, velocity, owner, targetId = null, uid = null, networkRemote = false, damage = 2) {
   const mesh = new THREE.Mesh(arrowGeometry, new THREE.MeshBasicMaterial({ color: 0x8a6a42 }));
   lighting.prepare(mesh);
   mesh.position.copy(from);
   lighting.refreshObject(mesh, world, mesh.position, 0);
   scene.add(mesh);
-  arrows.push({ mesh, vel: velocity, age: 0, owner });
+  arrows.push({ mesh, vel: velocity, age: 0, owner, targetId,
+    uid: uid || globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`, networkRemote, networkTimer: 0, damage });
 }
-function shootArrow(fromMob, player) {
+function shootArrow(fromMob, player, damage = 2) {
   const from = fromMob.pos.clone().add(new THREE.Vector3(0, 1.6, 0));
   const to = player.pos.clone().add(new THREE.Vector3(0, 1.2, 0));
-  createArrow(from, to.sub(from).normalize().multiplyScalar(18), 'mob');
+  createArrow(from, to.sub(from).normalize().multiplyScalar(18), 'mob', player.id || null, null, false, damage);
 }
 function shootPlayerArrow() {
   const dir = new THREE.Vector3(-Math.sin(player.yaw) * Math.cos(player.pitch), Math.sin(player.pitch), -Math.cos(player.yaw) * Math.cos(player.pitch));
   createArrow(camera.position.clone().addScaledVector(dir, 0.45), dir.multiplyScalar(22), 'player');
   audio.bow();
 }
+function upsertNetworkProjectile(shot) {
+  if (!shot || typeof shot.uid !== 'string' || !Array.isArray(shot.pos) || shot.pos.length !== 3 || !shot.pos.every(Number.isFinite) || !Array.isArray(shot.vel) || shot.vel.length !== 3 || !shot.vel.every(Number.isFinite)) return;
+  let arrow = arrows.find(candidate => candidate.uid === shot.uid);
+  if (!arrow) arrow = createArrow(new THREE.Vector3(...shot.pos), new THREE.Vector3(...shot.vel), shot.owner === 'mob' ? 'mob' : 'player', shot.targetId, shot.uid, true);
+  arrow.mesh.position.fromArray(shot.pos);
+  arrow.vel.fromArray(shot.vel);
+  arrow.age = Number.isFinite(shot.age) ? Math.max(0, shot.age) : arrow.age;
+  arrow.damage = Number.isFinite(shot.damage) ? Math.max(0, Math.min(40, shot.damage)) : arrow.damage;
+  arrow.targetId = typeof shot.targetId === 'string' ? shot.targetId : null;
+}
+function applyNetworkProjectiles(projectiles) {
+  if (!Array.isArray(projectiles)) return;
+  const seen = new Set();
+  for (const shot of projectiles) { upsertNetworkProjectile(shot); if (typeof shot?.uid === 'string') seen.add(shot.uid); }
+  for (const arrow of [...arrows]) if (arrow.networkRemote && !seen.has(arrow.uid)) removeNetworkProjectile(arrow.uid);
+}
+function removeNetworkProjectile(uid) {
+  const index = arrows.findIndex(arrow => arrow.uid === uid && arrow.networkRemote);
+  if (index < 0) return;
+  const [arrow] = arrows.splice(index, 1);
+  scene.remove(arrow.mesh); lighting.forget(arrow.mesh); arrow.mesh.material.dispose();
+}
 function updateArrows(dt) {
   for (const a of arrows) {
+    if (a.networkRemote) {
+      a.age += dt; a.vel.y -= 12 * dt; a.mesh.position.addScaledVector(a.vel, dt);
+      a.mesh.lookAt(a.mesh.position.clone().add(a.vel)); lighting.refreshObject(a.mesh, world, a.mesh.position, 0);
+      if (a.age > 6) a.dead = true;
+      continue;
+    }
     a.age += dt;
     a.vel.y -= 12 * dt;
     // Small steps prevent fast projectiles tunnelling through thin targets/blocks.
@@ -803,16 +1339,27 @@ function updateArrows(dt) {
         break;
       }
       if (a.owner === 'mob') {
-        if (Math.abs(pos.x - player.pos.x) < 0.4 && Math.abs(pos.z - player.pos.z) < 0.4 && pos.y >= player.pos.y && pos.y <= player.pos.y + 1.8) {
-          player.damage(2, audio); a.dead = true; audio.arrowHit();
+        const remoteTarget = a.targetId ? remotePlayers.get(a.targetId)?.target : null;
+        if (remoteTarget) {
+          if (Math.abs(pos.x - remoteTarget.x) < 0.4 && Math.abs(pos.z - remoteTarget.z) < 0.4 && pos.y >= remoteTarget.y && pos.y <= remoteTarget.y + 1.8) {
+            game.multiplayerClient?.send('player:damage', { targetId: a.targetId, amount: a.damage });
+            a.dead = true; audio.arrowHit();
+          }
+        } else if (!a.targetId && Math.abs(pos.x - player.pos.x) < 0.4 && Math.abs(pos.z - player.pos.z) < 0.4 && pos.y >= player.pos.y && pos.y <= player.pos.y + 1.8) {
+          player.damage(a.damage, audio); a.dead = true; audio.arrowHit();
         }
       } else {
         for (const mob of mobs.mobs) {
           if (mob.dead) continue;
           const half = mob.def.w / 2 + 0.05;
           if (Math.abs(pos.x - mob.pos.x) <= half && Math.abs(pos.z - mob.pos.z) <= half && pos.y >= mob.pos.y && pos.y <= mob.pos.y + mob.def.h) {
-            const knockback = a.vel.clone().normalize().multiplyScalar(2);
-            mob.damage(4, audio, { knockback }); a.dead = true; audio.arrowHit(); break;
+            if (game.networkRoom?.role === 'guest') {
+              game.multiplayerClient?.send('mob:attack', { uid: mob.networkId, heldId: null, ranged: true });
+            } else {
+              const knockback = a.vel.clone().normalize().multiplyScalar(2);
+              mob.damage(4, audio, { knockback });
+            }
+            a.dead = true; audio.arrowHit(); break;
           }
         }
       }
@@ -821,14 +1368,26 @@ function updateArrows(dt) {
     lighting.refreshObject(a.mesh, world, a.mesh.position, 0);
     if (a.age > 6) a.dead = true;
   }
-  for (const a of arrows) if (a.dead) { scene.remove(a.mesh); lighting.forget(a.mesh); a.mesh.material.dispose(); }
+  for (const a of arrows) {
+    if (!a.networkRemote && game.networkRoom && game.multiplayerClient) {
+      if (a.dead) game.multiplayerClient.send('projectile:remove', { uid: a.uid });
+      else {
+        a.networkTimer -= dt;
+        if (a.networkTimer <= 0) {
+          game.multiplayerClient.send('projectile:update', { projectile: { uid: a.uid, owner: a.owner, pos: a.mesh.position.toArray(), vel: a.vel.toArray(), age: a.age, targetId: a.targetId, damage: a.damage } });
+          a.networkTimer = 0.12;
+        }
+      }
+    }
+    if (a.dead) { scene.remove(a.mesh); lighting.forget(a.mesh); a.mesh.material.dispose(); }
+  }
   for (let i = arrows.length - 1; i >= 0; i--) if (arrows[i].dead) arrows.splice(i, 1);
 }
 
 // effects object handed to mobs
 const effects = {
-  explosion: (pos, radius, p) => explode(pos, radius, p),
-  shootArrow: (mob, p) => shootArrow(mob, p),
+  explosion: (pos, radius, p, damageMultiplier = 1) => explode(pos, radius, p, damageMultiplier),
+  shootArrow: (mob, p, damage) => shootArrow(mob, p, damage),
   mobBurn: (mob) => {
     const pos = new THREE.Vector3(mob.pos.x, mob.pos.y + 0.45, mob.pos.z);
     particles.spawnEffect(pos, { color: Math.random() < 0.5 ? 0xff8a1c : 0xffd247, life: 0.35, scale: 0.7, vy: 1.5, gravity: -0.2 });
@@ -857,8 +1416,8 @@ function openChest(x, y, z) {
   if (!chests.has(key)) chests.set(key, new Array(27).fill(null));
   openChestSlots(chests.get(key), key, 'Chest');
 }
-function openChestSlots(slots, key, title) {
-  game.openChestData = { key, slots };
+function openChestSlots(slots, key, title, vehicle = null) {
+  game.openChestData = { key, slots, vehicle };
   let panel = document.getElementById('chest-screen');
   if (!panel) {
     panel = document.createElement('div');
@@ -964,6 +1523,7 @@ function buildFurnaceUI() {
       player.cursorStack = result.cursorStack;
       refreshFurnace();
       ui.refresh();
+      game.syncSharedState();
     };
     panel.querySelector('#f-in').addEventListener('mousedown', onFurnaceSlot('input'));
     panel.querySelector('#f-fuel').addEventListener('mousedown', onFurnaceSlot('fuel'));
@@ -1059,6 +1619,7 @@ document.addEventListener('mousedown', (e) => {
   if (`Mouse${e.button}` === player.bindings.attack) {
     const target = vehicles.target(player);
     if (target && vehicles.remove(target)) {
+      game.multiplayerClient?.send('vehicle:remove', { uid: target.networkId });
       const x = target.group.position.x - 0.5, y = target.group.position.y, z = target.group.position.z - 0.5;
       spawnItem(x, y, z, ({boat:333,minecart:328,storage:342,powered:343})[target.type], 1);
       if (target.slots) for (const stack of target.slots) if (stack?.count > 0) spawnItem(x,y,z,stack.id,stack.count,stack.damage || 0);
@@ -1069,11 +1630,12 @@ document.addEventListener('mousedown', (e) => {
     const vehicle = vehicles.target(player);
     if (vehicle) {
       player.rightDown = false;
-      if (vehicle.type === 'storage') { openChestSlots(vehicle.slots, null, 'Minecart with Chest'); return; }
+      if (vehicle.type === 'storage') { openChestSlots(vehicle.slots, null, 'Minecart with Chest', vehicle); return; }
       if (vehicle.type === 'powered') {
         if (player.heldStack?.id === 263) {
           player.consumeHeld(); vehicle.fuel = Math.min(3600, vehicle.fuel + 180);
           vehicle.travel = [-Math.sin(player.yaw), -Math.cos(player.yaw)];
+          if (game.networkRoom?.role === 'guest') game.publishVehicleState(vehicle, false);
           ui.refresh(); audio.pop(); ui.notify('Powered minecart fueled');
         } else ui.notify('Use coal to fuel the minecart');
         return;
@@ -1122,7 +1684,8 @@ document.addEventListener('mousedown', (e) => {
       if (id === TNT && held?.id === 259) {
         player.rightDown = false;
         if (!tntFuses.some(t => t.x === hit.x && t.y === hit.y && t.z === hit.z)) {
-          tntFuses.push({ x: hit.x, y: hit.y, z: hit.z, timer: 3.2 });
+          if (game.networkRoom?.role === 'guest') game.multiplayerClient?.send('tnt:ignite', { x: hit.x, y: hit.y, z: hit.z });
+          else tntFuses.push({ x: hit.x, y: hit.y, z: hit.z, timer: 3.2 });
           player.useHeldOn(TNT); audio.fuse();
         }
         return;
@@ -1136,7 +1699,11 @@ document.addEventListener('mousedown', (e) => {
     if ([333,328,342,343].includes(held?.id)) {
       player.rightDown = false;
       const type = ({333:'boat',328:'minecart',342:'storage',343:'powered'})[held.id];
-      if (vehicles.place(type, hit)) { player.consumeHeld(); audio.place(PLANKS); ui.refresh(); }
+      const placedVehicle = vehicles.place(type, hit);
+      if (placedVehicle) {
+        if (game.networkRoom?.role === 'guest') game.publishVehicleState(placedVehicle, false);
+        player.consumeHeld(); audio.place(PLANKS); ui.refresh();
+      }
       else ui.notify(held.id === 333 ? 'Place boats on water' : 'Place minecarts on rails');
       return;
     }
@@ -1187,7 +1754,7 @@ function frame() {
   const simulationPaused = game.started && ui.mode !== 'title' &&
     ['pause', 'death', 'inventory', 'crafting', 'furnace', 'chest'].includes(ui.mode);
   if (!simulationPaused) game.time += dt;
-  if (game.started && ui.mode !== 'title') {
+  if (game.started && ui.mode !== 'title' && !game.networkRoom) {
     saveClock += dt;
     if (saveClock >= 15) { game.saveGame(); saveClock = 0; }
   }
@@ -1199,10 +1766,21 @@ function frame() {
     const paused = simulationPaused;
 
     if (!paused) {
-      if (!vehicles.update(dt, player)) player.update(dt, world, audio);
+      const mountedBeforeVehicleUpdate = vehicles.mounted;
+      const ridingVehicle = vehicles.update(dt, player);
+      if (!ridingVehicle) player.update(dt, world, audio);
+      if (game.networkRoom?.role === 'guest') {
+        if (mountedBeforeVehicleUpdate && !vehicles.mounted) game.publishVehicleState(mountedBeforeVehicleUpdate, false);
+        else if (vehicles.mounted) {
+          networkVehicleTimer -= dt;
+          if (networkVehicleTimer <= 0) { game.publishVehicleState(vehicles.mounted, true); networkVehicleTimer = 0.15; }
+        }
+      }
       if (player.leftDown && player.pointerLocked) {
         if (mobs.raycastTarget(player, 3.5)) {
-          mobs.attack(player, player.heldStack?.id ?? null, audio, 3.5);
+          mobs.attack(player, player.heldStack?.id ?? null, audio, 3.5, game.networkRoom?.role === 'guest'
+            ? (uid, heldId) => game.multiplayerClient?.send('mob:attack', { uid, heldId })
+            : null);
           player.mining.active = false;
           player.mining.progress = 0;
         } else tryBreakBlock(dt);
@@ -1222,16 +1800,56 @@ function frame() {
         placeCooldown = 0;
       }
 
-      mobs.update(dt, player, sky.timeOfDay, effects, audio);
+      const networked = !!game.networkRoom;
+      const hostSimulates = !networked || game.networkRoom.role === 'host';
+      if (hostSimulates) mobs.update(dt, player, sky.timeOfDay, effects, audio, networked ? remoteMobTargets() : [], game.settings.difficulty);
       updateItems(dt);
       updateArrows(dt);
-      fluids.tick(dt);
-      redstone.update(dt);
-      updateFurnaces(dt);
-      updateCrops(dt);
+      if (hostSimulates) {
+        fluids.tick(dt);
+        redstone.update(dt);
+        updateFurnaces(dt);
+        updateCrops(dt);
+        updateTNT(dt);
+      }
       updateFishing(dt);
-      updateTNT(dt);
       particles.update(dt, world);
+      if (networked && game.multiplayerClient) {
+        networkStateTimer -= dt;
+        if (networkStateTimer <= 0) {
+          game.multiplayerClient.send('player:state', { state: {
+            x: player.pos.x, y: player.pos.y, z: player.pos.z, yaw: player.yaw, pitch: player.pitch, dead: player.dead,
+          } });
+          if (game.networkRoom.role === 'host') {
+            const mobStates = mobs.mobs.map(mob => {
+              mob.networkId ||= globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+              return { uid: mob.networkId, type: mob.type, pos: mob.pos.toArray(), yaw: mob.yaw, hp: mob.hp, sheared: mob.sheared, fuse: mob.fuse };
+            });
+            game.multiplayerClient.send('mob:snapshot', { mobs: mobStates });
+          }
+          networkStateTimer = 0.12;
+        }
+      }
+      if (networked && game.networkRoom.role === 'host' && game.multiplayerClient) {
+        networkVehicleTimer -= dt;
+        if (networkVehicleTimer <= 0) {
+          for (const vehicle of vehicles.vehicles) if (!vehicle.remoteDriven) game.publishVehicleState(vehicle, vehicle === vehicles.mounted);
+          networkVehicleTimer = 0.2;
+        }
+        networkItemTimer -= dt;
+        if (networkItemTimer <= 0) {
+          const itemStates = itemEntities.filter(item => !item.dead).map(item => ({ uid: item.uid, id: item.id, count: item.count, damage: item.damage, pos: item.mesh.position.toArray(), vy: item.vy, age: item.age }));
+          game.multiplayerClient.send('item:snapshot', { items: itemStates });
+          networkItemTimer = 0.4;
+        }
+      }
+      if (networked && game.multiplayerClient) {
+        sharedStateTimer -= dt;
+        if (sharedStateTimer <= 0) {
+          game.multiplayerClient.send('game:state', { state: { timeOfDay: sky.timeOfDay, chests: [...chests], furnaces: [...furnaces] } });
+          sharedStateTimer = 1.25;
+        }
+      }
 
     }
 
@@ -1333,12 +1951,27 @@ function frame() {
     }
   }
 
+  for (const avatar of remotePlayers.values()) {
+    avatar.root.position.lerp(avatar.target, 1 - Math.exp(-dt * 14));
+    avatar.root.rotation.y = avatar.yaw;
+    const head = avatar.root.children[3];
+    if (head) head.rotation.x = avatar.pitch;
+    lighting.refreshObject(avatar.root, world, avatar.root.position, 1.2);
+  }
+  ui.updateNetworkPanel();
+
   // One shared update drives terrain, entities, particles and the hand on both
   // the title backdrop and gameplay frames.
   lighting.update({ sky, time: game.time, style: game.shaderStyle, fog: scene.fog });
+  renderer.getDrawingBufferSize(renderBufferSize);
+  if (game.shaderStyle === 'psx') psxPostProcess.setSize(renderBufferSize.x, renderBufferSize.y);
+  // Vertex snapping follows the full viewport grid; the later post pass handles
+  // the independent low-resolution image scale.
+  lighting.shared.uScreenSize.value.copy(renderBufferSize);
   lighting.updateShadows(renderer, scene, camera, sky, game.shaderStyle, game.time);
-  renderer.render(scene, camera);
-  if (game.started && ui.mode !== 'title') firstPersonArm.render(renderer);
+  const drawArm = game.started && ui.mode !== 'title' ? targetRenderer => firstPersonArm.render(targetRenderer) : null;
+  if (game.shaderStyle === 'psx') psxPostProcess.render(renderer, scene, camera, drawArm);
+  else { renderer.render(scene, camera); drawArm?.(renderer); }
 }
 
 frame();

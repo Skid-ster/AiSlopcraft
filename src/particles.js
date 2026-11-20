@@ -80,7 +80,7 @@ export class ParticleManager {
       this.mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
     }
     if (lighting) {
-      lighting.prepare(this.mesh);
+      lighting.prepare(this.mesh, { castShadow: false });
       this.instanceLight = new THREE.InstancedBufferAttribute(new Float32Array(MAX_PARTICLES * 2), 2);
       this.instanceEmission = new THREE.InstancedBufferAttribute(new Float32Array(MAX_PARTICLES), 1);
       this.instanceLight.setUsage(THREE.DynamicDrawUsage);

@@ -50,10 +50,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
   sensitivity: 50,        // 0 .. 100 (percent)
   invertMouse: false,
   keepInventory: true,
+  difficulty: 2,          // Beta: 0 peaceful, 1 easy, 2 normal, 3 hard
   keys: { ...DEFAULT_KEYS },
 });
 
-const SHADER_STYLES = ['classic', 'vibrant', 'cinematic', 'shader'];
+const SHADER_STYLES = ['classic', 'vibrant', 'cinematic', 'shader', 'psx'];
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const num = (v, fallback) => Number.isFinite(+v) ? +v : fallback;
 
@@ -75,6 +76,7 @@ export function sanitizeSettings(raw = {}) {
   s.sensitivity = Math.round(clamp(num(s.sensitivity, 50), 1, 100));
   s.invertMouse = !!s.invertMouse;
   s.keepInventory = s.keepInventory !== false;
+  s.difficulty = Math.round(clamp(num(s.difficulty, 2), 0, 3));
   s.keys = { ...DEFAULT_KEYS };
   if (raw?.keys && typeof raw.keys === 'object') {
     for (const action of Object.keys(DEFAULT_KEYS)) {

@@ -99,6 +99,19 @@ assert.equal(loadSettings(storage).keys.back, null, 'cleared conflicting keys st
 assert.equal(sanitizeSettings({ renderDistance: 100, fov: 1 }).renderDistance, 12);
 assert.equal(sanitizeSettings({ renderDistance: 100, fov: 1 }).fov, 30);
 
+player.gameMode = 'creative';
+player.pos.set(7, 120, 7);
+player.keys[player.bindings.jump] = true;
+const flightStart = player.pos.y;
+player.update(0.1, world, null);
+assert.ok(player.pos.y > flightStart, 'creative jump key provides free upward flight');
+player.keys[player.bindings.jump] = false;
+player.keys[player.bindings.sneak] = true;
+const descentStart = player.pos.y;
+player.update(0.1, world, null);
+assert.ok(player.pos.y < descentStart, 'creative sneak key provides downward flight');
+player.gameMode = 'survival';
+
 const saved = [...world.edits].map(([key, id]) => [key, id, world.metaEdits.get(key) || 0]);
 const restored = new World('gameplay-test', new THREE.Scene());
 for (const [key, id, meta] of saved) restored.recordEdit(...key.split(',').map(Number), id, meta);

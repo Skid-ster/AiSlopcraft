@@ -1,3 +1,5 @@
+@import './ui/world-menus.css';
+
 /* AiSlopcraft — classic Minecraft Beta 1.7.3 UI look */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -779,3 +781,106 @@ html, body {
 .pack-controls { text-align: center; color: white; font-size: 9px; text-shadow: 1px 1px #222; }
 .pack-controls .btn { width: 50%; font-size: 10px; min-height: 24px; }
 #pack-status { margin-top: 5px; line-height: 1.4; min-height: 2.8em; overflow-wrap: anywhere; }
+
+/* Multiplayer lobby and shared-session HUD. */
+.multiplayer-screen { z-index: 40; padding: 20px; background: rgba(0,0,0,.78); backdrop-filter: blur(4px); overflow-y: auto; }
+.multiplayer-card { width: min(760px, 96vw); max-height: 94vh; overflow: auto; padding: 24px; border: 3px solid #171717; box-shadow: inset 3px 3px #aaa, inset -3px -3px #444, 0 10px 40px #000; color: #fff; background: linear-gradient(#555,#3b3b3b); text-shadow: 2px 2px #222; }
+.multiplayer-card h2 { text-align: center; font-size: 17px; margin: 2px 0 18px; }
+.multiplayer-card h3 { font-size: 11px; margin: 0 0 10px; }
+.multiplayer-card label { display: grid; gap: 6px; margin: 9px 0; font-size: 9px; }
+.mp-visual-help { display: block; margin: 3px 0 8px; color: #ccc; font-size: 9px; line-height: 1.5; }
+.multiplayer-card input, .multiplayer-card select, .network-panel input { min-width: 0; width: 100%; padding: 10px; border: 2px solid #161616; border-radius: 0; background: #ddd; color: #171717; font: 12px 'Courier New', monospace; text-shadow: none; }
+.multiplayer-card .btn { min-width: 0; width: 100%; margin-top: 8px; }
+.mp-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 12px; }
+.mp-columns section { min-width: 0; padding: 12px; border: 2px solid #222; background: rgba(0,0,0,.2); }
+.mp-room-list { display: grid; gap: 6px; min-height: 50px; max-height: 130px; overflow: auto; font-size: 9px; line-height: 1.6; }
+.mp-room { width: 100%; padding: 8px; border: 2px solid #222; color: #fff; background: #666; text-align: left; font: 9px 'Courier New', monospace; cursor: pointer; }
+.mp-room:hover { background: #78864c; }
+.mp-status { min-height: 2.5em; margin: 14px 0; color: #f1e39b; font: 10px/1.5 'Courier New', monospace; overflow-wrap: anywhere; }
+.mp-footer { display: flex; align-items: center; gap: 14px; font: 9px/1.5 'Courier New', monospace; }
+.mp-footer .btn { flex: 0 0 130px; margin: 0; }
+.network-panel { position: absolute; top: 12px; right: 12px; width: min(360px, 92vw); padding: 8px; border: 2px solid #111; background: rgba(18,18,18,.82); color: #fff; font: 9px/1.5 'Courier New', monospace; pointer-events: auto; text-shadow: 1px 1px #000; }
+.network-room-line { display: flex; gap: 6px; align-items: center; justify-content: space-between; }
+.network-room-line span { flex: 1; overflow-wrap: anywhere; }
+.network-panel button { padding: 5px 7px; border: 1px solid #111; color: white; background: #555; font: 9px 'Courier New', monospace; cursor: pointer; }
+.network-panel button:hover { background: #78864c; }
+.network-chat-log { max-height: 112px; overflow: auto; margin-top: 5px; color: #eee; overflow-wrap: anywhere; }
+.network-chat-log strong { color: #e8cf78; }
+#network-chat-form { display: flex; gap: 5px; margin-top: 6px; }
+.network-panel input { padding: 6px; flex: 1; }
+#network-chat-open { margin-top: 5px; }
+@media(max-width:600px) {
+  .multiplayer-card { padding: 14px; }
+  .mp-columns { grid-template-columns: 1fr; gap: 8px; }
+  .mp-footer { align-items: flex-start; }
+  .network-panel { width: min(300px, 94vw); }
+}
+
+/* Beta 1.7.3 title layout: the era's broad two-up game buttons, texture-pack
+   entry, paired Options/Quit row and low-key version footer. */
+.title-screen {
+  overflow: auto;
+  background: linear-gradient(180deg, rgba(0,0,0,.18), rgba(0,0,0,.48));
+  backdrop-filter: none;
+  gap: 0;
+}
+.title-logo { margin: 0 0 30px; }
+.title-sub { margin-top: 8px; font-size: 11px; letter-spacing: .4px; }
+.title-buttons { width: min(402px, calc(100vw - 32px)); gap: 5px; }
+.title-primary-row, .title-secondary-row {
+  width: 100%; display: flex; gap: 4px; margin-top: 0;
+}
+.title-primary-row .btn, .title-secondary-row .btn { width: 50%; min-width: 0; }
+.title-buttons > #btn-pack { width: 100%; }
+.title-screen .btn {
+  min-height: 28px; padding: 4px 8px; font-size: 12px;
+  background: linear-gradient(#777, #555);
+  border-color: #171717; box-shadow: inset 1px 1px #aaa, inset -1px -1px #333, 0 2px #202020;
+}
+.title-screen .btn:hover {
+  color: #fff; background: linear-gradient(#8b9cc8, #6579ae);
+  outline: 1px solid #e0e6ff;
+}
+.title-status {
+  position: absolute; bottom: 40px; color: #fff; min-height: 14px;
+  font-size: 10px; text-align: center; text-shadow: 2px 2px #222;
+}
+.title-foot, .title-disclaimer { bottom: 8px; font-size: 9px; }
+.texture-pack-screen { z-index: 30; background: rgba(0,0,0,.72); }
+.texture-pack-panel {
+  width: min(560px, calc(100vw - 28px)); max-height: calc(100vh - 32px); overflow: auto; padding: 22px;
+  display: flex; flex-direction: column; align-items: stretch; gap: 12px;
+  color: #fff; text-align: center; background: #383838;
+  border: 2px solid #111; box-shadow: inset 2px 2px #777, inset -2px -2px #222, 0 12px 36px #000;
+}
+.texture-pack-panel h2 { font-size: 18px; text-shadow: 2px 2px #111; }
+.texture-pack-panel p, #pack-status { font-size: 12px; line-height: 1.55; color: #ddd; text-shadow: 1px 1px #111; }
+.texture-pack-actions { display: flex; gap: 8px; }
+.texture-pack-actions .btn { min-width: 0; flex: 1; }
+.texture-pack-panel > .btn { min-width: 0; }
+.resource-pack-list { display: flex; flex-direction: column; gap: 5px; text-align: left; }
+.resource-pack-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px; background: #292929; border: 1px solid #171717;
+  box-shadow: inset 1px 1px #4e4e4e, inset -1px -1px #202020;
+}
+.resource-pack-info { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.resource-pack-info strong { overflow: hidden; color: #fff; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.resource-pack-info span { color: #bbb; font-size: 9px; }
+.resource-pack-row-actions { display: flex; flex: 0 0 auto; gap: 5px; }
+.resource-pack-row .btn { min-width: 62px; min-height: 26px; padding: 3px 6px; font-size: 9px; }
+.resource-pack-row .btn:disabled { color: #b9d98a; cursor: default; }
+.pack-compat-note { padding: 8px; background: #292929; border: 1px solid #171717; font-size: 10px !important; }
+.shader-hint {
+  grid-column: 1 / -1; color: #c9c9c9; font: 11px/1.45 'Pixel UI', monospace;
+  text-shadow: 1px 1px #111; margin: -2px 2px 4px;
+}
+@media (max-height: 650px) {
+  .title-logo { margin-bottom: 16px; }
+  .title-main img { max-height: 120px; }
+  .title-screen { justify-content: flex-start; padding: 18px 0 38px; }
+}
+@media (max-width: 440px) {
+  .texture-pack-actions { flex-direction: column; }
+  .title-foot, .title-disclaimer { font-size: 7px; }
+}
