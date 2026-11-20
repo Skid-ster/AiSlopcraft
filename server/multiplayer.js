@@ -1,10 +1,15 @@
 import { createServer } from 'node:http';
 import { createReadStream, existsSync, realpathSync, statSync } from 'node:fs';
-import { extname, resolve, sep } from 'node:path';
+import { extname, join, resolve, sep } from 'node:path';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
+import { AccountStore } from './accounts.js';
 
+const DEFAULT_DATA_DIR = resolve(process.env.AISLOPCRAFT_DATA_DIR || join(process.env.HOME || process.cwd(), '.aislopcraft'));
+const DEFAULT_ACCOUNT_FILE = resolve(DEFAULT_DATA_DIR, 'accounts.json');
+const AUTH_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
+const MAX_AUTH_ATTEMPTS_PER_WINDOW = 100;
 const DEFAULT_DIST_DIR = resolve(fileURLToPath(new URL('../dist', import.meta.url)));
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -70,8 +75,10 @@ function passwordMatches(record, password) {
   return timingSafeEqual(record.hash, candidate);
 }
 
-export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_DIST_DIR } = {}) {
+export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_DIST_DIR, accountFile = DEFAULT_ACCOUNT_FILE } = {}) {
   const rooms = new Map();
+  const accounts = new AccountStore(accountFile);
+  const authAttempts = new Map();
   const http = createServer((request, response) => {
     const url = new URL(request.url || '/', 'http://localhost');
     const json = (status, body) => {
@@ -208,7 +215,23 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
     }
   }
 
-  wss.on('connection', socket => {
+  function allowAuthAttempt(address) {
+    const now = Date.now();
+    let attempt = authAttempts.get(address);
+    if (!attempt || now - attempt.startedAt >= AUTH_ATTEMPT_WINDOW_MS) {
+      attempt = { startedAt: now, count: 0 };
+      authAttempts.set(address, attempt);
+    }
+    if (attempt.count >= MAX_AUTH_ATTEMPTS_PER_WINDOW) return false;
+    attempt.count++;
+    return true;
+  }
+
+  wss.on('connection', (socket, request) => {
+    const forwardedFor = request.headers['x-forwarded-for'];
+    socket.authAddress = (typeof forwardedFor === 'string' ? forwardedFor.split(',')[0].trim() : '') || request.socket.remoteAddress || 'unknown';
+    socket.account = null;
+    socket.sessionDigest = null;
     socket.isAlive = true;
     socket.lastStateAt = 0;
     socket.lastChatAt = 0;
@@ -224,13 +247,47 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
       if (!message || typeof message.type !== 'string') return;
       const requestId = typeof message.requestId === 'string' ? message.requestId.slice(0, 80) : undefined;
 
+      if (message.type === 'auth:signup' || message.type === 'auth:login') {
+        if (socket.account) return fail(socket, requestId, 'You are already signed in on this connection.');
+        if (!allowAuthAttempt(socket.authAddress)) return fail(socket, requestId, 'Too many sign-in attempts. Please wait 15 minutes and try again.');
+        try {
+          const result = message.type === 'auth:signup'
+            ? accounts.signup(message.username, message.password)
+            : accounts.login(message.username, message.password);
+          socket.account = result.account;
+          socket.sessionDigest = result.sessionDigest;
+          send(socket, { type: 'auth:success', requestId, account: result.account, token: result.token });
+        } catch (error) { fail(socket, requestId, error.message); }
+        return;
+      }
+      if (message.type === 'auth:resume') {
+        if (socket.account) return fail(socket, requestId, 'You are already signed in on this connection.');
+        try {
+          const result = accounts.resume(message.token);
+          socket.account = result.account;
+          socket.sessionDigest = result.sessionDigest;
+          send(socket, { type: 'auth:success', requestId, account: result.account });
+        } catch (error) { fail(socket, requestId, error.message); }
+        return;
+      }
+      if (message.type === 'auth:logout') {
+        if (!socket.account) return fail(socket, requestId, 'You are not signed in.');
+        if (socket.room) return fail(socket, requestId, 'Leave your multiplayer room before signing out.');
+        accounts.logout(socket.sessionDigest);
+        socket.account = null;
+        socket.sessionDigest = null;
+        send(socket, { type: 'auth:logged-out', requestId });
+        return;
+      }
+      if (!socket.account) return fail(socket, requestId, 'Sign up or log in before using multiplayer.');
+
       if (message.type === 'rooms:list') {
         socket.pendingRequestId = requestId;
         sendRoomSnapshot(socket);
       } else if (message.type === 'room:create') {
         if (socket.room) return fail(socket, requestId, 'Leave your current room first.');
-        const playerName = cleanText(message.playerName, 20);
-        const name = cleanText(message.name, 32) || `${playerName || 'Player'}’s world`;
+        const playerName = socket.account.username;
+        const name = cleanText(message.name, 32) || `${playerName}’s world`;
         const password = String(message.password ?? '').slice(0, 64);
         const access = message.access === 'private' ? 'private' : 'public';
         const gameMode = message.gameMode === 'creative' ? 'creative' : 'survival';
@@ -251,9 +308,8 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
       } else if (message.type === 'room:join') {
         const code = String(message.code ?? '').trim().toUpperCase();
         const room = rooms.get(code);
-        const playerName = cleanText(message.playerName, 20);
+        const playerName = socket.account.username;
         if (!validRoom(code) || !room) return fail(socket, requestId, 'Room not found. Check the code or ask the host to reopen it.');
-        if (!playerName) return fail(socket, requestId, 'Choose a player name.');
         if (!passwordMatches(room.password, String(message.password ?? '').slice(0, 64))) return fail(socket, requestId, 'Incorrect room password.');
         join(socket, room, playerName, requestId);
       } else if (message.type === 'room:leave') {

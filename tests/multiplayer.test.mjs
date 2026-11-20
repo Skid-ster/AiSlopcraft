@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { deflateSync } from 'node:zlib';
 import { createMultiplayerServer } from '../server/multiplayer.js';
+import { AccountStore } from '../server/accounts.js';
 import { normalizeRelayUrl } from '../src/network/multiplayer.js';
 
 const tempDir = await mkdtemp(join(tmpdir(), 'aislopcraft-online-'));
@@ -16,7 +18,8 @@ await writeFile(join(staticDir, 'assets', 'app.js'), 'window.gameReady = true;')
 await writeFile(join(staticDir, 'assets', 'main-AbCd1234.js'), 'window.versioned = true;');
 await writeFile(join(tempDir, 'secret.json'), '{"private":true}');
 await symlink(join(tempDir, 'secret.json'), join(staticDir, 'assets', 'escape.json'));
-const service = createMultiplayerServer({ logger: { warn() {} }, staticDir });
+const accountFile = join(tempDir, 'accounts.json');
+const service = createMultiplayerServer({ logger: { warn() {} }, staticDir, accountFile });
 service.http.listen(0, '127.0.0.1');
 await once(service.http, 'listening');
 const { port } = service.http.address();
@@ -52,10 +55,17 @@ try {
   await unbuiltService.close();
 }
 
-async function connect() {
+async function connectRaw() {
   const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
   await once(socket, 'open');
   sockets.push(socket);
+  return socket;
+}
+let testAccountSequence = 0;
+async function connect(username = `TestUser${++testAccountSequence}`) {
+  const socket = await connectRaw();
+  const result = await request(socket, 'auth:signup', { username, password: 'testpass123' });
+  assert.equal(result.type, 'auth:success', `test account ${username} signs up`);
   return socket;
 }
 function waitFor(socket, predicate, timeout = 3000) {
@@ -99,7 +109,35 @@ function testAtlasDataUrl() {
 }
 
 try {
-  const host = await connect();
+  const anonymous = await connectRaw();
+  const anonymousBrowse = await request(anonymous, 'rooms:list');
+  assert.equal(anonymousBrowse.type, 'error', 'public room browsing requires a player account');
+  assert.match(anonymousBrowse.message, /sign up or log in/i);
+  const accountCreated = await request(anonymous, 'auth:signup', { username: 'play565', password: '55543234' });
+  assert.equal(accountCreated.type, 'auth:success', 'players can sign up with a username and an eight-character password');
+  assert.equal(accountCreated.account.username, 'play565');
+  assert.ok(accountCreated.token.length >= 40, 'signup returns an unguessable persistent login token');
+  assert.equal(readFileSync(accountFile, 'utf8').includes('55543234'), false, 'account database never stores the raw password');
+  const reloadedAccounts = new AccountStore(accountFile);
+  assert.equal(reloadedAccounts.resume(accountCreated.token).account.username, 'play565', 'accounts and login sessions survive account-store reloads');
+  const duplicate = await connectRaw();
+  const duplicateSignup = await request(duplicate, 'auth:signup', { username: 'PLAY565', password: 'differentpass' });
+  assert.equal(duplicateSignup.type, 'error', 'usernames are unique regardless of capitalization');
+  const loginSocket = await connectRaw();
+  const loggedIn = await request(loginSocket, 'auth:login', { username: 'play565', password: '55543234' });
+  assert.equal(loggedIn.type, 'auth:success', 'players can log back in with their password');
+  const badLogin = await connectRaw();
+  const badCredentials = await request(badLogin, 'auth:login', { username: 'play565', password: 'not-the-password' });
+  assert.equal(badCredentials.type, 'error');
+  assert.equal(badCredentials.message, 'Username or password is incorrect.', 'login errors do not reveal whether a user exists');
+  const resumed = await connectRaw();
+  const resumedSession = await request(resumed, 'auth:resume', { token: accountCreated.token });
+  assert.equal(resumedSession.type, 'auth:success', 'saved sessions restore login without storing a password');
+  const loggedOut = await request(anonymous, 'auth:logout');
+  assert.equal(loggedOut.type, 'auth:logged-out');
+  assert.equal((await request(anonymous, 'rooms:list')).type, 'error', 'logout revokes room access');
+
+  const host = await connect('Host');
   const created = await request(host, 'room:create', {
     playerName: 'Host', name: 'Pixel garden', access: 'public', gameMode: 'creative',
     password: 'blockparty', seed: 'multiplayer-test', visuals: {
@@ -128,7 +166,7 @@ try {
   assert.equal(listing.rooms[0].passwordProtected, true);
   assert.equal(listing.rooms[0].visualMode, 'forced', 'room listings identify forced host visuals');
 
-  const guest = await connect();
+  const guest = await connect('Builder');
   const joinedEvent = waitFor(host, message => message.type === 'player:joined');
   const joined = await request(guest, 'room:join', { code: created.code, playerName: 'Builder', password: 'blockparty' });
   assert.equal(joined.type, 'room:joined');
@@ -144,7 +182,7 @@ try {
   guest.send(JSON.stringify({ type: 'world:edit', edit: { x: 4, y: 70, z: -3, id: 0, meta: 0 } }));
   assert.equal((await reverseEdit).edit.id, 0, 'air edits replicate so old blocks are removed');
 
-  const newcomer = await connect();
+  const newcomer = await connect('LateJoiner');
   const snapshot = waitFor(newcomer, message => message.type === 'world:snapshot' && message.done);
 
   const itemNotice = waitFor(guest, message => message.type === 'item:snapshot');

@@ -19,6 +19,7 @@ export class MultiplayerClient {
     this.earlyMessages = new Map();
     this.requestSequence = 0;
     this.room = null;
+    this.account = null;
   }
 
   on(type, listener) {
@@ -72,6 +73,7 @@ export class MultiplayerClient {
     socket.addEventListener('close', () => {
       if (this.socket !== socket) return;
       this.socket = null;
+      this.account = null;
       for (const [id, pending] of this.pending) {
         clearTimeout(pending.timeout);
         pending.reject(new Error('Multiplayer server disconnected.'));
@@ -121,6 +123,7 @@ export class MultiplayerClient {
     this.pending.clear();
     const socket = this.socket;
     this.socket = null;
+    this.account = null;
     if (socket && socket.readyState < WebSocket.CLOSING) socket.close(1000, 'Client disconnected');
   }
 }
