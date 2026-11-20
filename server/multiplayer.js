@@ -8,13 +8,34 @@ const MAX_EDITS = 50_000;
 const MAX_MESSAGE = 1024 * 1024;
 const ROOM_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const cleanText = (value, max = 24) => String(value ?? '').replace(/[<>\u0000-\u001f\u007f]/g, '').trim().slice(0, max);
+const SHADER_STYLES = new Set(['classic', 'vibrant', 'cinematic', 'shader']);
+const MAX_SHARED_ATLAS_BYTES = 512 * 1024;
+function sanitizeVisualSettings(value) {
+  if (value?.mode !== 'forced') return { mode: 'individual' };
+  const visuals = { mode: 'forced', shaderStyle: SHADER_STYLES.has(value.shaderStyle) ? value.shaderStyle : 'classic', resourcePack: null };
+  if (value.resourcePack == null) return visuals;
+  const pack = value.resourcePack;
+  const prefix = 'data:image/png;base64,';
+  if (typeof pack !== 'object' || typeof pack.atlasData !== 'string' || !pack.atlasData.startsWith(prefix) || pack.atlasData.length > 700_000) {
+    throw new Error('The shared texture atlas is invalid or too large (maximum 512 KB).');
+  }
+  const encoded = pack.atlasData.slice(prefix.length);
+  if (!encoded || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) throw new Error('The shared texture atlas is not valid base64 PNG data.');
+  const png = Buffer.from(encoded, 'base64');
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  if (png.length > MAX_SHARED_ATLAS_BYTES || png.length < 24 || !png.subarray(0, 8).equals(signature) || png.toString('ascii', 12, 16) !== 'IHDR' || png.readUInt32BE(16) !== 256 || png.readUInt32BE(20) !== 256) {
+    throw new Error('The shared texture atlas must be a 256×256 PNG under 512 KB.');
+  }
+  visuals.resourcePack = { name: cleanText(pack.name, 60) || 'Host texture pack', atlasData: pack.atlasData };
+  return visuals;
+}
 const validRoom = value => /^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/.test(String(value ?? ''));
 const send = (socket, message) => {
   if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
 };
 const roomSummary = room => ({
   code: room.code, name: room.name, players: room.clients.size, maxPlayers: MAX_PLAYERS,
-  gameMode: room.gameMode, access: room.access, passwordProtected: Boolean(room.password),
+  gameMode: room.gameMode, access: room.access, passwordProtected: Boolean(room.password), visualMode: room.visuals?.mode || 'individual',
 });
 
 function createCode(rooms) {
@@ -105,7 +126,7 @@ export function createMultiplayerServer({ logger = console } = {}) {
     send(socket, {
       type: 'room:joined', requestId, id, code: room.code, name: room.name,
       playerName: name, role: socket === room.host ? 'host' : 'guest',
-      gameMode: room.gameMode, seed: room.seed, access: room.access,
+      gameMode: room.gameMode, seed: room.seed, access: room.access, visuals: room.visuals,
       players: [...room.clients].map(peer => ({ id: peer.clientId, name: peer.playerName })),
     });
     if (socket !== room.host) {
@@ -160,6 +181,7 @@ export function createMultiplayerServer({ logger = console } = {}) {
         try {
           const room = {
             code: createCode(rooms), name, playerName, access, gameMode, seed,
+            visuals: sanitizeVisualSettings(message.visuals),
             password: passwordRecord(password), clients: new Set(), edits: new Map(), items: new Map(),
             gameState: null, mobs: [], vehicles: new Map(), projectiles: new Map(), host: socket,
           };

@@ -83,12 +83,14 @@ export class OptionsMenu {
     </div>`;
   }
 
-  button(id, label, cls = '') {
-    return `<button class="btn mc-btn ${cls}" id="${id}">${label}</button>`;
+  button(id, label, cls = '', disabled = false) {
+    return `<button class="btn mc-btn ${cls}" id="${id}"${disabled ? ' disabled' : ''}>${label}</button>`;
   }
 
   render() {
     const s = this.settings;
+    const forcedVisuals = this.game.networkRoom?.visuals?.mode === 'forced' ? this.game.networkRoom.visuals : null;
+    const shownShaderStyle = forcedVisuals?.shaderStyle || s.shaderStyle;
     let title = 'Options';
     let body = '';
     if (this.page === 'main') {
@@ -111,8 +113,8 @@ export class OptionsMenu {
         ${this.slider('opt-brightness', 'Brightness', 50, 150, 1, pct(s.brightness), v => `Brightness: ${v}%`)}
         ${this.slider('opt-fov', 'FOV', 30, 110, 1, s.fov, v => `FOV: ${v}`)}
         ${this.slider('opt-scale', 'Render Scale', 50, 100, 5, pct(s.renderScale), v => `Render Scale: ${v}%`)}
-        ${this.button('opt-shader', `Shaders: ${SHADER_NAMES[s.shaderStyle]}`)}
-        <p class="shader-hint" id="shader-hint">${SHADER_HINTS[s.shaderStyle]}</p>
+        ${this.button('opt-shader', `Shaders: ${SHADER_NAMES[shownShaderStyle]}${forcedVisuals ? ' (Server)' : ''}`, '', !!forcedVisuals)}
+        <p class="shader-hint" id="shader-hint">${forcedVisuals ? 'The host enforces this shader for the multiplayer room.' : SHADER_HINTS[shownShaderStyle]}</p>
       </div>
       <div class="mc-done-row">${this.button('opt-done', 'Done')}</div>`;
     } else if (this.page === 'controls') {

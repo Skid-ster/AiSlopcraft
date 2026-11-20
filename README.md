@@ -46,6 +46,8 @@ Multiplayer uses a small WebSocket relay so players can meet and share world edi
 
 Players on different networks connect to the same relay URL. The host must keep the game open: rooms and edit history are held in relay memory and end when the host leaves or the relay restarts. The host and guests need the same world seed; invite links include the host's seed and relay URL.
 
+When creating a room, the host can choose **Each player uses their own** visuals or **Force host shader and textures**. Forced mode sends the host's built-in shader choice and current 256×256 block atlas through the relay to room members; the client restores its own shader and textures after leaving. Shared atlas payloads are capped at 512 KB and held only in relay memory while the room is open. Individual mode is the default and leaves every player's visuals untouched.
+
 Co-op shares block edits, chat, positions, host-simulated mobs and mob combat, world time, chest/furnace contents, and dropped-item spawns and pickups. Vehicles and in-flight projectile visuals are also replicated. Each player's inventory and health remain personal. Vehicle movement is peer-reported, and the relay does not provide a cheat-proof authoritative simulation. Rooms are temporary and are not saved by the relay. Multiplayer uses the relay rather than peer-to-peer connections and does not require players to expose local ports.
 
 For local development, run `npm run multiplayer` in one terminal and `npm run dev` in another, then enter `ws://localhost:8787/ws` in the lobby.

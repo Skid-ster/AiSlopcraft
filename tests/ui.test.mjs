@@ -157,6 +157,7 @@ try {
   check('Multiplayer button is enabled', !btn('btn-multiplayer').disabled);
   btn('btn-multiplayer').click();
   check('Multiplayer lobby opens', document.getElementById('multiplayer-screen').style.display === 'flex');
+  check('host can choose individual or forced shader and texture settings', !!btn('mp-visual-policy') && !!btn('mp-visual-policy').querySelector('[value="forced"]'));
   check('Lobby offers public/private and survival/creative options',
     document.getElementById('mp-access').options.length === 2 && document.getElementById('mp-mode').options.length === 2);
   btn('mp-back').click();

@@ -86,6 +86,7 @@ const ACTIVE_RESOURCE_PACK_KEY = 'aislopcraft:active-resource-pack';
 const resourcePackMemory = new Map();
 let memoryActiveResourcePackId = null;
 let memoryResourcePackSelectionSet = false;
+let multiplayerVisualRestore = null;
 function storedResourcePacks() {
   try {
     const value = JSON.parse(localStorage.getItem(RESOURCE_PACKS_KEY) || '[]');
@@ -123,6 +124,28 @@ function refreshAtlas() {
   emission.image.getContext('2d').drawImage(updated.image, 0, 0);
   emission.needsUpdate = true;
   updated.dispose();
+}
+async function applyTransientAtlas(atlasData) {
+  if (typeof atlasData !== 'string' || !atlasData.startsWith('data:image/png;base64,') || atlasData.length > 700_000) throw new Error('The host texture atlas is missing or too large to share.');
+  const generation = ++atlasGeneration;
+  const image = new Image();
+  await new Promise((resolve, reject) => {
+    image.onload = resolve;
+    image.onerror = () => reject(new Error('Could not decode the host texture atlas.'));
+    image.src = atlasData;
+  });
+  if (generation !== atlasGeneration) return false;
+  if (image.width !== 256 || image.height !== 256) throw new Error('The host texture atlas has invalid dimensions.');
+  atlasCanvas.getContext('2d').clearRect(0, 0, 256, 256);
+  atlasCanvas.getContext('2d').drawImage(image, 0, 0);
+  refreshAtlas();
+  return true;
+}
+function applyTransientDefaultAtlas() {
+  atlasGeneration++;
+  atlasCanvas.getContext('2d').clearRect(0, 0, 256, 256);
+  atlasCanvas.getContext('2d').drawImage(defaultAtlas, 0, 0);
+  refreshAtlas();
 }
 
 const solidMat = lighting.createMaterial({ name: 'Terrain', voxel: true, map: atlasTex, emissionMap: true });
@@ -169,6 +192,50 @@ const game = {
   world, player, audio, sky, mobs, renderer, lighting, fluids, redstone, vehicles,
   atlasCanvas,
   getResourcePackState() { return resourcePackState(); },
+  getResourcePackForSharing() {
+    const { activeId, packs } = resourcePackState();
+    if (!activeId) return null;
+    const pack = packs.find(item => item.id === activeId);
+    let atlasData = resourcePackMemory.get(activeId)?.atlasData;
+    try { atlasData ||= activeId === 'legacy' ? localStorage.getItem('aislopcraft:block-atlas') : localStorage.getItem(`aislopcraft:resource-pack:${activeId}`); } catch {}
+    if (!atlasData || atlasData.length > 700_000) throw new Error('The selected texture pack is too large to share in a multiplayer room. Choose another pack or use built-in textures.');
+    return { name: pack?.name || 'Host texture pack', atlasData };
+  },
+  getResourcePackForSharing() {
+    const { activeId, packs } = resourcePackState();
+    if (!activeId) return null;
+    const pack = packs.find(item => item.id === activeId);
+    let atlasData = resourcePackMemory.get(activeId)?.atlasData;
+    try { atlasData ||= activeId === 'legacy' ? localStorage.getItem('aislopcraft:block-atlas') : localStorage.getItem(`aislopcraft:resource-pack:${activeId}`); } catch {}
+    if (!atlasData || atlasData.length > 700_000) throw new Error('The selected texture pack is too large to share in a multiplayer room. Choose another pack or use built-in textures.');
+    return { name: pack?.name || 'Host texture pack', atlasData };
+  },
+  async applyMultiplayerVisuals(visuals) {
+    await this.clearMultiplayerVisuals();
+    if (visuals?.mode !== 'forced') return true;
+    multiplayerVisualRestore = { shaderStyle: this.shaderStyle, atlasData: atlasCanvas.toDataURL('image/png') };
+    const style = SHADER_STYLES.includes(visuals.shaderStyle) ? visuals.shaderStyle : 'classic';
+    try {
+      if (visuals.resourcePack?.atlasData) await applyTransientAtlas(visuals.resourcePack.atlasData);
+      else applyTransientDefaultAtlas();
+      this.setShaderStyle(style);
+      this.ui?._iconCache?.clear();
+      return true;
+    } catch (error) {
+      await this.clearMultiplayerVisuals();
+      throw error;
+    }
+  },
+  async clearMultiplayerVisuals() {
+    if (!multiplayerVisualRestore) return false;
+    const restore = multiplayerVisualRestore;
+    multiplayerVisualRestore = null;
+    this.setShaderStyle(restore.shaderStyle);
+    try { await applyTransientAtlas(restore.atlasData); }
+    catch { applyTransientDefaultAtlas(); }
+    this.ui?._iconCache?.clear();
+    return true;
+  },
   async importResourcePack(file) {
     if (file.size > 32 * 1024 * 1024) throw new Error('Pack is too large (maximum 32 MB).');
     const generation = ++atlasGeneration;
@@ -265,7 +332,7 @@ const game = {
     this.renderDistance = s.renderDistance;
     this.keepInventory = s.keepInventory;
     mobs.difficulty = s.difficulty;
-    this.setShaderStyle(s.shaderStyle);
+    this.setShaderStyle(this.networkRoom?.visuals?.mode === 'forced' ? this.networkRoom.visuals.shaderStyle : s.shaderStyle);
     this.setBrightness(s.brightness);
     player.sensitivity = sensitivityToRadians(s.sensitivity);
     player.invertMouse = s.invertMouse;
@@ -382,6 +449,7 @@ const game = {
       const closedName = this.networkRoom.name;
       this.networkRoom = null;
       this.networkOffs?.forEach(off => off()); this.networkOffs = [];
+      void this.clearMultiplayerVisuals();
       player.gameMode = 'survival';
       for (const id of [...remotePlayers.keys()]) removeRemoteAvatar(id);
       ui?.updateNetworkPanel?.();
@@ -400,6 +468,7 @@ const game = {
     client.disconnect(false);
     this.networkRoom = null;
     this.multiplayerClient = null;
+    await this.clearMultiplayerVisuals();
     player.gameMode = 'survival';
     for (const id of [...remotePlayers.keys()]) removeRemoteAvatar(id);
     ui?.updateNetworkPanel?.();

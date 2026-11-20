@@ -130,15 +130,16 @@ export class UI {
     const packList = packs.querySelector('#pack-list');
     const renderPackList = () => {
       const state = this.game.getResourcePackState?.() || { packs: [], activeId: null };
+      const forcedVisuals = this.game.networkRoom?.visuals?.mode === 'forced' ? this.game.networkRoom.visuals : null;
       packList.replaceChildren();
-      const appendRow = (title, detail, active, use, remove = null) => {
+      const appendRow = (title, detail, active, use, remove = null, locked = false) => {
         const row = document.createElement('div'); row.className = 'resource-pack-row';
         const info = document.createElement('div'); info.className = 'resource-pack-info';
         const name = document.createElement('strong'); name.textContent = title;
         const meta = document.createElement('span'); meta.textContent = detail;
         info.append(name, meta);
         const actions = document.createElement('div'); actions.className = 'resource-pack-row-actions';
-        const useButton = document.createElement('button'); useButton.className = 'btn'; useButton.textContent = active ? 'In Use' : 'Use'; useButton.disabled = active;
+        const useButton = document.createElement('button'); useButton.className = 'btn'; useButton.textContent = locked ? 'Locked' : active ? 'In Use' : 'Use'; useButton.disabled = active || locked;
         useButton.addEventListener('click', async () => {
           useButton.disabled = true;
           try { await use(); this._iconCache.clear(); status.textContent = `${title} is now active.`; }
@@ -155,12 +156,16 @@ export class UI {
         }
         row.append(info, actions); packList.appendChild(row);
       };
-      appendRow('Default textures', 'Built-in AiSlopcraft art', state.activeId === null,
-        () => this.game.useDefaultResourcePack?.() ?? this.game.resetResourcePack?.());
+      if (forcedVisuals) {
+        appendRow(`Server enforced · ${forcedVisuals.resourcePack?.name || 'Default textures'}`,
+          `Shader: ${forcedVisuals.shaderStyle || 'classic'} · visuals locked for this room`, true, () => {}, null, true);
+      }
+      appendRow('Default textures', 'Built-in AiSlopcraft art', !forcedVisuals && state.activeId === null,
+        () => this.game.useDefaultResourcePack?.() ?? this.game.resetResourcePack?.(), null, !!forcedVisuals);
       for (const pack of state.packs) {
         const details = `${pack.count ? `${pack.count} block textures` : 'Imported pack'}${pack.id === 'legacy' ? ' · older installation' : ''}`;
-        appendRow(pack.name, details, state.activeId === pack.id,
-          () => this.game.useResourcePack(pack.id), () => this.game.deleteResourcePack(pack.id));
+        appendRow(pack.name, details, !forcedVisuals && state.activeId === pack.id,
+          () => this.game.useResourcePack(pack.id), forcedVisuals ? null : () => this.game.deleteResourcePack(pack.id), !!forcedVisuals);
       }
     };
     renderPackList();
@@ -217,6 +222,10 @@ export class UI {
               <select id="mp-access"><option value="public">Public — listed</option><option value="private">Private — invite code only</option></select>
             </label>
             <label>Optional password <input id="mp-password" type="password" maxlength="64" autocomplete="new-password" placeholder="At least 4 characters"></label>
+            <label>Visual settings
+              <select id="mp-visual-policy"><option value="individual">Each player uses their own</option><option value="forced">Force host shader and textures</option></select>
+            </label>
+            <small class="mp-visual-help">Forced mode shares the host's built-in shader style and current block-texture atlas with everyone in this room.</small>
             <button class="btn" id="mp-create">Create world</button>
           </section>
           <section>
@@ -288,7 +297,7 @@ export class UI {
         const button = document.createElement('button');
         button.className = 'mp-room';
         button.type = 'button';
-        button.textContent = `${room.name} · ${room.players}/${room.maxPlayers} · ${room.gameMode}${room.passwordProtected ? ' · password' : ''}`;
+        button.textContent = `${room.name} · ${room.players}/${room.maxPlayers} · ${room.gameMode}${room.passwordProtected ? ' · password' : ''}${room.visualMode === 'forced' ? ' · host visuals' : ''}`;
         button.addEventListener('click', () => {
           screen.querySelector('#mp-code').value = room.code;
           screen.querySelector('#mp-join-password').focus();
@@ -305,10 +314,15 @@ export class UI {
     try {
       const { playerName } = await this.connectMultiplayer();
       const password = screen.querySelector('#mp-password').value;
+      const visualMode = screen.querySelector('#mp-visual-policy').value;
+      const visuals = visualMode === 'forced' ? {
+        mode: 'forced', shaderStyle: this.game.shaderStyle,
+        resourcePack: this.game.getResourcePackForSharing?.() || null,
+      } : { mode: 'individual' };
       const result = await this.multiplayerClient.createRoom({
         playerName, name: screen.querySelector('#mp-world-name').value.trim(),
         gameMode: screen.querySelector('#mp-mode').value, access: screen.querySelector('#mp-access').value,
-        password, seed: this.game.seed,
+        password, seed: this.game.seed, visuals,
       });
       const entries = [...this.game.world.edits].map(([key,id]) => [key, id, this.game.world.metaEdits.get(key) || 0]);
       for (const [key,id,meta] of entries) {
@@ -341,6 +355,11 @@ export class UI {
     const edits = room.worldEdits || [];
     this.game.applyNetworkEdits?.(edits);
     this.game.setMultiplayerRoom?.(room, this.multiplayerClient);
+    try { await this.game.applyMultiplayerVisuals?.(room.visuals); }
+    catch (error) {
+      await this.game.leaveMultiplayer?.();
+      throw new Error(`Could not apply the host's forced visuals: ${error.message}`);
+    }
     this.multiplayerScreen.style.display = 'none';
     this.hide('title-screen');
     this.game.audio.init();
