@@ -389,74 +389,87 @@ export class UI {
     multiplayer.style.display = 'none';
     multiplayer.innerHTML = `
       <div class="multiplayer-card">
-        <h2>Multiplayer</h2>
-        <p class="mp-connect-help">Uses this site's room service automatically when available; no address setup is needed for this deployment.</p>
+        <h2 id="mp-title">Multiplayer</h2>
+        <p class="mp-connect-help">Pick a name, then create a world or join one. No account or password needed.</p>
         <details class="mp-custom-relay">
-          <summary>Advanced: use a custom room service</summary>
-          <label>Custom WebSocket address
+          <summary>Advanced: custom room service</summary>
+          <label>WebSocket address
             <input id="mp-relay" type="url" placeholder="wss://your-server.example/ws" autocomplete="url">
           </label>
-          <small>Only needed when this game is hosted on a static site. Leave blank to use the automatic address.</small>
+          <small>Only needed on static hosting. Most players can leave this alone.</small>
         </details>
         <section class="mp-name-panel" id="mp-name-panel">
-          <h3>Choose your player name</h3>
-          <p>No account, email, or password. Your name is reserved while connected; release it here or disconnect to make it available again.</p>
-          <label>Player name
-            <input id="mp-username" maxlength="20" minlength="3" pattern="[A-Za-z0-9_]{3,20}" placeholder="Builder42" autocomplete="nickname" aria-describedby="mp-name-help">
-          </label>
-          <small id="mp-name-help">Use 3–20 letters, numbers, or underscores. If someone online already has that name, choose another.</small>
-          <button class="btn" id="mp-claim" type="button">Play online with this name</button>
+          <h3>1. Choose a player name</h3>
+          <p>Temporary name only—held while connected, with no email, account, or password.</p>
+          <div class="mp-name-entry">
+            <label class="mp-name-field">Player name
+              <input id="mp-username" maxlength="20" minlength="3" pattern="[A-Za-z0-9_]{3,20}" placeholder="Builder42" autocomplete="nickname" aria-describedby="mp-name-help">
+            </label>
+            <button class="btn" id="mp-claim" type="button">Continue</button>
+          </div>
+          <small id="mp-name-help">3–20 letters, numbers, or underscores. Disconnect or release it to make it available again.</small>
         </section>
         <div class="mp-name-active" id="mp-name-active" hidden>
           <span id="mp-name-label"></span>
-          <button class="btn" id="mp-release-name" type="button">Release player name</button>
+          <button class="btn" id="mp-release-name" type="button">Release name</button>
         </div>
-        <section class="mp-online-panel" id="mp-online-panel" aria-labelledby="mp-online-title">
-          <div class="mp-online-heading"><h3 id="mp-online-title">Online leaderboard</h3><span id="mp-online-count">0 online</span></div>
-          <ul id="mp-online-list" aria-live="polite"><li>Connect to see everyone online.</li></ul>
-          <button class="btn" id="mp-online-refresh" type="button">Refresh online players</button>
-          <small>Live list of everyone connected to this room service—not a permanent score ranking.</small>
-        </section>
         <div class="mp-columns">
-          <section>
-            <h3>Create a world</h3>
-            <label>World name <input id="mp-world-name" maxlength="32" placeholder="My world"></label>
-            <label>Game mode
+          <section class="mp-action-card mp-create-card" aria-labelledby="mp-create-title">
+            <h3 id="mp-create-title">2. Create a world</h3>
+            <p class="mp-card-help">Start a public Survival world with one click, or change the basics.</p>
+            <label>World name <input id="mp-world-name" maxlength="32" value="My world" placeholder="My world"></label>
+            <label>Mode
               <select id="mp-mode"><option value="survival">Survival</option><option value="creative">Creative</option></select>
             </label>
-            <label>Visibility
-              <select id="mp-access"><option value="public">Public — listed</option><option value="private">Private — invite code only</option></select>
-            </label>
-            <label>Optional password <input id="mp-password" type="password" maxlength="64" autocomplete="new-password" placeholder="At least 4 characters"></label>
-            <label>Visual settings
-              <select id="mp-visual-policy"><option value="individual">Let each player choose</option><option value="forced">Force the host's shader and texture pack</option></select>
-            </label>
-            <label>Forced shader
-              <select id="mp-host-shader" data-forced-visual disabled>
-                <option value="classic">Classic</option><option value="vibrant">Vibrant</option><option value="cinematic">Cinematic</option><option value="shader">Shader Lite</option><option value="psx">PSX (1.7.10)</option>
-              </select>
-            </label>
-            <label>Forced texture pack
-              <select id="mp-host-texture-pack" data-forced-visual disabled><option value="__default__">Default textures</option></select>
-            </label>
-            <small class="mp-visual-help">Individual mode leaves each player's shader and textures alone. Forced mode sends the selected built-in shader and supported block textures to everyone, then restores personal visuals when they leave.</small>
-            <button class="btn" id="mp-create">Create world</button>
+            <button class="btn mp-primary-action" id="mp-create" type="button">Create public world</button>
+            <details class="mp-more-options">
+              <summary>More world options</summary>
+              <label>Who can join?
+                <select id="mp-access"><option value="public">Public — anyone can find it</option><option value="private">Private — invite code only</option></select>
+              </label>
+              <label>Password (optional) <input id="mp-password" type="password" maxlength="64" autocomplete="new-password" placeholder="Leave blank for no password"></label>
+              <label>Visuals
+                <select id="mp-visual-policy"><option value="individual">Each player chooses</option><option value="forced">Use my shader and texture pack</option></select>
+              </label>
+              <label>Shader
+                <select id="mp-host-shader" data-forced-visual disabled>
+                  <option value="classic">Classic</option><option value="vibrant">Vibrant</option><option value="cinematic">Cinematic</option><option value="shader">Shader Lite</option><option value="psx">PSX (1.7.10)</option>
+                </select>
+              </label>
+              <label>Texture pack
+                <select id="mp-host-texture-pack" data-forced-visual disabled><option value="__default__">Default textures</option></select>
+              </label>
+              <small class="mp-visual-help">When visuals are forced, personal visuals return when a player leaves.</small>
+            </details>
           </section>
-          <section>
-            <h3>Join a world</h3>
-            <div class="mp-room-list" id="mp-room-list"><span>Connect to a server to browse public worlds.</span></div>
-            <button class="btn" id="mp-refresh">Refresh public worlds</button>
-            <label>Invite code <input id="mp-code" maxlength="6" placeholder="6-character code" autocomplete="off"></label>
-            <label>World password <input id="mp-join-password" type="password" maxlength="64" autocomplete="current-password"></label>
-            <button class="btn" id="mp-join">Join by code</button>
+          <section class="mp-action-card mp-join-card" aria-labelledby="mp-join-title">
+            <h3 id="mp-join-title">3. Join a world</h3>
+            <div class="mp-room-heading"><span>Public worlds</span><button class="mp-text-action" id="mp-refresh" type="button">Refresh</button></div>
+            <div class="mp-room-list" id="mp-room-list" aria-live="polite"><span>Loading public worlds…</span></div>
+            <details class="mp-invite-options">
+              <summary>Have an invite code?</summary>
+              <label>6-character code <input id="mp-code" maxlength="6" placeholder="ABC123" autocomplete="off" autocapitalize="characters"></label>
+              <label>Password (if needed) <input id="mp-join-password" type="password" maxlength="64" autocomplete="current-password"></label>
+              <button class="btn" id="mp-join" type="button">Join with code</button>
+            </details>
           </section>
         </div>
-        <div class="mp-status" id="mp-status" role="status">Online multiplayer needs a reachable room service. This deployment provides it automatically.</div>
-        <div class="mp-footer"><button class="btn btn-half" id="mp-back">Back</button><span>5 rooms max · 5 players per room · The host stays connected.</span></div>
+        <details class="mp-online-panel" id="mp-online-panel">
+          <summary><span id="mp-online-title">Players online</span><span id="mp-online-count">0 online</span></summary>
+          <ul id="mp-online-list" aria-live="polite"><li>Connect to see players online.</li></ul>
+          <button class="btn" id="mp-online-refresh" type="button">Refresh player list</button>
+          <small>These are connected players, not a score leaderboard.</small>
+        </details>
+        <div class="mp-status" id="mp-status" role="status" aria-live="polite">Checking the room service…</div>
+        <div class="mp-footer"><button class="btn btn-half" id="mp-back" type="button">Back</button><span>Up to 5 rooms · 5 players each · the host stays connected.</span></div>
       </div>`;
     this.root.appendChild(multiplayer);
-    div.querySelector('#btn-multiplayer').addEventListener('click', () => this.openMultiplayer());
-    multiplayer.querySelector('#mp-back').addEventListener('click', () => { multiplayer.style.display = 'none'; });
+    this.multiplayerOpenButton = div.querySelector('#btn-multiplayer');
+    this.multiplayerOpenButton.addEventListener('click', () => this.openMultiplayer());
+    multiplayer.setAttribute('role', 'dialog');
+    multiplayer.setAttribute('aria-modal', 'true');
+    multiplayer.setAttribute('aria-labelledby', 'mp-title');
+    multiplayer.querySelector('#mp-back').addEventListener('click', () => this.closeMultiplayer());
     multiplayer.querySelector('#mp-refresh').addEventListener('click', () => this.refreshPublicRooms());
     multiplayer.querySelector('#mp-online-refresh').addEventListener('click', () => this.refreshOnlinePlayers());
     multiplayer.querySelector('#mp-claim').addEventListener('click', () => this.claimMultiplayerName());
@@ -466,6 +479,11 @@ export class UI {
     multiplayer.querySelector('#mp-release-name').addEventListener('click', () => this.releaseMultiplayerName());
     multiplayer.querySelector('#mp-create').addEventListener('click', () => this.createMultiplayerRoom());
     multiplayer.querySelector('#mp-join').addEventListener('click', () => this.joinMultiplayerRoom());
+    for (const input of multiplayer.querySelectorAll('#mp-code, #mp-join-password')) {
+      input.addEventListener('keydown', event => {
+        if (event.key === 'Enter') { event.preventDefault(); this.joinMultiplayerRoom(); }
+      });
+    }
     multiplayer.querySelector('#mp-access').addEventListener('change', () => {
       multiplayer.querySelector('#mp-password').placeholder = multiplayer.querySelector('#mp-access').value === 'private' ? 'Optional (invite code also required)' : 'At least 4 characters, optional';
     });
@@ -479,6 +497,12 @@ export class UI {
     this.multiplayerName = this.multiplayerClient?.playerName || null;
     this.updateMultiplayerNameUI();
     multiplayer.querySelector('#mp-code').value = new URLSearchParams(window.location.search).get('room') || '';
+  }
+
+  closeMultiplayer() {
+    if (!this.multiplayerScreen || this.multiplayerScreen.style.display === 'none') return;
+    this.multiplayerScreen.style.display = 'none';
+    if (this.multiplayerReturnFocus?.isConnected) this.multiplayerReturnFocus.focus();
   }
 
   openWorldSelection() {
@@ -499,6 +523,10 @@ export class UI {
   }
 
   openMultiplayer() {
+    const active = document.activeElement;
+    this.multiplayerReturnFocus = active && this.multiplayerScreen.contains(active)
+      ? this.multiplayerReturnFocus
+      : (active === this.multiplayerOpenButton ? active : this.multiplayerOpenButton);
     this.multiplayerScreen.style.display = 'flex';
     const shader = this.multiplayerScreen.querySelector('#mp-host-shader');
     shader.value = [...shader.options].some(option => option.value === this.game.shaderStyle) ? this.game.shaderStyle : 'classic';
@@ -522,6 +550,7 @@ export class UI {
     const hasRelay = this.multiplayerScreen.querySelector('#mp-relay').value.trim() || this.game.multiplayerRelay || suggestedMultiplayerRelay();
     status.replaceChildren();
     if (!hasRelay) {
+      this.multiplayerScreen.querySelector('#mp-room-list').textContent = 'No room service is configured for this site.';
       status.append('This copy is on static hosting, which cannot run online rooms.');
       if (window.location.hostname.endsWith('.github.io')) {
         status.append(document.createElement('br'));
@@ -541,8 +570,10 @@ export class UI {
       }
     } else {
       status.textContent = this.multiplayerName ? `Playing as ${this.multiplayerName}. Your name is reserved while connected.` : 'Choose an available player name to play online. No password or account needed.';
-      void this.prepareMultiplayerClient().then(() => this.refreshOnlinePlayers()).catch(() => {});
+      this.multiplayerScreen.querySelector('#mp-room-list').textContent = 'Loading public worlds…';
+      void this.refreshPublicRooms();
     }
+    (this.multiplayerName ? this.multiplayerScreen.querySelector('#mp-create') : this.multiplayerScreen.querySelector('#mp-username')).focus();
   }
 
   updateMultiplayerNameUI() {
@@ -555,6 +586,7 @@ export class UI {
     this.multiplayerScreen.querySelector('#mp-name-label').textContent = name ? `Playing as ${name}. This name is held only while you are connected.` : '';
     this.multiplayerScreen.querySelector('#mp-create').disabled = !name;
     this.multiplayerScreen.querySelector('#mp-join').disabled = !name;
+    for (const room of this.multiplayerScreen.querySelectorAll('.mp-room')) room.disabled = !name;
     if (!name && !this.multiplayerScreen.querySelector('#mp-username').value) {
       try { this.multiplayerScreen.querySelector('#mp-username').value = window.localStorage.getItem('aislopcraft:player-name') || ''; } catch {}
     }
@@ -618,7 +650,8 @@ export class UI {
       this.multiplayerName = result.name;
       try { window.localStorage.setItem('aislopcraft:player-name', result.name); } catch {}
       this.updateMultiplayerNameUI();
-      status.textContent = `Welcome, ${result.name}. You can now browse, host, or join a world. Your name is reserved until you release it or disconnect.`;
+      status.textContent = `Welcome, ${result.name}. Create a world or choose one to join.`;
+      screen.querySelector('#mp-create').focus();
     } catch (error) { status.textContent = error.message; }
     finally { button.disabled = false; }
   }
@@ -641,6 +674,7 @@ export class UI {
       this.multiplayerName = null;
       this.updateMultiplayerNameUI();
       this.multiplayerScreen.querySelector('#mp-status').textContent = 'Name released. It is available for someone else to use.';
+      this.multiplayerScreen.querySelector('#mp-username').focus();
     } catch (error) {
       this.multiplayerScreen.querySelector('#mp-status').textContent = `Could not release the player name: ${error.message}`;
     }
@@ -659,30 +693,55 @@ export class UI {
     const screen = this.multiplayerScreen;
     const list = screen.querySelector('#mp-room-list');
     const status = screen.querySelector('#mp-status');
+    const refreshButton = screen.querySelector('#mp-refresh');
+    if (refreshButton.disabled) return;
+    refreshButton.disabled = true;
+    const refreshLabel = refreshButton.textContent;
+    refreshButton.textContent = 'Checking…';
     try {
       const client = await this.prepareMultiplayerClient();
       const [result, online] = await Promise.all([client.listRooms(), client.listOnlinePlayers()]);
       this.renderOnlinePlayers(online.players);
       list.replaceChildren();
-      if (!result.rooms.length) { list.textContent = 'No public worlds are online right now.'; return; }
+      if (!result.rooms.length) {
+        list.textContent = 'No public worlds yet. Create one and invite your friends.';
+        status.textContent = 'Room service connected. No public worlds are online right now.';
+        return;
+      }
       for (const room of result.rooms) {
         const button = document.createElement('button');
         button.className = 'mp-room';
         button.type = 'button';
         button.textContent = `${room.name} · ${room.players}/${room.maxPlayers} · ${room.gameMode}${room.passwordProtected ? ' · password required' : ' · Join'}${room.visualMode === 'forced' ? ' · host visuals' : ''}`;
+        button.setAttribute('aria-label', `${room.name}, ${room.players} of ${room.maxPlayers} players, ${room.gameMode}${room.passwordProtected ? ', password required' : ', join now'}`);
+        button.disabled = !this.multiplayerName;
         button.addEventListener('click', () => {
+          if (!this.multiplayerName) {
+            status.textContent = 'Choose a player name first, then select a world to join.';
+            screen.querySelector('#mp-username').focus();
+            return;
+          }
           screen.querySelector('#mp-code').value = room.code;
+          const inviteOptions = screen.querySelector('.mp-invite-options');
           if (room.passwordProtected) {
+            inviteOptions.open = true;
             screen.querySelector('#mp-join-password').focus();
-            status.textContent = `Enter the password for ${room.name}, then choose Join by code.`;
+            status.textContent = `Enter the password for ${room.name}, then choose Join with code.`;
           } else {
+            screen.querySelector('#mp-join-password').value = '';
             void this.joinMultiplayerRoom();
           }
         });
         list.appendChild(button);
       }
       status.textContent = `Found ${result.rooms.length} public world${result.rooms.length === 1 ? '' : 's'}.`;
-    } catch (error) { status.textContent = error.message; }
+    } catch (error) {
+      list.textContent = `Could not load worlds: ${error.message}`;
+      status.textContent = `Could not refresh public worlds: ${error.message}`;
+    } finally {
+      refreshButton.disabled = false;
+      refreshButton.textContent = refreshLabel;
+    }
   }
 
   async createMultiplayerRoom() {
@@ -1739,6 +1798,24 @@ export class UI {
   }
 
   onKey(e) {
+    if (this.multiplayerScreen?.style.display === 'flex') {
+      if (e.code === 'Escape') {
+        e.preventDefault();
+        this.closeMultiplayer();
+      } else if (e.code === 'Tab') {
+        const focusable = [...this.multiplayerScreen.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), summary')]
+          .filter(element => !element.closest('[hidden]') && (!element.closest('details:not([open])') || element.tagName === 'SUMMARY'));
+        if (focusable.length) {
+          const first = focusable[0], last = focusable.at(-1);
+          if (e.shiftKey && (document.activeElement === first || !this.multiplayerScreen.contains(document.activeElement))) {
+            e.preventDefault(); last.focus();
+          } else if (!e.shiftKey && (document.activeElement === last || !this.multiplayerScreen.contains(document.activeElement))) {
+            e.preventDefault(); first.focus();
+          }
+        }
+      }
+      return;
+    }
     if (this.helpScreen?.style.display === 'flex') {
       if (e.code === 'Escape') {
         e.preventDefault();
