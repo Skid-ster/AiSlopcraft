@@ -19,10 +19,10 @@ It aims for the feel of that era: no hunger bar or sprinting, food heals directl
 
 ## Play locally
 
-Install [Node.js](https://nodejs.org/) and run:
+Install [Node.js 22 LTS](https://nodejs.org/) and run:
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
