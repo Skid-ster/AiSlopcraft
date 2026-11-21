@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import * as THREE from 'three';
 import { JSDOM } from 'jsdom';
 import { Lighting, PSXPostProcess, SHADER_STYLES, shaderStyleId, syncFogUniforms } from '../src/rendering.js';
+import { ParticleManager } from '../src/particles.js';
 
 const fog = new THREE.Fog(0x446688, 12, 90);
 const materials = Array.from({ length: 3 }, () => ({ uniforms: {
@@ -70,6 +71,8 @@ lighting.prepare(nonCaster, { castShadow: false });
 assert.equal(nonCaster.layers.isEnabled(1), false, 'transient particles skip shadow rendering');
 
 const vertex = solid.vertexShader, fragment = solid.fragmentShader;
+assert.match(water.fragmentShader, /causticPattern/, 'water shader adds moving, sun-lit caustic glints');
+assert.match(water.fragmentShader, /cos\(\(p\.x - p\.y\) \* 4\.1/, 'water surface uses finer secondary ripples');
 assert.match(vertex, /attribute vec2 aLight/);
 assert.match(vertex, /attribute vec3 aNormal/);
 assert.match(vertex, /aInstanceLight/);
@@ -128,7 +131,23 @@ assert.equal(cacheRenderer.renders, 1, 'unchanged shadow maps are cached instead
 cachedCamera.position.x = 1;
 cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'shader', 10.4);
 assert.equal(cacheRenderer.renders, 2, 'moving the view refreshes the shadow map promptly');
+cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'shader', 10.6, false, false);
+assert.equal(cacheRenderer.renders, 2, 'Fast graphics skips the expensive dynamic shadow pass');
+assert.equal(cachedLighting.shared.uShadowStrength.value, 0, 'Fast graphics disables shadow sampling in the visible shader');
 cachedLighting.dispose();
+
+const particleScene = { add() {} };
+const particleManager = new ParticleManager(particleScene, null);
+particleManager.particles = Array.from({ length: 200 }, () => ({}));
+particleManager.setQuality('minimal');
+assert.equal(particleManager.maxParticles, 48, 'Minimal particles have a small active cap');
+assert.equal(particleManager.particles.length, 48, 'changing quality immediately trims excess particles');
+particleManager.setQuality('decreased');
+assert.equal(particleManager.maxParticles, 128, 'Decreased particles use a medium active cap');
+particleManager.setQuality('all');
+assert.equal(particleManager.maxParticles, 256, 'All particles restore the full visual cap');
+particleManager.mesh.geometry.dispose();
+particleManager.mesh.material.dispose();
 
 // Sky/fog integration: one source of truth, depth-tested celestials, underwater.
 const dom = new JSDOM('<!doctype html><html><body></body></html>');
@@ -153,7 +172,9 @@ assert.ok(scene.fog.far > 80);
 
 const main = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
 assert.match(main, /lighting\.update\(\{ sky, time: game\.time, style: game\.shaderStyle, fog: scene\.fog \}\)/);
-assert.match(main, /lighting\.updateShadows\(renderer, scene, camera, sky, game\.shaderStyle, game\.time\)/);
+assert.match(main, /lighting\.updateShadows\(renderer, scene, camera, sky, game\.shaderStyle, game\.time, false, game\.settings\.graphics !== 'fast'\)/);
+assert.match(main, /const effectiveScale = Math\.max\(0\.35, s\.renderScale \* \(s\.graphics === 'fast' \? 0\.75 : 1\)\)/);
+assert.match(main, /particles\.setQuality\(s\.particles\)/);
 assert.match(main, /camera\.layers\.enable\(1\)/);
 assert.match(main, /s\.layers\.enable\(1\)/);
 console.log('ALL RENDERING TESTS PASSED');

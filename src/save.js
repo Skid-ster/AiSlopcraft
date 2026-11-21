@@ -93,10 +93,12 @@ export function normalizeWorldSave(value) {
     stats: isObject(player.stats) ? Object.fromEntries(Object.entries(player.stats).filter(([, n]) => Number.isFinite(n)).slice(0, 100)) : {},
   };
   const worldId = typeof value.worldId === 'string' && value.worldId.length > 0 && value.worldId.length <= 128 ? value.worldId : value.seed;
+  const edition = value.edition === 'classic' ? 'classic' : 'beta';
   return {
     version: WORLD_SAVE_VERSION, worldId, seed: value.seed,
     worldName: typeof value.worldName === 'string' && value.worldName.trim() ? value.worldName.trim().slice(0, 48) : value.seed,
-    gameMode: value.gameMode === 'creative' ? 'creative' : 'survival',
+    edition,
+    gameMode: edition === 'classic' ? 'classic' : value.gameMode === 'creative' ? 'creative' : 'survival',
     edits,
     settings: isObject(value.settings) ? value.settings : {},
     spawnBed: isObject(value.spawnBed) && [value.spawnBed.x, value.spawnBed.y, value.spawnBed.z].every(Number.isInteger)

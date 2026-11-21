@@ -194,9 +194,11 @@ const fragmentShader = /* glsl */ `
     if (uWater > 0.5) {
       vec2 p = vWorldPosition.xz;
       vec3 ripple = vec3(
-        cos(p.x * 1.7 + uTime * 1.3) * 0.055 + sin((p.x + p.y) * 0.8 - uTime) * 0.035,
+        cos(p.x * 1.7 + uTime * 1.3) * 0.055 + sin((p.x + p.y) * 0.8 - uTime) * 0.035
+          + cos((p.x - p.y) * 4.1 + uTime * 2.0) * 0.018,
         0.0,
         sin(p.y * 1.5 - uTime * 1.1) * 0.055 + cos((p.x - p.y) * 0.9 + uTime * 0.7) * 0.035
+          + sin((p.x + p.y) * 3.7 - uTime * 1.8) * 0.018
       );
       vec3 waterNormal = normalize(normal + ripple);
       vec3 viewDir = normalize(cameraPosition - vWorldPosition);
@@ -207,6 +209,10 @@ const fragmentShader = /* glsl */ `
       rgb = mix(rgb, reflection * (0.35 + 0.65 * uSky), fresnel * strength);
       float specular = pow(max(dot(waterNormal, normalize(sunDir + viewDir)), 0.0), 96.0);
       rgb += vec3(1.0, 0.90, 0.70) * specular * uSunIntensity * shadow * (uShaderStyle > 2.5 && uShaderStyle < 3.5 ? 0.9 : 0.25);
+      float causticPattern = sin((p.x + p.y) * 3.2 + uTime * 1.7) * sin((p.x - p.y) * 2.4 - uTime * 1.1);
+      float caustic = pow(max(causticPattern * 0.5 + 0.5, 0.0), 10.0)
+        * max(dot(waterNormal, viewDir), 0.0) * uSunIntensity * shadow;
+      rgb += vec3(0.10, 0.24, 0.28) * caustic * (uShaderStyle > 2.5 && uShaderStyle < 3.5 ? 0.75 : 0.22);
       alpha = mix(alpha, min(0.94, alpha + 0.16), fresnel);
     }
 
@@ -377,9 +383,9 @@ export class Lighting {
     if (id < 2 || id === 4 || sky.sunDirection.y <= 0.06) s.uShadowStrength.value = 0;
   }
 
-  updateShadows(renderer, scene, camera, sky, style, time, force = false) {
+  updateShadows(renderer, scene, camera, sky, style, time, force = false, enabled = true) {
     const id = shaderStyleId(style);
-    if (id < 2 || id === 4 || sky.sunDirection.y <= 0.06) { this.shared.uShadowStrength.value = 0; return; }
+    if (!enabled || id < 2 || id === 4 || sky.sunDirection.y <= 0.06) { this.shared.uShadowStrength.value = 0; return; }
     if (!force && time - this.lastShadowTime < 0.12) return;
     const cameraMoved = this.lastShadowPosition.distanceToSquared(camera.position) > 0.25;
     const sunMoved = this.lastShadowSunDirection.distanceToSquared(sky.sunDirection) > 0.000004;

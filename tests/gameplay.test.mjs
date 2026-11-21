@@ -119,6 +119,18 @@ assert.ok(player.controlsActive && player.pos.y > touchFlightStart, 'virtual tou
 player.clearTouchInput();
 assert.equal(player.controlsActive, false, 'releasing touch controls returns the player to an idle input state');
 player.gameMode = 'survival';
+player.gameMode = 'classic';
+player.pos.set(8.5, 100, 8.5);
+player.classicFlying = true;
+player.keys[player.bindings.forward] = true;
+const classicFlightStart = player.pos.z;
+player.update(0.1, world, null);
+assert.notEqual(player.pos.z, classicFlightStart, 'Classic flight moves forward while respecting the world collision path');
+player.keys[player.bindings.forward] = false;
+player.health = 20;
+player.damage(8, null);
+assert.equal(player.health, 20, 'Classic creative play has no survival damage');
+player.gameMode = 'survival'; player.classicFlying = false;
 
 const saved = [...world.edits].map(([key, id]) => [key, id, world.metaEdits.get(key) || 0]);
 const restored = new World('gameplay-test', new THREE.Scene());

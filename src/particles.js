@@ -92,8 +92,10 @@ export class ParticleManager {
     this.mesh.frustumCulled = false;
     scene.add(this.mesh);
 
-    // Active particle data
+    // Active particle data; the quality preset is applied with the other video settings.
     this.particles = [];
+    this.quality = 'all';
+    this.maxParticles = MAX_PARTICLES;
 
     // Helper dummy object for matrix calculations
     this.dummy = new THREE.Object3D();
@@ -149,16 +151,24 @@ export class ParticleManager {
     return list[Math.floor(Math.random() * list.length)];
   }
 
-  // Burst of 16-24 voxel particles on block break
+  setQuality(quality = 'all') {
+    this.quality = ['all', 'decreased', 'minimal'].includes(quality) ? quality : 'all';
+    this.maxParticles = this.quality === 'minimal' ? 48 : this.quality === 'decreased' ? 128 : MAX_PARTICLES;
+    if (this.particles.length > this.maxParticles) this.particles.splice(0, this.particles.length - this.maxParticles);
+  }
+
+  // Burst size and retained particle cap follow the selected performance preset.
   spawnBreak(x, y, z, blockId) {
     if (!blockId) return;
-    const count = 16 + Math.floor(Math.random() * 9); // 16 to 24
+    const count = this.quality === 'minimal' ? 3 + Math.floor(Math.random() * 2)
+      : this.quality === 'decreased' ? 7 + Math.floor(Math.random() * 4)
+        : 16 + Math.floor(Math.random() * 9);
     const cx = x + 0.5;
     const cy = y + 0.5;
     const cz = z + 0.5;
 
     for (let i = 0; i < count; i++) {
-      if (this.particles.length >= MAX_PARTICLES) {
+      if (this.particles.length >= this.maxParticles) {
         this.particles.shift(); // Evict oldest
       }
 
@@ -185,7 +195,7 @@ export class ParticleManager {
   }
 
   spawnEffect(position, { color = 0xffa020, life = 0.45, scale = 0.7, vx = 0, vy = 1.4, vz = 0, gravity = -0.4 } = {}) {
-    if (this.particles.length >= MAX_PARTICLES) this.particles.shift();
+    if (this.particles.length >= this.maxParticles) this.particles.shift();
     const tint = color?.isColor ? color.clone() : new THREE.Color(color);
     this.particles.push({
       x: position.x + (Math.random() - 0.5) * 0.45,
@@ -207,13 +217,13 @@ export class ParticleManager {
   // 1-2 small particles while digging
   spawnDig(hit, blockId) {
     if (!hit || !blockId) return;
-    const count = 1 + (Math.random() > 0.5 ? 1 : 0);
+    const count = this.quality === 'minimal' ? 0 : this.quality === 'decreased' ? 1 : 1 + (Math.random() > 0.5 ? 1 : 0);
     const fx = hit.face ? hit.face[0] : 0;
     const fy = hit.face ? hit.face[1] : 0;
     const fz = hit.face ? hit.face[2] : 0;
 
     for (let i = 0; i < count; i++) {
-      if (this.particles.length >= MAX_PARTICLES) {
+      if (this.particles.length >= this.maxParticles) {
         this.particles.shift();
       }
 
@@ -273,7 +283,7 @@ export class ParticleManager {
     }
 
     // Update InstancedMesh matrices & colors
-    const activeCount = Math.min(this.particles.length, MAX_PARTICLES);
+    const activeCount = Math.min(this.particles.length, this.maxParticles);
     this.mesh.count = activeCount;
 
     for (let i = 0; i < activeCount; i++) {

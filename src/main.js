@@ -1,6 +1,7 @@
-// AiSlopcraft — Minecraft Beta 1.7.3 clone. Main game loop.
+// AiSlopcraft — Beta-era survival and Classic creative sandbox. Main game loop.
 import * as THREE from 'three';
 import { World } from './world/world.js';
+import { CLASSIC_BLOCKS, isClassicBlock } from './classic.js';
 import { CH, WORLD_H, SEA_LEVEL } from './world/chunk.js';
 import { buildChunkMesh } from './world/mesher.js';
 import { buildAtlas, buildItemIcons, buildEmissionAtlas } from './world/textures.js';
@@ -161,7 +162,7 @@ const WORLD_PARAMS = new URLSearchParams(location.search);
 const SEED = WORLD_PARAMS.get('seed') || 'Beta 1.7.3';
 const WORLD_ID = WORLD_PARAMS.get('id') || SEED;
 const WORLD_NAME = WORLD_PARAMS.get('world') || SEED;
-const START_GAME_MODE = WORLD_PARAMS.get('mode') === 'creative' ? 'creative' : 'survival';
+const REQUESTED_EDITION = WORLD_PARAMS.get('edition') === 'classic' ? 'classic' : null;
 const SAVE_KEY = `aislopcraft:world:${WORLD_ID}`;
 function readSave() {
   try {
@@ -170,10 +171,12 @@ function readSave() {
   } catch { return null; }
 }
 const savedGame = readSave();
+const EDITION = REQUESTED_EDITION || savedGame?.edition || 'beta';
+const START_GAME_MODE = EDITION === 'classic' ? 'classic' : WORLD_PARAMS.get('mode') === 'creative' ? 'creative' : 'survival';
 const legacySettings = { ...savedGame?.settings };
 if (legacySettings.sensitivity > 0 && legacySettings.sensitivity < 1) legacySettings.sensitivity = legacySettings.sensitivity / 0.0044 * 100;
 const settings = loadSettings(localStorage, legacySettings);
-const world = new World(SEED, scene);
+const world = new World(SEED, scene, EDITION);
 if (Array.isArray(savedGame?.edits)) {
   for (const entry of savedGame.edits) {
     if (!Array.isArray(entry) || entry.length < 2 || typeof entry[0] !== 'string') continue;
@@ -201,6 +204,7 @@ let networkVehicleTimer = 0;
 let sharedStateTimer = 0;
 const game = {
   world, player, audio, sky, mobs, renderer, lighting, fluids, redstone, vehicles,
+  edition: EDITION,
   atlasCanvas,
   worldName: savedGame?.worldName || WORLD_NAME,
   getResourcePackState() { return resourcePackState(); },
@@ -212,20 +216,53 @@ const game = {
         if (!key?.startsWith('aislopcraft:world:')) continue;
         try {
           const save = normalizeWorldSave(JSON.parse(localStorage.getItem(key) || 'null'));
-          if (save && key === `aislopcraft:world:${save.worldId}`) worlds.push({ id: save.worldId, seed: save.seed, name: save.worldName || save.seed, gameMode: save.gameMode });
+          if (save && key === `aislopcraft:world:${save.worldId}`) worlds.push({ id: save.worldId, seed: save.seed, name: save.worldName || save.seed, gameMode: save.gameMode, edition: save.edition });
         } catch { /* ignore just the one corrupt save and keep listing the rest */ }
       }
     } catch { /* storage may be disabled by the browser */ }
     return worlds;
   },
 
-  openLocalWorld(seed, name, gameMode = 'survival', worldId = seed) {
+  selectClassicBlock(id) {
+    if (this.edition !== 'classic' || !isClassicBlock(id)) return false;
+    player.inventory[player.hotbarIndex] = { id, count: 64, damage: 0 };
+    ui?.refresh?.();
+    return true;
+  },
+  openEditionHome(edition = 'beta') {
+    const classic = edition === 'classic';
+    const token = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const url = new URL(location.href);
+    url.searchParams.set('id', `menu-${token}`);
+    url.searchParams.set('seed', `menu-${classic ? 'classic' : 'beta'}-${token}`);
+    url.searchParams.set('world', classic ? 'Classic Edition' : 'Beta Edition');
+    if (classic) url.searchParams.set('edition', 'classic'); else url.searchParams.delete('edition');
+    url.searchParams.delete('mode'); url.searchParams.delete('room'); url.searchParams.delete('relay'); url.searchParams.delete('launch');
+    location.assign(url.href);
+  },
+  openRoomHome(room) {
+    const token = `room-${String(room.code || 'invite').slice(0, 12)}`;
+    const url = new URL(location.href);
+    url.searchParams.set('id', token);
+    url.searchParams.set('seed', String(room.seed));
+    url.searchParams.set('world', String(room.name || 'Shared Classic World'));
+    url.searchParams.set('edition', room.edition === 'classic' ? 'classic' : 'beta');
+    url.searchParams.set('room', String(room.code || ''));
+    url.searchParams.delete('mode');
+    url.searchParams.delete('launch');
+    const relay = this.multiplayerClient?.relayUrl;
+    if (relay) url.searchParams.set('relay', relay);
+    location.assign(url.href);
+  },
+  openLocalWorld(seed, name, gameMode = 'survival', worldId = seed, edition = 'beta') {
     const url = new URL(location.href);
     url.searchParams.set('id', String(worldId));
     url.searchParams.set('seed', String(seed));
     url.searchParams.set('world', String(name || seed));
-    url.searchParams.set('mode', gameMode === 'creative' ? 'creative' : 'survival');
+    url.searchParams.set('mode', gameMode === 'creative' ? 'creative' : gameMode === 'classic' ? 'classic' : 'survival');
+    if (edition === 'classic') url.searchParams.set('edition', 'classic'); else url.searchParams.delete('edition');
     url.searchParams.delete('room');
+    url.searchParams.set('launch', '1');
     location.assign(url.href);
   },
   renameLocalWorld(worldId, name) {
@@ -239,9 +276,9 @@ const game = {
     localStorage.removeItem(`aislopcraft:world:${worldId}`);
     return true;
   },
-  recreateLocalWorld(worldId, seed, name, gameMode = 'survival') {
+  recreateLocalWorld(worldId, seed, name, gameMode = 'survival', edition = 'beta') {
     this.deleteLocalWorld(worldId);
-    this.openLocalWorld(seed, name, gameMode, worldId);
+    this.openLocalWorld(seed, name, gameMode, worldId, edition);
   },
   getResourcePackForSharing(requestedId = resourcePackState().activeId) {
     if (requestedId == null) return null;
@@ -383,7 +420,9 @@ const game = {
     player.viewBobbing = s.viewBobbing;
     audio.setVolume(s.volume);
     if (camera.fov !== s.fov) { camera.fov = s.fov; camera.updateProjectionMatrix(); }
-    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2) * s.renderScale;
+    const effectiveScale = Math.max(0.35, s.renderScale * (s.graphics === 'fast' ? 0.75 : 1));
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2) * effectiveScale;
+    particles.setQuality(s.particles);
     if (renderer.getPixelRatio() !== pixelRatio) {
       renderer.setPixelRatio(pixelRatio);
       renderer.setSize(window.innerWidth, window.innerHeight);
@@ -391,7 +430,9 @@ const game = {
     sky.showClouds = s.clouds;
     if (this.ui?.hintEl) {
       const k = s.keys;
-      this.ui.hintEl.textContent = `Click to play | ${keyLabel(k.forward)}/${keyLabel(k.left)}/${keyLabel(k.back)}/${keyLabel(k.right)} move · ${keyLabel(k.jump)} jump · ${keyLabel(k.sneak)} sneak · ${keyLabel(k.drop)} drop · ${keyLabel(k.inventory)} inventory · F3 debug · Esc pause`;
+      this.ui.hintEl.textContent = this.edition === 'classic'
+        ? `Click to play · WASD move · Space jump · double-tap Space to fly · left-click break · right-click place · B blocks · middle-click pick · Esc pause`
+        : `Click to play | ${keyLabel(k.forward)}/${keyLabel(k.left)}/${keyLabel(k.back)}/${keyLabel(k.right)} move · ${keyLabel(k.jump)} jump · ${keyLabel(k.sneak)} sneak · ${keyLabel(k.drop)} drop · ${keyLabel(k.inventory)} inventory · F3 debug · Esc pause`;
     }
     if (distanceChanged && this.started) this.onRenderDistanceChange();
   },
@@ -430,7 +471,7 @@ const game = {
     this.networkOffs = [];
     this.networkRoom = { ...room };
     this.multiplayerClient = client;
-    player.gameMode = room.gameMode === 'creative' ? 'creative' : 'survival';
+    player.gameMode = this.edition === 'classic' ? 'classic' : room.gameMode === 'creative' ? 'creative' : 'survival';
     for (const peer of room.players || []) if (peer.id !== room.id) createRemoteAvatar(peer.id, peer.name);
     const on = (type, handler) => this.networkOffs.push(client.on(type, handler));
     on('player:joined', message => {
@@ -576,10 +617,11 @@ const game = {
       for (let cx = -1; cx <= 1; cx++) world.generateChunk(cx, cz);
     }
     // Prefer an open, walkable spawn instead of the top of a tree canopy.
+    const spawnCenter = this.edition === 'classic' ? 0.5 : 8.5;
     for (let r = 0; r <= 8; r++) {
       for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
         if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
-        const x = 8.5 + dx, z = 8.5 + dz;
+        const x = spawnCenter + dx, z = spawnCenter + dz;
         const y = findSafeGround(world, x, z, 0.6, 1.8);
         if (y == null) continue;
         const bx = Math.floor(x), bz = Math.floor(z);
@@ -594,7 +636,7 @@ const game = {
         if (open) return { x, y, z };
       }
     }
-    return { x: 8.5, y: world.heightAt(8, 8) + 1.001, z: 8.5 };
+    return { x: spawnCenter, y: world.heightAt(Math.floor(spawnCenter), Math.floor(spawnCenter)) + 1.001, z: spawnCenter };
   },
   respawn() {
     vehicles.dismount(player, true);
@@ -611,6 +653,9 @@ const game = {
   async saveAndQuit() {
     if (this.networkRoom) await this.leaveMultiplayer();
     else this.saveGame();
+    const url = new URL(location.href);
+    url.searchParams.delete('launch');
+    history.replaceState(null, '', url);
     this.started = false;
     clearFishing();
     ui.setMode('title');
@@ -619,7 +664,7 @@ const game = {
     // Multiplayer rooms are temporary shared sessions. Never overwrite a
     // player's personal singleplayer save with the host's world state.
     if (this.networkRoom) return false;
-    const payload = { version: 1, worldId: WORLD_ID, seed: SEED, worldName: this.worldName, gameMode: player.gameMode === 'creative' ? 'creative' : 'survival',
+    const payload = { version: 1, worldId: WORLD_ID, seed: SEED, worldName: this.worldName, edition: this.edition, gameMode: player.gameMode,
       edits: [...world.edits].map(([key, id]) => [key, id, world.metaEdits.get(key) || 0]),
       settings: this.settings, spawnBed: this.spawnBed, timeOfDay: sky.timeOfDay, furnaces: [...furnaces], chests: [...chests], vehicles: vehicles.serialize(),
       items: itemEntities.filter(it => !it.dead).map(it => ({ id: it.id, count: it.count, damage: it.damage, pos: it.mesh.position.toArray(), vy: it.vy, age: it.age })),
@@ -660,7 +705,9 @@ const game = {
     url.searchParams.set('seed', save.seed);
     url.searchParams.set('world', save.worldName || save.seed);
     url.searchParams.set('mode', save.gameMode);
+    if (save.edition === 'classic') url.searchParams.set('edition', 'classic'); else url.searchParams.delete('edition');
     url.searchParams.delete('room');
+    url.searchParams.set('launch', '1');
     location.assign(url.href);
     return true;
   },
@@ -688,17 +735,26 @@ const game = {
           if (saved.stats && typeof saved.stats === 'object') Object.assign(player.stats, saved.stats);
           camera.position.set(player.pos.x, player.pos.y + 1.62, player.pos.z);
         }
-        player.gameMode = this.networkRoom?.gameMode || savedGame?.gameMode || START_GAME_MODE;
-        if (this.networkRoom) {
+        player.gameMode = this.edition === 'classic' ? 'classic' : this.networkRoom?.gameMode || savedGame?.gameMode || START_GAME_MODE;
+        if (this.networkRoom && this.edition !== 'classic') {
           player.gameMode = this.networkRoom.gameMode;
           if (player.gameMode === 'creative') {
             const palette = [STONE, DIRT, GRASS, COBBLE, PLANKS, SAND, GLASS, LOG, TORCH, LEAVES, BRICK, WOOL_BASE];
             for (let i = 0; i < palette.length; i++) if (!player.inventory[i]) player.inventory[i] = { id: palette[i], count: 1, damage: 0 };
           }
         }
+        if (this.edition === 'classic') {
+          player.classicFlying = false;
+          player.health = player.maxHealth;
+          player.dead = false;
+          player.armor.fill(null);
+          for (let i = 0; i < 9; i++) {
+            if (!player.inventory[i] || !isClassicBlock(player.inventory[i].id)) player.inventory[i] = { id: CLASSIC_BLOCKS[i], count: 64, damage: 0 };
+          }
+        }
         updateChunks(true);
         processChunkQueue();
-        if (mobs.mobs.length === 0 && this.networkRoom?.role !== 'guest') mobs.spawnInitial(player);
+        if (this.edition !== 'classic' && mobs.mobs.length === 0 && this.networkRoom?.role !== 'guest') mobs.spawnInitial(player);
         if (!loadedItems) {
           loadedItems = true;
           if (Array.isArray(savedGame?.items)) for (const item of savedGame.items.slice(0, 4096)) {
@@ -767,9 +823,12 @@ world.onBlockChange((x,y,z,previousId,id,previousMeta,meta) => {
 
 const ui = new UI(game);
 game.ui = ui;
+if (WORLD_PARAMS.get('launch') === '1') {
+  ui.setMode('game');
+  game.start();
+}
 // Restore the selected local 1.7.x texture pack; packs are never uploaded.
 void game.restoreResourcePack().then(() => ui._iconCache.clear());
-game.applySettings();
 if (Number.isFinite(savedGame?.timeOfDay)) sky.time = ((savedGame.timeOfDay % 1) + 1) % 1;
 let saveClock = 0;
 window.addEventListener('beforeunload', () => { if (game.started && !game.networkRoom) game.saveGame(); });
@@ -782,6 +841,7 @@ document.addEventListener('visibilitychange', () => {
 
 // ---- particles, first-person arm, target wireframe & crack overlay ----
 const particles = new ParticleManager(scene, atlasCanvas, lighting);
+game.applySettings();
 const firstPersonArm = new FirstPersonArm(camera, atlasTex, game.itemIconsCanvas, undefined, lighting);
 
 // A. Target selection wireframe
@@ -855,6 +915,7 @@ function updateChunks(force = false) {
   needed.sort((a, b) => a[2] - b[2]);
   chunkQueue.length = 0;
   for (const [cx, cz] of needed) {
+    if (world.edition === 'classic' && (cx < -8 || cx > 7 || cz < -8 || cz > 7)) continue;
     const c = world.getChunk(cx, cz);
     if (!c || !c.meshes) chunkQueue.push([cx, cz]);
   }
@@ -1097,7 +1158,7 @@ function tryBreakBlock(dt) {
   }
   const id = world.getBlock(hit.x, hit.y, hit.z);
   const held = player.heldStack;
-  const total = player.gameMode === 'creative' ? 0 : breakTime(id, held ? held.id : null);
+  const total = player.gameMode === 'creative' ? 0 : player.gameMode === 'classic' ? id === BEDROCK ? Infinity : 0 : breakTime(id, held ? held.id : null);
 
   if (!player.mining.active || player.mining.x !== hit.x || player.mining.y !== hit.y || player.mining.z !== hit.z) {
     player.mining.active = true;
@@ -1120,7 +1181,7 @@ function tryBreakBlock(dt) {
     const containerKey = `${hit.x},${hit.y},${hit.z}`;
     releaseContainer(hit.x, hit.y, hit.z, id);
     world.setBlock(hit.x, hit.y, hit.z, AIR);
-    if (player.gameMode !== 'creative') {
+    if (player.gameMode !== 'creative' && player.gameMode !== 'classic') {
       if (id === CROPS) {
         cropLocations.delete(containerKey);
         for (const stack of cropDrops(previousMeta)) spawnItem(hit.x, hit.y, hit.z, stack.id, stack.count);
@@ -1202,7 +1263,7 @@ function tryPlaceBlock() {
     if (!world.setBlock(px,py,pz,placeId,meta)) return;
     if (!world.setBlock(hx,hy,hz,placeId,meta | 8)) { world.setBlock(px,py,pz,AIR); return; }
   } else if (!world.setBlock(px, py, pz, placeId, meta)) return;
-  if (player.gameMode !== 'creative') player.consumeHeld();
+  if (player.gameMode !== 'creative' && player.gameMode !== 'classic') player.consumeHeld();
   audio.place(placeId);
   player.stats.blocksPlaced++;
   firstPersonArm.triggerPlaceSwing();
@@ -1776,7 +1837,7 @@ function frame() {
 
       const networked = !!game.networkRoom;
       const hostSimulates = !networked || game.networkRoom.role === 'host';
-      if (hostSimulates) mobs.update(dt, player, sky.timeOfDay, effects, audio, networked ? remoteMobTargets() : [], game.settings.difficulty);
+      if (hostSimulates && game.edition !== 'classic') mobs.update(dt, player, sky.timeOfDay, effects, audio, networked ? remoteMobTargets() : [], game.settings.difficulty);
       updateItems(dt);
       updateArrows(dt);
       if (hostSimulates) {
@@ -1951,7 +2012,7 @@ function frame() {
   // Vertex snapping follows the full viewport grid; the later post pass handles
   // the independent low-resolution image scale.
   lighting.shared.uScreenSize.value.copy(renderBufferSize);
-  lighting.updateShadows(renderer, scene, camera, sky, game.shaderStyle, game.time);
+  lighting.updateShadows(renderer, scene, camera, sky, game.shaderStyle, game.time, false, game.settings.graphics !== 'fast');
   const drawArm = game.started && ui.mode !== 'title' ? targetRenderer => firstPersonArm.render(targetRenderer) : null;
   if (game.shaderStyle === 'psx') psxPostProcess.render(renderer, scene, camera, drawArm);
   else { renderer.render(scene, camera); drawArm?.(renderer); }

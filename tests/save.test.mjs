@@ -22,6 +22,10 @@ const world = {
 const text = encodeWorldSave(world);
 const decoded = decodeWorldSave(text);
 assert.equal(decoded.seed, 'portable-test-world');
+assert.equal(decoded.edition, 'beta', 'older world saves remain in the Beta edition by default');
+const classicSave = normalizeWorldSave({ ...world, edition: 'classic', gameMode: 'classic' });
+assert.equal(classicSave.edition, 'classic');
+assert.equal(classicSave.gameMode, 'classic', 'Classic edition is retained by portable saves');
 assert.equal(decoded.worldId, decoded.seed, 'legacy-style saves default the world id to their seed');
 assert.deepEqual(decoded.edits, [['1,64,-2', 1, 0]], 'invalid block edits are discarded');
 assert.equal(decoded.timeOfDay, 0.25, 'time of day wraps into the 0..1 interval');

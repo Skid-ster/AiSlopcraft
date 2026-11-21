@@ -44,17 +44,40 @@ function request(type, payload = {}) {
     socket.send(JSON.stringify({ type, requestId, ...payload }));
   });
 }
+let nameClaimed = false;
+let roomCreated = false;
 try {
   const smokeName = `ArenaCheck${randomBytes(4).toString('hex')}`;
   const list = await request('players:list');
   assert.equal(list.type, 'players:list', 'public online-player list works over the deployed WebSocket');
   const claimed = await request('player:claim', { name: smokeName });
   assert.equal(claimed.type, 'player:claimed');
+  nameClaimed = true;
   assert.ok((await request('players:list')).players.includes(smokeName), 'claimed name appears in the public list');
-  assert.equal((await request('player:release')).type, 'player:released');
+
+  const room = await request('room:create', {
+    name: 'Arena smoke room', access: 'public', edition: 'classic', gameMode: 'creative', seed: 'ArenaSmokeSeed', visuals: { mode: 'individual' },
+  });
+  assert.equal(room.type, 'room:joined', 'a claimed player can create and enter a multiplayer world');
+  roomCreated = true;
+  assert.equal(room.role, 'host');
+  assert.equal(room.players[0]?.name, smokeName);
+  const snapshot = await request('world:snapshot', { entries: [['0,40,0', [1, 0]]] });
+  assert.equal(snapshot.type, 'world:snapshot:accepted', 'host can publish initial world edits');
+  assert.equal(snapshot.count, 1);
+  assert.equal((await request('rooms:list')).rooms[0]?.name, 'Arena smoke room', 'created world is immediately discoverable');
+  assert.equal((await request('room:leave')).type, 'room:left', 'host can cleanly close the smoke-test room');
+  roomCreated = false;
+  const released = await request('player:release');
+  assert.equal(released.type, 'player:released');
+  nameClaimed = false;
   assert.ok(!(await request('players:list')).players.includes(smokeName), 'released name disappears from the public list');
-  console.log('Render deployment smoke test passed: site, health, limits, secure WebSocket, public list, claim, and release.');
+  console.log('Render deployment smoke test passed: site, health, limits, secure WebSocket, claim, world create/snapshot/list/leave, and release.');
 } finally {
+  if (socket.readyState === WebSocket.OPEN) {
+    if (roomCreated) await request('room:leave').catch(() => {});
+    if (nameClaimed) await request('player:release').catch(() => {});
+  }
   socket.close();
   if (socket.readyState !== WebSocket.CLOSED) await once(socket, 'close');
 }

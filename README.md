@@ -2,19 +2,21 @@
 
 **[▶ Play AiSlopcraft](https://skid-ster.github.io/AiSlopcraft/)** · [Set up the Azure multiplayer server](#deploy-to-azure) · [Source code](https://github.com/Skid-ster/AiSlopcraft)
 
-AiSlopcraft is a browser-based voxel survival game inspired by **Minecraft Java Edition Beta 1.7.3**. Explore a seeded world, mine and build, craft and smelt, grow crops, fight familiar mobs, or invite friends into a co-op world—all in a classic, pixel-art presentation.
+AiSlopcraft is a browser-based voxel sandbox with two ways to play: the original **Beta 1.7.3-inspired survival game** and a dedicated **Classic creative mode**. Explore a seeded world, mine and build, craft and smelt, grow crops, fight familiar mobs, or switch to unlimited block-building and flight in Classic mode.
 
 It aims for the feel of that era: no hunger bar or sprinting, food heals directly, and the title and options screens use a release-era style rather than a modern Minecraft menu. It is an independent game, not a Minecraft client or an exact reimplementation. Built with JavaScript and Three.js; textures, sounds, terrain, and mobs are procedurally generated. No Mojang assets are bundled.
 
 ## Features
 
-- **Explore:** seeded rolling terrain, caves, ores, beaches, deserts, snowy areas, forests, trees, and plants across a 128-block world.
+- **Classic singleplayer and multiplayer:** create persistent Classic creative worlds with rolling grassland and trees, bedrock floor, 32-block palette, unlimited instant break/place, block picking, and flight. Save locally or host/join an account-free shared Classic world. No hunger, damage, crafting grind, ores, or hostile mobs.
+- **Beta singleplayer:** keep the existing Beta 1.7.3-inspired survival/creative experience, with separate named worlds, optional seeds, autosaves, rename/delete/re-create, and portable save import/export. Beta edition has no multiplayer entry point.
+- **Explore Beta:** seeded rolling terrain, caves, ores, beaches, deserts, snowy areas, forests, trees, and plants across a 128-block world.
 - **Mine, build, and survive:** block breaking and placement, voxel movement and collision, jumping, sneaking, swimming, fall/drowning/lava damage, tools and weapon durability, item drops and pickup, hearts, armor, and inventory.
 - **Craft and smelt:** 2×2 inventory recipes, 3×3 crafting-table recipes, and furnaces with input, fuel, progress, and output slots.
 - **Farm and build:** till and irrigate farmland, grow and harvest crops, plant saplings, use doors, ladders, beds, cake, buckets, TNT, and more.
 - **Meet the mobs:** farm animals and hostile night creatures, including zombie and skeleton sunlight damage, creeper fuses, spider movement, mob drops, melee combat, and skeleton arrows. Peaceful, Easy, Normal, and Hard difficulty settings adjust hostile encounters and damage.
-- **Play together:** choose a temporary unique player name—no account or password—and browse the public live online-player list before joining or hosting one of up to five co-op rooms (five players each). Names are reserved server-wide only while connected, then released with the lobby's **Release player name** control or on disconnect. Rooms share block edits, chat, player positions, host-simulated mobs and combat, time, containers, dropped items, vehicles, and active projectile visuals. See [Multiplayer](#multiplayer) for hosting and room-state limitations.
-- **Tune the look:** a native Three.js/WebGL renderer with five live presets—Classic, Vibrant, Cinematic, Shader Lite, and **PSX (1.7.10)**. Cinematic and Shader Lite use stabilized directional sun shadows; Shader Lite adds animated water, reflections, and specular highlights. PSX is a real multi-pass WebGL preset adapted from the PS1-style affine mapping, depth-scaled vertex snapping, 25% render resolution, 24-step color grading, and ordered dithering in [ckosmic/Minecraft-PSX](https://github.com/ckosmic/minecraft-psx), whose README documents testing on Minecraft 1.7.10 and whose repository declares MIT terms (the checked-in license still has unfilled copyright placeholders). The shader logic is adapted to AiSlopcraft's Three.js render pipeline; it does not make arbitrary OptiFine shaderpack ZIPs executable. Fog, day/night lighting, brightness, and local light on entities are supported.
+- **Classic multiplayer:** choose a temporary unique player name—no account or password—and browse public Classic worlds before joining or hosting. The relay allows up to five rooms and five players per room. Names are reserved only while connected. Classic sessions share block edits, chat, player positions, and world time; they do not include mobs. Rooms are temporary and do not overwrite singleplayer saves. See [Multiplayer](#multiplayer) for hosting and limitations.
+- **Tune the look and performance:** a native Three.js/WebGL renderer with five live presets—Classic, Vibrant, Cinematic, Shader Lite, and **PSX (1.7.10)**. Cinematic and Shader Lite use stabilized directional sun shadows; Shader Lite adds reflective water, fine animated ripples, specular highlights, and sunlit glints. Video settings include Fast/Fancy rendering and All/Decreased/Minimal particles; Fast reduces internal resolution and skips dynamic shadow rendering. PSX is a real multi-pass WebGL preset adapted from the PS1-style affine mapping, depth-scaled vertex snapping, 25% render resolution, 24-step color grading, and ordered dithering in [ckosmic/Minecraft-PSX](https://github.com/ckosmic/minecraft-psx), whose README documents testing on Minecraft 1.7.10 and whose repository declares MIT terms (the checked-in license still has unfilled copyright placeholders). The shader logic is adapted to AiSlopcraft's Three.js render pipeline; it does not make arbitrary OptiFine shaderpack ZIPs executable. Fog, day/night lighting, brightness, and local light on entities are supported.
 - **Use the classic-style interface:** title and texture-pack screens, options, inventory and crafting, hotbar, health/armor/air indicators, pause and death screens, item tooltips, and an F3 debug overlay.
 
 ## Play locally
@@ -26,7 +28,7 @@ npm ci
 npm run dev
 ```
 
-Open the local URL printed by Vite (normally `http://localhost:5173`). Choose **Singleplayer** to browse saved worlds or create one with an optional seed. Singleplayer worlds autosave in this browser every 15 seconds, on tab hide, and on save-and-quit; each world has its own save. The **World Saves...** menu exports/imports portable JSON save files. Multiplayer rooms are temporary and never overwrite personal singleplayer saves.
+Open the local URL printed by Vite (normally `http://localhost:5173`). **Beta Singleplayer** browses Beta saves or creates a survival/creative world with an optional seed. **Play Classic** opens the separate Classic menu, where you can create/load saved creative worlds or host/join Classic multiplayer. Worlds autosave in this browser every 15 seconds, on tab hide, and on save-and-quit; the **World Saves** menu imports and exports portable JSON saves. Online rooms are temporary and never overwrite singleplayer saves.
 
 To make a production build:
 
@@ -42,9 +44,9 @@ npm start
 
 Open `http://localhost:8787/` and check `http://localhost:8787/health`. This production server expects the build to exist; the Render Blueprint and Azure deployment instructions build it before starting.
 
-## Multiplayer
+## Classic multiplayer
 
-Online multiplayer needs a reachable Node process to coordinate rooms and relay game state; static hosting alone cannot do that. The Azure setup below runs the built game and room service from the **same origin**. One Azure app instance can host at most **5 multiplayer rooms** (game servers), each with at most **5 players including the host** (25 players total). This is one Azure App Service instance—not five separate virtual machines—and the limits are enforced by the relay.
+Online multiplayer is available in the Classic edition; Beta remains singleplayer-only. It needs a reachable Node process to coordinate rooms and relay game state; static hosting alone cannot do that. The Azure setup below runs the built game and room service from the **same origin**. One Azure app instance can host at most **5 multiplayer rooms** (game servers), each with at most **5 players including the host** (25 players total). This is one Azure App Service instance—not five separate virtual machines—and the limits are enforced by the relay.
 
 ### Deploy to Azure
 
@@ -52,13 +54,13 @@ Online multiplayer needs a reachable Node process to coordinate rooms and relay 
 2. Select a **Basic B1** App Service plan so you can enable Always On and WebSockets. Review the displayed cost first; B1 spends your student credit. Keep the scale-out worker count at **1** because room data lives in that single server process.
 3. In **Deployment Center**, choose GitHub, authorize the repository, and select `Skid-ster/AiSlopcraft` on branch `main`. Let Azure create its deployment workflow.
 4. In **Configuration → General settings**, set the startup command to `npm start`, turn **WebSockets** on, and turn **Always On** on. In **Configuration → Application settings**, add `SCM_DO_BUILD_DURING_DEPLOYMENT=true`, then save and restart. The deployment builds the frontend (`npm run build`) and the start command serves it with the room service.
-5. Wait for the deployment to finish, open `https://<your-app-name>.azurewebsites.net/health`, and confirm it returns `"status":"ok"`. Share the root app URL with players. The Multiplayer screen uses its same-origin WebSocket automatically; players do not configure Azure or a relay.
+5. Wait for the deployment to finish, open `https://<your-app-name>.azurewebsites.net/health`, and confirm it returns `"status":"ok"`. Share the root app URL with players. Open Classic mode to host/join; the Classic Multiplayer screen uses its same-origin WebSocket automatically, so players do not configure Azure or a relay.
 
 Azure keeps the **service process** available only while the App Service and subscription remain active; check your student-credit balance and expiry. Rooms and world edits are still temporary in-memory sessions: they end if the host leaves or the app restarts/deploys. Keeping world saves across restarts would require a database/storage feature not included here. GitHub Pages remains the singleplayer/static option and cannot itself host rooms.
 
 ### Lower-setup option: Render Blueprint
 
-A `render.yaml` Blueprint is included for a single combined web service. In Render, choose **New → Blueprint**, connect this repository and the branch you want to publish, then review and create the `aislopcraft-online` service. The Blueprint builds the frontend and starts the WebSocket room relay on the same origin; players use the site URL without entering a relay address. It requests Render's `free` plan where available and pins the service to one instance because room/name state is process-local—check current plan terms before creating the service. Free services may sleep when idle, so rooms and names disappear on restarts or deploys. After deployment, run `BASE_URL=https://<your-service>.onrender.com npm run smoke:deploy` to check the site, health endpoint, limits, secure WebSocket, public list, and temporary-name claim/release. **No hosted service is provisioned by this repository change.**
+A `render.yaml` Blueprint is included for a single combined web service. In Render, choose **New → Blueprint**, connect this repository and the branch you want to publish, then review and create the `aislopcraft-online` service. The Blueprint builds the frontend and starts the WebSocket room relay on the same origin; players use the site URL without entering a relay address. It requests Render's `free` plan where available and pins the service to one instance because room/name state is process-local—check current plan terms before creating the service. Free services may sleep when idle, so rooms and names disappear on restarts or deploys. After deployment, run `BASE_URL=https://<your-service>.onrender.com npm run smoke:deploy` to check the site, health endpoint, limits, secure WebSocket, temporary-name claim/release, and an end-to-end public world create → snapshot → list → leave flow. **No hosted service is provisioned by this repository change.**
 
 Players on different networks connect to the same service URL. The host and guests need the same world seed; invite links include the host's seed and service URL.
 
@@ -72,7 +74,7 @@ Room-password throttling ignores `X-Forwarded-For` by default because arbitrary 
 
 When creating a room, the host can choose **Let each player choose** or **Force the host's shader and texture pack**. Individual mode is the default and leaves every player's visuals untouched. In forced mode the host selects a built-in shader style and an installed texture pack (or default textures); the supported 256×256 block atlas is relayed to room members, and each client restores its personal shader and textures after leaving. Shared atlas payloads are capped at 512 KB and held only in relay memory while the room is open.
 
-Co-op shares block edits, chat, positions, host-simulated mobs and mob combat, world time, chest/furnace contents, and dropped-item spawns and pickups. Vehicles and in-flight projectile visuals are also replicated. Host world edits are uploaded in validated batches, and shared item pickups are checked against the player's latest reported position. Relay broadcasts reuse encoded messages, rate-limit frequent state changes, and disconnect clients whose outbound buffers grow too large. Each player's inventory and health remain personal. Vehicle movement is peer-reported, and the relay does not provide a cheat-proof authoritative simulation. Rooms are temporary and are not saved by the relay. Multiplayer uses the relay rather than peer-to-peer connections and does not require players to expose local ports.
+Classic co-op shares block edits, chat, player positions, and world time. Classic worlds have no mobs, survival combat, inventory progression, chests, or vehicles. Host edits are uploaded in validated batches; player movement is peer-reported, so the relay is not a cheat-proof authoritative simulation. Rooms are temporary and are not saved by the relay. The service relays traffic rather than using peer-to-peer connections, so players do not expose local ports.
 
 For local development, run `npm run multiplayer` in one terminal and `npm run dev` in another. Vite proxies the lobby's same-origin `/ws` connection to the local room service, so the address field can stay blank. The **Advanced** setting is only for overriding the endpoint or connecting from static-only hosting.
 
@@ -87,8 +89,10 @@ For local development, run `npm run multiplayer` in one terminal and `npm run de
 | Left click (hold) | Break blocks or attack mobs |
 | Right click (hold) | Place blocks, use items, or eat |
 | 1–9 / scroll wheel | Select hotbar slot |
-| E | Open inventory or close a container |
-| Q | Drop one held item; Ctrl+Q drops the stack |
+| E | Beta inventory; close a container |
+| B | Open or close the Classic block picker |
+| Double-tap Space | Toggle Classic flight |
+| Q | Drop one held item in Beta; Ctrl+Q drops the stack |
 | Esc | Pause or close the current screen |
 | F3 | Toggle debug overlay |
 | F1 | Toggle HUD |

@@ -5,6 +5,8 @@ import { World } from '../src/world/world.js';
 import { buildChunkMesh } from '../src/world/mesher.js';
 import { CH } from '../src/world/chunk.js';
 import { WorldGen } from '../src/world/worldgen.js';
+import { ClassicWorldGen } from '../src/world/classic-worldgen.js';
+import { CLASSIC_BLOCKS } from '../src/classic.js';
 import { matchRecipe, smeltResult } from '../src/ui/recipes.js';
 import { breakTime, canHarvest, STONE, DIAMOND_ORE, AIR, TORCH } from '../src/world/blocks.js';
 
@@ -49,6 +51,17 @@ world.setBlock(5, y, 5, TORCH);
 check('torch light 14 at source', c0.blockLight[idx(5, y, 5)] === 14);
 check('torch light 13 adjacent', c0.blockLight[idx(5, y + 1, 5)] === 13);
 check('torch light 12 two away', c0.blockLight[idx(7, y, 5)] === 12);
+
+// Classic edition uses its own lighter, no-ore terrain and exact 32-entry block palette.
+const classicWorld = new World('Classic test', new THREE.Scene(), 'classic');
+classicWorld.generateChunk(0, 0);
+const classicChunk = classicWorld.getChunk(0, 0);
+const classicHeight = classicWorld.gen.columnInfo(8, 8).height;
+check('Classic world selects its dedicated generator', classicWorld.gen instanceof ClassicWorldGen && classicWorld.edition === 'classic');
+check('Classic terrain has a bedrock floor and natural surface', classicWorld.getBlock(8, 0, 8) === 7 && [2, 12].includes(classicWorld.getBlock(8, classicHeight, 8)));
+check('Classic terrain omits Beta ore veins and underground lava', !classicChunk.blocks.some(id => [10, 14, 15, 16, 56].includes(id)));
+check('Classic maps are finite 256 by 256 worlds with a 64-block build height', classicWorld.maxWorldCoord - classicWorld.minWorldCoord + 1 === 256 && classicWorld.maxWorldY === 63 && classicWorld.generateChunk(8, 0) === null && !classicWorld.setBlock(128, 40, 0, STONE));
+check('Classic palette has 32 unique selectable blocks', CLASSIC_BLOCKS.length === 32 && new Set(CLASSIC_BLOCKS).size === 32);
 
 // meshing
 const fakeTex = new THREE.Texture();
