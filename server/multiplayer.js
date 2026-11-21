@@ -1,10 +1,36 @@
+/**
+ * AiSlopcraft multiplayer relay + static file server.
+ *
+ * Wire protocol is unchanged from the previous version. Optional configuration:
+ *
+ *   PORT / HOST                          listen address (default 8787 / 0.0.0.0)
+ *   AISLOPCRAFT_TRUST_PROXY_HOPS         verified number of proxies appending to X-Forwarded-For (1-10)
+ *   AISLOPCRAFT_ALLOWED_ORIGINS          comma-separated browser Origins allowed to open a socket
+ *                                        (same-origin is always allowed; empty = allow any Origin)
+ *   AISLOPCRAFT_MAX_CONNECTIONS          global socket cap (default 200)
+ *   AISLOPCRAFT_MAX_CONNECTIONS_PER_IP   per-client socket cap (default 0 = off; leave off unless
+ *                                        trusted proxy hops are configured, or every player behind a
+ *                                        shared proxy address would count as one client)
+ */
 import { createServer } from 'node:http';
-import { createReadStream, existsSync, realpathSync, statSync } from 'node:fs';
-import { extname, join, resolve, sep } from 'node:path';
-import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createReadStream, realpathSync, statSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { extname, resolve, sep } from 'node:path';
+import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { pipeline } from 'node:stream';
+import { promisify } from 'node:util';
+import { brotliCompress, gzip, constants as zlibConstants } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { isIP } from 'node:net';
 import { WebSocketServer, WebSocket } from 'ws';
+
+const scryptAsync = promisify(scrypt);
+const brotliAsync = promisify(brotliCompress);
+const gzipAsync = promisify(gzip);
+
+/* ------------------------------------------------------------------ */
+/* Constants                                                          */
+/* ------------------------------------------------------------------ */
 
 const USERNAME_PATTERN = /^[A-Za-z0-9_]{3,20}$/;
 const DEFAULT_DIST_DIR = resolve(fileURLToPath(new URL('../dist', import.meta.url)));
@@ -14,21 +40,95 @@ const SECURITY_HEADERS = Object.freeze({
   'x-frame-options': 'SAMEORIGIN',
   'permissions-policy': 'accelerometer=(), camera=(), geolocation=(), microphone=(), payment=(), usb=()',
   'x-content-type-options': 'nosniff',
+  'cross-origin-opener-policy': 'same-origin',
 });
 const MIME_TYPES = {
-  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
-  '.json': 'application/json; charset=utf-8', '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf',
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.avif': 'image/avif',
+  '.json': 'application/json; charset=utf-8', '.webmanifest': 'application/manifest+json; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8', '.map': 'application/json; charset=utf-8', '.ico': 'image/x-icon',
+  '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.wasm': 'application/wasm',
+  '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.wav': 'audio/wav',
 };
+const COMPRESSIBLE_EXTENSIONS = new Set(['.html', '.js', '.mjs', '.css', '.svg', '.json', '.webmanifest', '.txt', '.map', '.ttf', '.wasm']);
+const MIN_COMPRESS_BYTES = 1024;
+const MAX_COMPRESS_BYTES = 8 * 1024 * 1024;
+const MAX_COMPRESS_CACHE_BYTES = 32 * 1024 * 1024;
 
 const MAX_ROOMS = 5;
 const MAX_PLAYERS = 5;
 const MAX_EDITS = 50_000;
 const MAX_MESSAGE = 1024 * 1024;
+const MAX_SMALL_MESSAGE = 64 * 1024;
+// Only these message types legitimately carry large payloads.
+const LARGE_MESSAGE_TYPES = new Set(['room:create', 'world:snapshot', 'game:state', 'item:snapshot']);
+const MAX_SOCKET_BUFFER_BYTES = 4 * 1024 * 1024;
+const MESSAGE_RATE_LIMIT = 600; // messages per second per socket before the socket is dropped
+// Memory guard only. Set above MESSAGE_RATE_LIMIT because ws delivers every frame of a TCP chunk
+// synchronously, so a legitimate client can briefly look like a burst after a network hiccup.
+const MAX_QUEUED_MESSAGES = 1024;
+const MIN_STATE_INTERVAL_MS = 40;
+const PICKUP_RANGE = 5;
+const TNT_RANGE = 7;
+const ITEM_SPAWN_RANGE = 32;
+const ITEM_TTL_MS = 6 * 60_000; // clients despawn items at 5 minutes
+const PROJECTILE_TTL_MS = 15_000;
+const UNNAMED_IDLE_MS = 10 * 60_000;
+const COORD_LIMIT = 30_000_000;
+const WORLD_HEIGHT = 128;
 const ROOM_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
-const cleanText = (value, max = 24) => String(value ?? '').replace(/[<>\u0000-\u001f\u007f]/g, '').trim().slice(0, max);
 const SHADER_STYLES = new Set(['classic', 'vibrant', 'cinematic', 'shader', 'psx']);
 const MAX_SHARED_ATLAS_BYTES = 512 * 1024;
+const VEHICLE_TYPES = new Set(['boat', 'minecart', 'storage', 'powered']);
+const DIRECTIONS = Object.freeze([[1, 0], [-1, 0], [0, 1], [0, -1]]);
+
+/* ------------------------------------------------------------------ */
+/* Small pure helpers                                                 */
+/* ------------------------------------------------------------------ */
+
+const INVISIBLE_CHARS = /[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
+const cleanText = (value, max = 24) => [...String(value ?? '')
+  .normalize('NFC')
+  .replace(/[<>\u0000-\u001f\u007f-\u009f]/g, '')
+  .replace(INVISIBLE_CHARS, '')
+  .replace(/\s+/g, ' ')
+  .trim()].slice(0, max).join('');
+
+const clamp = (value, min, max, fallback = min) => (Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback);
+const isInt = (value, min, max) => Number.isInteger(value) && value >= min && value <= max;
+const isVec3 = (value, limit = COORD_LIMIT) => Array.isArray(value) && value.length === 3
+  && value.every(n => Number.isFinite(n) && Math.abs(n) <= limit);
+const validRoom = value => /^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/.test(String(value ?? ''));
+const safeDirection = value => Array.isArray(value) && value.length === 2
+  && DIRECTIONS.some(([x, z]) => x === value[0] && z === value[1]);
+const distance3 = (pos, state) => Math.hypot(pos[0] - state.x, pos[1] - state.y, pos[2] - state.z);
+
+const validBlockEdit = (x, y, z, id, meta) => [x, y, z, id, meta].every(Number.isInteger)
+  && y >= 0 && y < WORLD_HEIGHT && id >= 0 && id <= 255 && meta >= 0 && meta <= 255
+  && Math.abs(x) <= COORD_LIMIT && Math.abs(z) <= COORD_LIMIT;
+
+function envInt(name, fallback) {
+  const value = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isInteger(value) && value >= 0 ? value : fallback;
+}
+
+/** Walks the PNG chunk list so trailing garbage / truncated files are rejected. */
+function pngIsWellFormed(png) {
+  let offset = 8;
+  let chunks = 0;
+  while (offset + 12 <= png.length && chunks++ < 4096) {
+    const length = png.readUInt32BE(offset);
+    const type = png.toString('latin1', offset + 4, offset + 8);
+    const next = offset + 12 + length;
+    if (!/^[A-Za-z]{4}$/.test(type) || next > png.length) return false;
+    if (chunks === 1 && (type !== 'IHDR' || length !== 13)) return false;
+    offset = next;
+    if (type === 'IEND') return offset === png.length;
+  }
+  return false;
+}
+
 function sanitizeVisualSettings(value) {
   if (value?.mode !== 'forced') return { mode: 'individual' };
   const visuals = { mode: 'forced', shaderStyle: SHADER_STYLES.has(value.shaderStyle) ? value.shaderStyle : 'classic', resourcePack: null };
@@ -45,24 +145,95 @@ function sanitizeVisualSettings(value) {
   if (png.length > MAX_SHARED_ATLAS_BYTES || png.length < 24 || !png.subarray(0, 8).equals(signature) || png.toString('ascii', 12, 16) !== 'IHDR' || png.readUInt32BE(16) !== 256 || png.readUInt32BE(20) !== 256) {
     throw new Error('The shared texture atlas must be a 256×256 PNG under 512 KB.');
   }
+  if (!pngIsWellFormed(png)) throw new Error('The shared texture atlas is not a well-formed PNG file.');
   visuals.resourcePack = { name: cleanText(pack.name, 60) || 'Host texture pack', atlasData: pack.atlasData };
   return visuals;
 }
-const validRoom = value => /^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/.test(String(value ?? ''));
-const MAX_SOCKET_BUFFER_BYTES = 2 * 1024 * 1024;
-function sendEncoded(socket, payload) {
+
+function sanitizeItem(source, uid = source?.uid) {
+  if (!source || typeof source.uid !== 'string' || source.uid.length > 80) return null;
+  if (!isInt(source.id, 0, 4095) || !isInt(source.count, 1, 999) || !isVec3(source.pos)) return null;
+  return {
+    uid, id: source.id, count: source.count,
+    damage: Number.isInteger(source.damage) ? Math.min(65_535, Math.max(0, source.damage)) : 0,
+    pos: [...source.pos], vy: clamp(source.vy, -80, 80, 0), age: clamp(source.age, 0, 300, 0),
+  };
+}
+
+function sanitizeProjectile(shot, isHost) {
+  if (!shot || typeof shot.uid !== 'string' || shot.uid.length > 100 || !['player', 'mob'].includes(shot.owner)) return null;
+  if (!isVec3(shot.pos) || !isVec3(shot.vel, 80)) return null;
+  if (shot.owner === 'mob' && !isHost) return null; // mobs are host-simulated
+  return {
+    uid: shot.uid, owner: shot.owner, pos: [...shot.pos], vel: [...shot.vel], age: clamp(shot.age, 0, 6, 0),
+    targetId: typeof shot.targetId === 'string' ? shot.targetId.slice(0, 80) : null,
+    damage: clamp(shot.damage, 0, 40, 2),
+  };
+}
+const publicProjectile = ({ sourceId, lastUpdate, ...shot }) => shot;
+
+function sanitizeVehicle(vehicle) {
+  if (!vehicle || typeof vehicle.uid !== 'string' || vehicle.uid.length > 100 || !VEHICLE_TYPES.has(vehicle.type)
+    || !isVec3(vehicle.pos) || !Number.isFinite(vehicle.rotation)) return null;
+  const pos = [...vehicle.pos];
+  const hasSlots = vehicle.type === 'storage' && Array.isArray(vehicle.slots) && vehicle.slots.length === 27
+    && JSON.stringify(vehicle.slots).length <= 16_384;
+  return {
+    uid: vehicle.uid, type: vehicle.type, pos, rotation: vehicle.rotation % (Math.PI * 2),
+    vx: clamp(vehicle.vx, -20, 20, 0), vz: clamp(vehicle.vz, -20, 20, 0),
+    ...(hasSlots ? { slots: vehicle.slots } : {}),
+    ...(vehicle.type === 'powered' ? { fuel: clamp(vehicle.fuel, 0, 3600, 0) } : {}),
+    ...(vehicle.type !== 'boat' ? {
+      nodeX: Number.isInteger(vehicle.nodeX) ? clamp(vehicle.nodeX, -COORD_LIMIT, COORD_LIMIT) : Math.floor(pos[0]),
+      nodeZ: Number.isInteger(vehicle.nodeZ) ? clamp(vehicle.nodeZ, -COORD_LIMIT, COORD_LIMIT) : Math.floor(pos[2]),
+      target: safeDirection(vehicle.target) ? vehicle.target : null,
+      progress: clamp(vehicle.progress, 0, 0.999, 0),
+      travel: safeDirection(vehicle.travel) ? vehicle.travel : [0, -1],
+      cartSpeed: clamp(vehicle.cartSpeed, 0, 8, 0),
+    } : {}),
+  };
+}
+
+function sanitizeMobs(mobs) {
+  return mobs
+    .filter(mob => mob && typeof mob.uid === 'string' && mob.uid.length <= 80 && typeof mob.type === 'string' && mob.type.length <= 32
+      && isVec3Loose(mob.pos) && [mob.yaw, mob.hp].every(Number.isFinite))
+    .map(mob => ({
+      uid: mob.uid, type: mob.type, pos: mob.pos.map(value => clamp(value, -COORD_LIMIT, COORD_LIMIT)),
+      yaw: mob.yaw, hp: clamp(mob.hp, 0, 1000), sheared: !!mob.sheared, fuse: Number.isFinite(mob.fuse) ? mob.fuse : -1,
+    }));
+}
+// Mobs are clamped (not rejected) when out of range, matching the previous behaviour.
+const isVec3Loose = value => Array.isArray(value) && value.length === 3 && value.every(Number.isFinite);
+
+/* ------------------------------------------------------------------ */
+/* Networking helpers                                                 */
+/* ------------------------------------------------------------------ */
+
+function closeSocket(socket, code, reason) {
+  if (socket.closing) return; // idempotent: a flooding client must not stack timers/listeners
+  socket.closing = true;
+  try { socket.close(code, reason); } catch { socket.terminate?.(); return; }
+  // A stalled peer never completes the close handshake; make sure the socket really goes away.
+  const timer = setTimeout(() => { if (socket.readyState !== WebSocket.CLOSED) socket.terminate(); }, 2000);
+  timer.unref?.();
+  socket.once('close', () => clearTimeout(timer));
+}
+
+function sendEncoded(socket, payload, { force = false } = {}) {
   if (socket.readyState !== WebSocket.OPEN) return;
-  if (socket.bufferedAmount > MAX_SOCKET_BUFFER_BYTES) {
-    socket.close(1013, 'Connection too slow; please rejoin.');
+  if (!force && socket.bufferedAmount > MAX_SOCKET_BUFFER_BYTES) {
+    closeSocket(socket, 1013, 'Connection too slow; please rejoin.');
     return;
   }
-  socket.send(payload);
+  try { socket.send(payload); } catch { /* socket is closing */ }
 }
 const send = (socket, message) => sendEncoded(socket, JSON.stringify(message));
 function broadcast(peers, message, exclude = null) {
-  const payload = JSON.stringify(message);
+  const payload = JSON.stringify(message); // encode once for every recipient
   for (const peer of peers) if (peer !== exclude) sendEncoded(peer, payload);
 }
+
 function allowRate(socket, key, limit, windowMs) {
   const now = Date.now();
   const current = socket.rateLimits.get(key);
@@ -74,32 +245,57 @@ function allowRate(socket, key, limit, windowMs) {
   current.count++;
   return true;
 }
-const roomSummary = room => ({
-  code: room.code, name: room.name, players: room.clients.size, maxPlayers: MAX_PLAYERS,
-  gameMode: room.gameMode, access: room.access, passwordProtected: Boolean(room.password), visualMode: room.visuals?.mode || 'individual',
-});
 
-function createCode(rooms) {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const bytes = randomBytes(6);
-    const code = [...bytes].map(byte => ROOM_ALPHABET[byte % ROOM_ALPHABET.length]).join('');
-    if (!rooms.has(code)) return code;
-  }
-  throw new Error('Could not allocate a room code. Try again.');
+/** Fixed-window limiter keyed by an arbitrary string, with a hard cap on tracked keys. */
+function createWindowLimiter({ limit, windowMs, maxEntries = 10_000 }) {
+  const entries = new Map();
+  const limiter = {
+    allow(key, now = Date.now()) {
+      let entry = entries.get(key);
+      if (!entry || now - entry.startedAt >= windowMs) {
+        if (!entry && entries.size >= maxEntries) {
+          limiter.sweep(now);
+          if (entries.size >= maxEntries) return false;
+        }
+        entry = { startedAt: now, count: 0 };
+        entries.set(key, entry);
+      }
+      if (entry.count >= limit) return false;
+      entry.count++;
+      return true;
+    },
+    sweep(now = Date.now()) {
+      for (const [key, entry] of entries) if (now - entry.startedAt >= windowMs) entries.delete(key);
+    },
+    get size() { return entries.size; },
+  };
+  return limiter;
 }
 
-function passwordRecord(password) {
+function pruneTimes(map, now, maxAgeMs) {
+  for (const [key, time] of map) if (now - time > maxAgeMs) map.delete(key);
+}
+
+/* ------------------------------------------------------------------ */
+/* Passwords (async scrypt so hashing never blocks the game loop)     */
+/* ------------------------------------------------------------------ */
+
+async function passwordRecord(password) {
   if (!password) return null;
   const salt = randomBytes(16);
-  return { salt, hash: scryptSync(password, salt, 32) };
+  return { salt, hash: await scryptAsync(password, salt, 32) };
 }
 
-function passwordMatches(record, password) {
+async function passwordMatches(record, password) {
   if (!record) return !password;
   if (!password) return false;
-  const candidate = scryptSync(password, record.salt, 32);
+  const candidate = await scryptAsync(password, record.salt, 32);
   return timingSafeEqual(record.hash, candidate);
 }
+
+/* ------------------------------------------------------------------ */
+/* Client addresses                                                   */
+/* ------------------------------------------------------------------ */
 
 function normalizeIp(value) {
   const candidate = String(value ?? '').trim();
@@ -124,79 +320,225 @@ export function resolveClientAddress(request, trustedProxyHops = 0) {
   return chain[chain.length - trustedProxyHops];
 }
 
-export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_DIST_DIR,
-  trustedProxyHops = Number(process.env.AISLOPCRAFT_TRUST_PROXY_HOPS) || 0 } = {}) {
-  const rooms = new Map();
-  const claimedNames = new Map();
-  const roomPasswordAttempts = new Map();
-  const http = createServer((request, response) => {
-    for (const [name, value] of Object.entries(SECURITY_HEADERS)) response.setHeader(name, value);
-    const url = new URL(request.url || '/', 'http://localhost');
-    const json = (status, body) => {
-      response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
-      response.end(request.method === 'HEAD' ? undefined : JSON.stringify(body));
-    };
-    if (request.method !== 'GET' && request.method !== 'HEAD') {
-      response.setHeader('allow', 'GET, HEAD');
-      json(405, { error: 'method not allowed' });
-      return;
-    }
-    if (url.pathname === '/health') {
-      let ready = false;
-      try { ready = Boolean(staticDir && statSync(resolve(staticDir, 'index.html')).isFile()); } catch {}
-      json(ready ? 200 : 503, {
-        service: 'aislopcraft-online', status: ready ? 'ok' : 'not_ready',
-        rooms: rooms.size, maxRooms: MAX_ROOMS, maxPlayersPerRoom: MAX_PLAYERS,
-      });
-      return;
-    }
-    if (!staticDir || !existsSync(staticDir)) {
-      json(503, { error: 'Game build is unavailable. Build the site with npm run build.' });
-      return;
-    }
+function expandIPv6(address) {
+  let text = address.split('%')[0];
+  const dotted = /(\d+\.\d+\.\d+\.\d+)$/.exec(text);
+  if (dotted) {
+    const [a, b, c, d] = dotted[1].split('.').map(Number);
+    text = `${text.slice(0, -dotted[1].length)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const halves = text.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  if (halves.length === 1 ? head.length !== 8 : head.length + tail.length > 7) return null;
+  const groups = halves.length === 1 ? head : [...head, ...Array(8 - head.length - tail.length).fill('0'), ...tail];
+  return groups.map(group => group.padStart(4, '0'));
+}
 
-    let pathname;
-    try { pathname = decodeURIComponent(url.pathname); }
-    catch { response.writeHead(400); response.end('Bad path'); return; }
-    if (pathname.includes('\0')) { response.writeHead(400); response.end('Bad path'); return; }
+/**
+ * Key used for throttling. IPv4-mapped IPv6 collapses to IPv4, and other IPv6
+ * addresses collapse to their /64 so a client cannot dodge limits by rotating
+ * addresses inside the prefix it was handed.
+ */
+export function rateLimitKey(address) {
+  const text = String(address ?? 'unknown');
+  if (isIP(text) !== 6) return text;
+  const groups = expandIPv6(text);
+  if (!groups) return text;
+  if (groups.slice(0, 5).every(group => group === '0000') && groups[5] === 'ffff') {
+    const high = Number.parseInt(groups[6], 16);
+    const low = Number.parseInt(groups[7], 16);
+    return `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
+  }
+  return `${groups.slice(0, 4).join(':')}::/64`;
+}
 
-    let root;
-    let file = resolve(staticDir, `.${pathname}`);
-    try {
-      root = realpathSync(staticDir);
-      if (existsSync(file) && statSync(file).isDirectory()) file = resolve(file, 'index.html');
-      if (!existsSync(file) && !extname(pathname)) file = resolve(root, 'index.html');
-      if (!existsSync(file)) { json(404, { error: 'not found' }); return; }
-      file = realpathSync(file);
-      const inRoot = file === root || file.startsWith(`${root}${sep}`);
-      if (!inRoot) { json(403, { error: 'forbidden' }); return; }
-      if (!statSync(file).isFile()) { json(404, { error: 'not found' }); return; }
-    } catch {
-      json(404, { error: 'not found' });
-      return;
+/* ------------------------------------------------------------------ */
+/* Static files (path-safe, ETag/304, on-the-fly br/gzip with cache)  */
+/* ------------------------------------------------------------------ */
+
+function sendJson(request, response, status, body) {
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+  response.end(request.method === 'HEAD' ? undefined : JSON.stringify(body));
+}
+
+function probeFile(root, path) {
+  let real;
+  try { real = realpathSync(path); } catch { return null; }
+  if (real !== root && !real.startsWith(`${root}${sep}`)) return { forbidden: true };
+  try {
+    const stat = statSync(real);
+    return stat.isFile() ? { file: real, stat } : null;
+  } catch { return null; }
+}
+
+function locateFile(root, pathname) {
+  const target = resolve(root, `.${pathname}`);
+  let found = probeFile(root, target);
+  if (!found) {
+    try { if (statSync(target).isDirectory()) found = probeFile(root, resolve(target, 'index.html')); } catch { /* not a directory */ }
+  }
+  // Single-page-app fallback only for extension-less routes, never for missing assets.
+  if (!found && !extname(pathname)) found = probeFile(root, resolve(root, 'index.html'));
+  return found;
+}
+
+const etagMatches = (header, etag) => typeof header === 'string'
+  && header.split(',').some(tag => tag.trim() === '*' || tag.trim().replace(/^W\//, '') === etag.replace(/^W\//, ''));
+
+function createStaticFileServer(staticDir) {
+  const cache = new Map();
+  const pending = new Map();
+  let cacheBytes = 0;
+
+  function remember(key, output) {
+    if (output.length > MAX_COMPRESS_CACHE_BYTES) return;
+    cache.set(key, output);
+    cacheBytes += output.length;
+    for (const [oldKey, value] of cache) {
+      if (cacheBytes <= MAX_COMPRESS_CACHE_BYTES) break;
+      cache.delete(oldKey);
+      cacheBytes -= value.length;
     }
+  }
+
+  function compressed(file, stat, encoding) {
+    const key = `${encoding}:${file}:${stat.size}:${stat.mtimeMs}`;
+    const hit = cache.get(key);
+    if (hit) { cache.delete(key); cache.set(key, hit); return Promise.resolve(hit); }
+    let job = pending.get(key);
+    if (!job) {
+      job = (async () => {
+        try {
+          const source = await readFile(file);
+          const output = encoding === 'br'
+            ? await brotliAsync(source, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 5, [zlibConstants.BROTLI_PARAM_SIZE_HINT]: source.length } })
+            : await gzipAsync(source, { level: 6 });
+          remember(key, output);
+          return output;
+        } finally { pending.delete(key); }
+      })();
+      pending.set(key, job);
+    }
+    return job;
+  }
+
+  return async function serve(request, response, pathname) {
+    let root = null;
+    try { root = staticDir ? realpathSync(staticDir) : null; } catch { /* missing build */ }
+    if (!root) return sendJson(request, response, 503, { error: 'Game build is unavailable. Build the site with npm run build.' });
+
+    let decoded;
+    try { decoded = decodeURIComponent(pathname); } catch { response.writeHead(400); response.end('Bad path'); return; }
+    if (decoded.includes('\0')) { response.writeHead(400); response.end('Bad path'); return; }
+    // Never serve dotfiles (.env, .git, ...) even if one ends up in the build output.
+    if (decoded.split('/').some(segment => segment.startsWith('.') && segment !== '.well-known')) return sendJson(request, response, 404, { error: 'not found' });
+
+    const found = locateFile(root, decoded);
+    if (!found) return sendJson(request, response, 404, { error: 'not found' });
+    if (found.forbidden) return sendJson(request, response, 403, { error: 'forbidden' });
+    const { file, stat } = found;
 
     const extension = extname(file).toLowerCase();
     const isHashedAsset = /-[A-Za-z0-9_-]{8,}\.[^.]+$/.test(file);
-    response.writeHead(200, {
+    const compressible = COMPRESSIBLE_EXTENSIONS.has(extension) && stat.size >= MIN_COMPRESS_BYTES && stat.size <= MAX_COMPRESS_BYTES;
+    const accepted = String(request.headers['accept-encoding'] || '').toLowerCase();
+    const encoding = !compressible ? null : /\bbr\b/.test(accepted) ? 'br' : /\bgzip\b/.test(accepted) ? 'gzip' : null;
+    const etag = `W/"${stat.size.toString(16)}-${Math.round(stat.mtimeMs).toString(16)}${encoding ? `-${encoding}` : ''}"`;
+    const headers = {
       'content-type': MIME_TYPES[extension] || 'application/octet-stream',
       'cache-control': extension === '.html' ? 'no-cache' : isHashedAsset ? 'public, max-age=31536000, immutable' : 'public, max-age=3600',
-      'x-content-type-options': 'nosniff',
-    });
+      etag, 'last-modified': stat.mtime.toUTCString(), 'x-content-type-options': 'nosniff',
+      ...(compressible ? { vary: 'Accept-Encoding' } : {}),
+    };
+
+    if (etagMatches(request.headers['if-none-match'], etag)) { response.writeHead(304, headers); response.end(); return; }
+
+    if (encoding) {
+      const body = await compressed(file, stat, encoding);
+      response.writeHead(200, { ...headers, 'content-encoding': encoding, 'content-length': body.length });
+      response.end(request.method === 'HEAD' ? undefined : body);
+      return;
+    }
+    response.writeHead(200, { ...headers, 'content-length': stat.size });
     if (request.method === 'HEAD') { response.end(); return; }
-    const stream = createReadStream(file);
-    stream.on('error', () => { if (!response.headersSent) response.writeHead(500); response.end(); });
-    stream.pipe(response);
+    pipeline(createReadStream(file), response, () => {}); // pipeline destroys both ends on error/abort
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Multiplayer server                                                 */
+/* ------------------------------------------------------------------ */
+
+export function createMultiplayerServer({
+  logger = console,
+  staticDir = DEFAULT_DIST_DIR,
+  trustedProxyHops = Number(process.env.AISLOPCRAFT_TRUST_PROXY_HOPS) || 0,
+  maxRooms = MAX_ROOMS,
+  maxPlayers = MAX_PLAYERS,
+  maxConnections = envInt('AISLOPCRAFT_MAX_CONNECTIONS', 200),
+  maxConnectionsPerAddress = envInt('AISLOPCRAFT_MAX_CONNECTIONS_PER_IP', 0),
+  allowedOrigins = String(process.env.AISLOPCRAFT_ALLOWED_ORIGINS || '').split(','),
+} = {}) {
+  const startedAt = Date.now();
+  const rooms = new Map();
+  const claimedNames = new Map();
+  const connectionsByAddress = new Map();
+  const originAllowList = new Set(allowedOrigins.map(origin => String(origin).trim().toLowerCase()).filter(Boolean));
+  const passwordLimiter = createWindowLimiter({ limit: 12, windowMs: 60_000 }); // wrong-password guessing
+  const missLimiter = createWindowLimiter({ limit: 30, windowMs: 60_000 });     // room-code enumeration
+  const protectedCreateLimiter = createWindowLimiter({ limit: 30, windowMs: 60_000 }); // scrypt cost on create
+  const serveStatic = createStaticFileServer(staticDir);
+
+  /* ---------------------------- HTTP ----------------------------- */
+
+  async function handleHttp(request, response) {
+    for (const [name, value] of Object.entries(SECURITY_HEADERS)) response.setHeader(name, value);
+    if (request.socket.encrypted || request.headers['x-forwarded-proto'] === 'https') {
+      response.setHeader('strict-transport-security', 'max-age=31536000');
+    }
+    let url;
+    try { url = new URL(request.url || '/', 'http://localhost'); } catch { return sendJson(request, response, 400, { error: 'bad request' }); }
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      response.setHeader('allow', 'GET, HEAD');
+      return sendJson(request, response, 405, { error: 'method not allowed' });
+    }
+    if (url.pathname === '/health') {
+      let ready = false;
+      try { ready = Boolean(staticDir && statSync(resolve(staticDir, 'index.html')).isFile()); } catch { /* not built */ }
+      return sendJson(request, response, ready ? 200 : 503, {
+        service: 'aislopcraft-online', status: ready ? 'ok' : 'not_ready',
+        rooms: rooms.size, maxRooms, maxPlayersPerRoom: maxPlayers,
+        players: claimedNames.size, connections: wss.clients.size,
+        uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
+      });
+    }
+    return serveStatic(request, response, url.pathname);
+  }
+
+  const http = createServer((request, response) => {
+    handleHttp(request, response).catch(error => {
+      logger.warn?.('HTTP handler error:', error?.message);
+      if (!response.headersSent) sendJson(request, response, 500, { error: 'internal error' });
+      else response.destroy();
+    });
   });
+  http.headersTimeout = 15_000;
+  http.requestTimeout = 30_000;
+  http.keepAliveTimeout = 65_000; // longer than common load-balancer idle timeouts
+  http.on('clientError', (error, socket) => {
+    if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+    else socket.destroy();
+  });
+
   const wss = new WebSocketServer({ server: http, path: '/ws', maxPayload: MAX_MESSAGE, perMessageDeflate: false });
+  wss.on('error', error => logger.warn?.('WebSocket server error:', error.message));
 
-  function onlinePlayerList() {
-    return [...claimedNames.values()].map(socket => socket.playerName).filter(Boolean).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
-  }
+  /* ----------------------- names & lobby ------------------------- */
 
-  function sendOnlinePlayers(socket, requestId) {
-    send(socket, { type: 'players:list', requestId, players: onlinePlayerList() });
-  }
+  const onlinePlayerList = () => [...claimedNames.values()].map(socket => socket.playerName).filter(Boolean)
+    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
 
   function broadcastOnlinePlayers() {
     const payload = JSON.stringify({ type: 'players:list', players: onlinePlayerList() });
@@ -205,77 +547,91 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
 
   function releaseName(socket) {
     if (!socket.playerName) return false;
-    claimedNames.delete(socket.playerName.toLowerCase());
+    const key = socket.playerName.toLowerCase();
+    if (claimedNames.get(key) === socket) claimedNames.delete(key);
     socket.playerName = null;
     broadcastOnlinePlayers();
     return true;
   }
 
+  const fail = (socket, requestId, message) => send(socket, { type: 'error', requestId, message });
+
+  function originAllowed(request) {
+    if (!originAllowList.size) return true;
+    const origin = request.headers.origin;
+    if (!origin) return true; // non-browser clients; Origin checks only protect browsers
+    try { if (new URL(origin).host === request.headers.host) return true; } catch { return false; }
+    return originAllowList.has(String(origin).toLowerCase());
+  }
+
+  /* --------------------------- rooms ----------------------------- */
+
+  function createCode() {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      // 256 is a multiple of 32, so `% 32` has no modulo bias.
+      const code = [...randomBytes(6)].map(byte => ROOM_ALPHABET[byte % ROOM_ALPHABET.length]).join('');
+      if (!rooms.has(code)) return code;
+    }
+    throw new Error('Could not allocate a room code. Try again.');
+  }
+
+  const roomSummary = room => ({
+    code: room.code, name: room.name, players: room.clients.size, maxPlayers,
+    gameMode: room.gameMode, access: room.access, passwordProtected: Boolean(room.password), visualMode: room.visuals?.mode || 'individual',
+  });
+
+  function resetRoomState(socket) {
+    socket.room = null;
+    socket.lastState = null; // never reuse a position from a previous room
+    socket.vehicleTimes.clear();
+    socket.projectileTimes.clear();
+  }
+
+  /** Tears a room down. `keep` stays connected (host-initiated close); everyone else is disconnected. */
+  function closeRoom(room, reason, closeReason, keep = null) {
+    rooms.delete(room.code);
+    for (const peer of room.clients) {
+      send(peer, { type: 'room:closed', reason });
+      resetRoomState(peer);
+      if (peer !== keep) closeSocket(peer, 1000, closeReason);
+    }
+    room.clients.clear();
+  }
+
   function leave(socket, announce = true) {
     const room = socket.room;
     if (!room) return;
-    if (room.host !== socket && socket.clientId) {
-      for (const [uid, record] of room.vehicles) {
-        if (record.owner !== socket.clientId || !record.riding) continue;
-        record.riding = false; record.owner = room.host.clientId;
-        for (const peer of room.clients) if (peer !== socket) send(peer, { type: 'vehicle:update', ...record });
+    const wasHost = room.host === socket;
+    const clientId = socket.clientId;
+    room.clients.delete(socket);
+    resetRoomState(socket);
+    if (!wasHost && clientId) {
+      // Hand any vehicle the leaver was riding back to the host and drop their projectiles.
+      for (const record of room.vehicles.values()) {
+        if (record.owner !== clientId || !record.riding) continue;
+        record.riding = false;
+        record.owner = room.host.clientId;
+        broadcast(room.clients, { type: 'vehicle:update', ...record });
       }
       for (const [uid, shot] of room.projectiles) {
-        if (shot.sourceId !== socket.clientId) continue;
+        if (shot.sourceId !== clientId) continue;
         room.projectiles.delete(uid);
-        for (const peer of room.clients) if (peer !== socket) send(peer, { type: 'projectile:remove', uid });
+        broadcast(room.clients, { type: 'projectile:remove', uid });
       }
     }
-    room.clients.delete(socket);
-    socket.room = null;
-    if (announce && room.clients.size) {
-      for (const peer of room.clients) send(peer, { type: 'player:left', id: socket.clientId, name: socket.playerName });
-    }
-    if (!room.clients.size || room.host === socket) {
-      for (const peer of room.clients) {
-        send(peer, { type: 'room:closed', reason: 'The host left.' });
-        peer.room = null;
-        peer.close(1000, 'Host left');
-      }
-      rooms.delete(room.code);
-    }
-  }
-
-  function fail(socket, requestId, message) {
-    send(socket, { type: 'error', requestId, message });
-  }
-
-  function allowRoomPasswordAttempt(address, code) {
-    const now = Date.now();
-    const key = `${address}:${code}`;
-    if (roomPasswordAttempts.size >= 10_000 && !roomPasswordAttempts.has(key)) {
-      for (const [entry, attempt] of roomPasswordAttempts) if (now - attempt.startedAt >= 60_000) roomPasswordAttempts.delete(entry);
-      if (roomPasswordAttempts.size >= 10_000) return false;
-    }
-    let attempt = roomPasswordAttempts.get(key);
-    if (!attempt || now - attempt.startedAt >= 60_000) {
-      attempt = { startedAt: now, count: 0 };
-      roomPasswordAttempts.set(key, attempt);
-    }
-    if (attempt.count >= 12) return false;
-    attempt.count++;
-    return true;
-  }
-
-  function sendRoomSnapshot(socket, requestId) {
-    const publicRooms = [...rooms.values()]
-      .filter(room => room.access === 'public' && room.clients.size < MAX_PLAYERS)
-      .map(roomSummary).sort((a, b) => b.players - a.players || a.name.localeCompare(b.name));
-    send(socket, { type: 'rooms:list', requestId, rooms: publicRooms });
+    if (announce && room.clients.size) broadcast(room.clients, { type: 'player:left', id: clientId, name: socket.playerName });
+    if (!room.clients.size || wasHost) closeRoom(room, 'The host left.', 'Host left');
   }
 
   function join(socket, room, name, requestId) {
-    if (room.clients.size >= MAX_PLAYERS) return fail(socket, requestId, 'That room is full.');
+    if (socket.room === room) return fail(socket, requestId, 'You are already in that room.');
+    if (room.clients.size >= maxPlayers) return fail(socket, requestId, 'That room is full.');
     if (socket.room) leave(socket);
     const id = randomBytes(8).toString('hex');
     socket.room = room;
     socket.clientId = id;
     socket.playerName = name;
+    socket.lastState = null;
     room.clients.add(socket);
     send(socket, {
       type: 'room:joined', requestId, id, code: room.code, name: room.name,
@@ -284,29 +640,371 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
       players: [...room.clients].map(peer => ({ id: peer.clientId, name: peer.playerName, role: peer === room.host ? 'host' : 'player' })),
     });
     if (socket !== room.host) {
+      // Snapshots bypass the slow-client check: a large world legitimately queues a few MB at once.
+      const push = message => sendEncoded(socket, JSON.stringify(message), { force: true });
       const edits = [...room.edits.entries()];
       for (let index = 0; index < edits.length; index += 160) {
-        send(socket, { type: 'world:snapshot', entries: edits.slice(index, index + 160), done: index + 160 >= edits.length });
+        push({ type: 'world:snapshot', entries: edits.slice(index, index + 160), done: index + 160 >= edits.length });
       }
-      if (!edits.length) send(socket, { type: 'world:snapshot', entries: [], done: true });
-      const items = [...room.items.values()];
-      send(socket, { type: 'item:snapshot', items, done: true });
-      if (room.gameState) send(socket, { type: 'game:state', state: room.gameState });
-      send(socket, { type: 'mob:snapshot', mobs: room.mobs });
-      send(socket, { type: 'vehicle:snapshot', vehicles: [...room.vehicles.values()] });
-      send(socket, { type: 'projectile:snapshot', projectiles: [...room.projectiles.values()].map(({ sourceId, ...shot }) => shot) });
+      if (!edits.length) push({ type: 'world:snapshot', entries: [], done: true });
+      push({ type: 'item:snapshot', items: [...room.items.values()], done: true });
+      if (room.gameState) push({ type: 'game:state', state: room.gameState });
+      push({ type: 'mob:snapshot', mobs: room.mobs });
+      push({ type: 'vehicle:snapshot', vehicles: [...room.vehicles.values()] });
+      push({ type: 'projectile:snapshot', projectiles: [...room.projectiles.values()].map(publicProjectile) });
     }
+    broadcast(room.clients, { type: 'player:joined', id, name, role: socket === room.host ? 'host' : 'player' }, socket);
     for (const peer of room.clients) {
-      if (peer === socket) continue;
-      send(peer, { type: 'player:joined', id, name, role: socket === room.host ? 'host' : 'player' });
-      if (peer.lastState) send(socket, { type: 'player:state', id: peer.clientId, name: peer.playerName, ...peer.lastState });
+      if (peer !== socket && peer.lastState) send(socket, { type: 'player:state', id: peer.clientId, name: peer.playerName, ...peer.lastState });
     }
   }
 
+  /* ----------------------- lobby handlers ------------------------ */
+
+  function handleClaim(socket, message, requestId) {
+    if (!allowRate(socket, 'player:claim', 12, 60_000)) return fail(socket, requestId, 'Too many name checks. Wait a minute before trying again.');
+    if (socket.playerName) return fail(socket, requestId, `You are already playing as ${socket.playerName}. Release your current name first to change it.`);
+    const name = String(message.name ?? '').trim();
+    if (!USERNAME_PATTERN.test(name)) return fail(socket, requestId, 'Use a name with 3–20 letters, numbers, or underscores.');
+    const key = name.toLowerCase();
+    if (claimedNames.has(key)) return fail(socket, requestId, 'That player name is already taken by someone online. Choose another name.');
+    socket.playerName = name;
+    claimedNames.set(key, socket);
+    send(socket, { type: 'player:claimed', requestId, name });
+    broadcastOnlinePlayers();
+  }
+
+  function handleRelease(socket, message, requestId) {
+    if (socket.room) leave(socket);
+    releaseName(socket);
+    send(socket, { type: 'player:released', requestId });
+  }
+
+  function handlePlayersList(socket, message, requestId) {
+    if (!allowRate(socket, 'players:list', 30, 10_000)) return fail(socket, requestId, 'The online-player list is refreshing too quickly. Try again in a moment.');
+    send(socket, { type: 'players:list', requestId, players: onlinePlayerList() });
+  }
+
+  function handlePing(socket, message, requestId) {
+    if (!allowRate(socket, 'ping', 120, 10_000)) return;
+    send(socket, { type: 'pong', requestId, serverTime: Date.now() });
+  }
+
+  function handleRoomsList(socket, message, requestId) {
+    if (!allowRate(socket, 'rooms:list', 30, 10_000)) return fail(socket, requestId, 'The room list is refreshing too quickly. Try again in a moment.');
+    const publicRooms = [...rooms.values()]
+      .filter(room => room.access === 'public' && room.clients.size < maxPlayers)
+      .map(roomSummary).sort((a, b) => b.players - a.players || a.name.localeCompare(b.name));
+    send(socket, { type: 'rooms:list', requestId, rooms: publicRooms });
+  }
+
+  /* ----------------------- room lifecycle ------------------------ */
+
+  async function handleRoomCreate(socket, message, requestId) {
+    if (socket.room) return fail(socket, requestId, 'Leave your current room first.');
+    if (!allowRate(socket, 'room:create', 20, 60_000)) return fail(socket, requestId, 'You are creating rooms too quickly. Wait a minute and try again.');
+    const playerName = socket.playerName;
+    const name = cleanText(message.name, 32) || `${playerName}’s world`;
+    const password = String(message.password ?? '').slice(0, 64);
+    const access = message.access === 'private' ? 'private' : 'public';
+    const gameMode = message.gameMode === 'creative' ? 'creative' : 'survival';
+    const seed = cleanText(message.seed, 80) || 'Beta 1.7.3';
+    if (password.length && password.length < 4) return fail(socket, requestId, 'Passwords must be at least four characters.');
+    if (rooms.size >= maxRooms) return fail(socket, requestId, `All ${maxRooms} rooms are in use. Try again later.`);
+    if (password && !protectedCreateLimiter.allow(socket.addressKey)) return fail(socket, requestId, 'Too many password-protected rooms were created recently. Wait a minute and try again.');
+    try {
+      const visuals = sanitizeVisualSettings(message.visuals);
+      const record = await passwordRecord(password);
+      // The socket or the room table may have changed while the hash was computed.
+      if (socket.readyState !== WebSocket.OPEN || socket.room || !socket.playerName) return;
+      if (rooms.size >= maxRooms) return fail(socket, requestId, `All ${maxRooms} rooms are in use. Try again later.`);
+      const room = {
+        code: createCode(), name, playerName, access, gameMode, seed, visuals, password: record,
+        clients: new Set(), edits: new Map(), items: new Map(), itemTimes: new Map(),
+        gameState: null, mobs: [], vehicles: new Map(), projectiles: new Map(), host: socket,
+      };
+      rooms.set(room.code, room);
+      join(socket, room, playerName, requestId);
+    } catch (error) { fail(socket, requestId, error.message); }
+  }
+
+  async function handleRoomJoin(socket, message, requestId) {
+    const code = String(message.code ?? '').trim().toUpperCase();
+    const room = rooms.get(code);
+    if (!validRoom(code) || !room) {
+      // Only misses are throttled, so guessing room codes is slow but normal joins are never penalised.
+      if (!missLimiter.allow(socket.addressKey)) return fail(socket, requestId, 'Too many room lookups. Wait a minute and try again.');
+      return fail(socket, requestId, 'Room not found. Check the code or ask the host to reopen it.');
+    }
+    if (room.password && !passwordLimiter.allow(`${socket.addressKey}:${code}`)) return fail(socket, requestId, 'Too many room password attempts. Wait a minute and try again.');
+    if (!(await passwordMatches(room.password, String(message.password ?? '').slice(0, 64)))) return fail(socket, requestId, 'Incorrect room password.');
+    if (socket.readyState !== WebSocket.OPEN || !socket.playerName) return;
+    if (rooms.get(code) !== room) return fail(socket, requestId, 'Room not found. Check the code or ask the host to reopen it.');
+    join(socket, room, socket.playerName, requestId);
+  }
+
+  function handleRoomLeave(socket, message, requestId) {
+    leave(socket);
+    send(socket, { type: 'room:left', requestId });
+  }
+
+  function handleRoomClose(socket, message, requestId) {
+    const room = socket.room;
+    if (!room || room.host !== socket) return fail(socket, requestId, 'Only the host can close this room.');
+    closeRoom(room, 'The host closed the room.', 'Room closed', socket);
+    send(socket, { type: 'room:left', requestId });
+  }
+
+  /* ----------------------- in-room handlers ---------------------- */
+
+  function handlePlayerState(socket, message, requestId, room) {
+    const now = Date.now();
+    if (now - socket.lastStateAt < MIN_STATE_INTERVAL_MS) return;
+    const state = message.state;
+    if (!state || ![state.x, state.y, state.z, state.yaw, state.pitch].every(Number.isFinite)) return;
+    if (Math.abs(state.x) > COORD_LIMIT || Math.abs(state.z) > COORD_LIMIT || state.y < -128 || state.y > 512) return;
+    socket.lastStateAt = now;
+    socket.lastState = { x: state.x, y: state.y, z: state.z, yaw: state.yaw, pitch: state.pitch, dead: !!state.dead };
+    broadcast(room.clients, { type: 'player:state', id: socket.clientId, name: socket.playerName, ...socket.lastState }, socket);
+  }
+
+  function handleWorldSnapshot(socket, message, requestId, room) {
+    if (room.host !== socket) return fail(socket, requestId, 'Only the host can publish the initial world snapshot.');
+    if (!allowRate(socket, 'world:snapshot', 60, 15_000)) return fail(socket, requestId, 'World setup is sending too quickly. Please retry.');
+    if (!Array.isArray(message.entries) || message.entries.length > 1000) return fail(socket, requestId, 'Invalid world snapshot batch.');
+    const batch = new Map();
+    for (const entry of message.entries) {
+      if (!Array.isArray(entry) || entry.length < 2) return fail(socket, requestId, 'The world contains an invalid block edit.');
+      const [key, value] = entry;
+      const match = typeof key === 'string' && /^-?\d{1,9},\d{1,3},-?\d{1,9}$/.test(key);
+      const id = Array.isArray(value) ? value[0] : value;
+      const meta = Array.isArray(value) ? (value[1] ?? 0) : 0;
+      const [x, y, z] = match ? key.split(',').map(Number) : [];
+      if (!match || !validBlockEdit(x, y, z, id, meta)) return fail(socket, requestId, 'The world contains an invalid block edit.');
+      // Canonical key, so "007,5,3" and "7,5,3" cannot become two entries for one block.
+      batch.set(`${x},${y},${z}`, [id, meta]);
+    }
+    let added = 0;
+    for (const key of batch.keys()) if (!room.edits.has(key)) added++;
+    if (room.edits.size + added > MAX_EDITS) return fail(socket, requestId, 'The shared world edit limit has been reached.');
+    const entries = [...batch.entries()];
+    for (const [key, edit] of entries) room.edits.set(key, edit);
+    broadcast(room.clients, { type: 'world:snapshot', entries, done: false }, socket);
+    send(socket, { type: 'world:snapshot:accepted', requestId, count: entries.length });
+  }
+
+  function handleWorldEdit(socket, message, requestId, room) {
+    const edit = message.edit;
+    if (!allowRate(socket, 'world:edit', 80, 1000)) return;
+    if (!edit || !validBlockEdit(edit.x, edit.y, edit.z, edit.id, edit.meta ?? 0)) return;
+    // Edits are relayed as received, so bound their size to stop padded payloads from being amplified to every peer.
+    if (JSON.stringify(edit).length > 256) return;
+    const key = `${edit.x},${edit.y},${edit.z}`;
+    if (!room.edits.has(key) && room.edits.size >= MAX_EDITS) return fail(socket, requestId, 'The shared world edit limit has been reached.');
+    room.edits.set(key, [edit.id, edit.meta || 0]);
+    broadcast(room.clients, { type: 'world:edit', edit }, socket);
+  }
+
+  function handleGameState(socket, message, requestId, room) {
+    if (!allowRate(socket, 'game:state', 8, 1000)) return;
+    if (!message.state || typeof message.state !== 'object' || Array.isArray(message.state) || JSON.stringify(message.state).length > 96_000) return fail(socket, requestId, 'Invalid shared world state.');
+    room.gameState = message.state;
+    broadcast(room.clients, { type: 'game:state', state: message.state }, socket);
+  }
+
+  function handleItemSnapshot(socket, message, requestId, room) {
+    if (room.host !== socket) return fail(socket, requestId, 'Only the host can publish shared item state.');
+    if (!allowRate(socket, 'item:snapshot', 20, 1000)) return;
+    if (!Array.isArray(message.items) || message.items.length > 4096) return fail(socket, requestId, 'Invalid shared item snapshot.');
+    const now = Date.now();
+    const items = new Map();
+    const times = new Map();
+    for (const source of message.items) {
+      const item = sanitizeItem(source);
+      if (!item) continue;
+      items.set(item.uid, item);
+      times.set(item.uid, room.itemTimes.get(item.uid) ?? now);
+    }
+    room.items = items;
+    room.itemTimes = times;
+    broadcast(room.clients, { type: 'item:snapshot', items: [...items.values()], done: true }, socket);
+  }
+
+  function handleItemSpawn(socket, message, requestId, room) {
+    if (!allowRate(socket, 'item:spawn', 24, 1000)) return;
+    const item = sanitizeItem(message.item, `${socket.clientId}:${message.item?.uid}`);
+    if (!item) return;
+    // Guests may only drop items near themselves (the host also spawns mob and explosion drops).
+    if (socket !== room.host && socket.lastState && distance3(item.pos, socket.lastState) > ITEM_SPAWN_RANGE) return;
+    if (room.items.size >= 4096) return fail(socket, requestId, 'The shared item limit has been reached.');
+    room.items.set(item.uid, item);
+    room.itemTimes.set(item.uid, Date.now());
+    broadcast(room.clients, { type: 'item:spawn', item });
+  }
+
+  function handleItemPickup(socket, message, requestId, room) {
+    if (!allowRate(socket, 'item:pickup', 12, 1000)) return;
+    const uid = String(message.uid ?? '').slice(0, 120);
+    const item = room.items.get(uid);
+    if (!item || !socket.lastState || distance3(item.pos, socket.lastState) > PICKUP_RANGE) return;
+    room.items.delete(uid);
+    room.itemTimes.delete(uid);
+    send(socket, { type: 'item:pickup', item });
+    broadcast(room.clients, { type: 'item:remove', uid }, socket);
+  }
+
+  function handleProjectileUpdate(socket, message, requestId, room) {
+    if (!allowRate(socket, 'projectile:update', 40, 1000)) return;
+    const now = Date.now();
+    const sanitized = sanitizeProjectile(message.projectile, socket === room.host);
+    if (!sanitized) return;
+    const existing = room.projectiles.get(sanitized.uid);
+    // A room member may update only their own projectile. Without this check, a peer
+    // who learns a UID from a snapshot could replace or erase another player's projectile.
+    if (existing && existing.sourceId !== socket.clientId && socket !== room.host) return;
+    if (now - (socket.projectileTimes.get(sanitized.uid) || 0) < 80) return;
+    if (!socket.projectileTimes.has(sanitized.uid) && socket.projectileTimes.size >= 512) {
+      pruneTimes(socket.projectileTimes, now, 10_000);
+      if (socket.projectileTimes.size >= 512) return;
+    }
+    if (room.projectiles.size >= 256 && !existing) return;
+    socket.projectileTimes.set(sanitized.uid, now);
+    const projectile = { ...sanitized, sourceId: existing?.sourceId ?? socket.clientId, lastUpdate: now };
+    room.projectiles.set(projectile.uid, projectile);
+    broadcast(room.clients, { type: 'projectile:update', projectile: publicProjectile(projectile) }, socket);
+  }
+
+  function handleProjectileRemove(socket, message, requestId, room) {
+    const uid = typeof message.uid === 'string' ? message.uid.slice(0, 100) : '';
+    const projectile = room.projectiles.get(uid);
+    if (!projectile || (projectile.sourceId !== socket.clientId && socket !== room.host)) return;
+    room.projectiles.delete(uid);
+    for (const peer of room.clients) peer.projectileTimes.delete(uid);
+    broadcast(room.clients, { type: 'projectile:remove', uid }, socket);
+  }
+
+  function handleVehicleUpdate(socket, message, requestId, room) {
+    if (!allowRate(socket, 'vehicle:update', 80, 1000)) return;
+    const now = Date.now();
+    const safe = sanitizeVehicle(message.vehicle);
+    if (!safe) return;
+    if (now - (socket.vehicleTimes.get(safe.uid) || 0) < 75) return;
+    if (!socket.vehicleTimes.has(safe.uid) && socket.vehicleTimes.size >= 2048) {
+      pruneTimes(socket.vehicleTimes, now, 10_000);
+      if (socket.vehicleTimes.size >= 2048) return;
+    }
+    if (room.vehicles.size >= 1024 && !room.vehicles.has(safe.uid)) return;
+    socket.vehicleTimes.set(safe.uid, now);
+    const record = { vehicle: safe, riding: !!message.riding, owner: socket.clientId };
+    room.vehicles.set(safe.uid, record);
+    broadcast(room.clients, { type: 'vehicle:update', ...record }, socket);
+  }
+
+  function handleVehicleRemove(socket, message, requestId, room) {
+    const uid = typeof message.uid === 'string' ? message.uid.slice(0, 100) : '';
+    if (!uid || !room.vehicles.delete(uid)) return;
+    for (const peer of room.clients) peer.vehicleTimes.delete(uid);
+    broadcast(room.clients, { type: 'vehicle:remove', uid }, socket);
+  }
+
+  function handleTntIgnite(socket, message, requestId, room) {
+    const now = Date.now();
+    const { x, y, z } = message;
+    if (socket === room.host || now - socket.lastTntAt < 500 || !socket.lastState || ![x, y, z].every(Number.isInteger) || y < 0 || y >= WORLD_HEIGHT
+      || Math.hypot(x + 0.5 - socket.lastState.x, z + 0.5 - socket.lastState.z) > TNT_RANGE) return;
+    socket.lastTntAt = now;
+    send(room.host, { type: 'tnt:ignite', x, y, z });
+  }
+
+  function handlePlayerDamage(socket, message, requestId, room) {
+    if (socket !== room.host || typeof message.targetId !== 'string' || !Number.isFinite(message.amount) || message.amount <= 0 || message.amount > 40) return;
+    if (!allowRate(socket, 'player:damage', 60, 1000)) return;
+    const target = [...room.clients].find(peer => peer.clientId === message.targetId);
+    if (target) send(target, { type: 'player:damage', amount: message.amount });
+  }
+
+  function handleMobAttack(socket, message, requestId, room) {
+    const now = Date.now();
+    if (socket === room.host || now - socket.lastAttackAt < 350 || !socket.lastState || typeof message.uid !== 'string' || message.uid.length > 80) return;
+    socket.lastAttackAt = now;
+    send(room.host, {
+      type: 'mob:attack', attacker: { id: socket.clientId, name: socket.playerName, ...socket.lastState },
+      uid: message.uid, heldId: isInt(message.heldId, 0, 4095) ? message.heldId : null, ranged: !!message.ranged,
+    });
+  }
+
+  function handleMobSnapshot(socket, message, requestId, room) {
+    if (room.host !== socket) return fail(socket, requestId, 'Only the host can publish shared mob state.');
+    if (!allowRate(socket, 'mob:snapshot', 40, 1000)) return;
+    if (!Array.isArray(message.mobs) || message.mobs.length > 18) return fail(socket, requestId, 'Invalid shared mob snapshot.');
+    room.mobs = sanitizeMobs(message.mobs);
+    broadcast(room.clients, { type: 'mob:snapshot', mobs: room.mobs }, socket);
+  }
+
+  function handleChat(socket, message, requestId, room) {
+    const now = Date.now();
+    if (now - socket.lastChatAt < 500) return;
+    const text = cleanText(message.text, 240);
+    if (!text) return;
+    socket.lastChatAt = now;
+    broadcast(room.clients, { type: 'chat', id: socket.clientId, name: socket.playerName, text });
+  }
+
+  /* --------------------------- dispatch -------------------------- */
+
+  // Maps (not plain objects) so a hostile `type` such as "constructor" can never resolve to a handler.
+  const lobbyHandlers = new Map([
+    ['player:claim', handleClaim], ['player:release', handleRelease], ['players:list', handlePlayersList],
+    ['ping', handlePing], ['rooms:list', handleRoomsList],
+  ]);
+  const lifecycleHandlers = new Map([
+    ['room:create', handleRoomCreate], ['room:join', handleRoomJoin], ['room:leave', handleRoomLeave], ['room:close', handleRoomClose],
+  ]);
+  const roomHandlers = new Map([
+    ['player:state', handlePlayerState], ['world:snapshot', handleWorldSnapshot], ['world:edit', handleWorldEdit],
+    ['game:state', handleGameState], ['item:snapshot', handleItemSnapshot], ['item:spawn', handleItemSpawn],
+    ['item:pickup', handleItemPickup], ['projectile:update', handleProjectileUpdate], ['projectile:remove', handleProjectileRemove],
+    ['vehicle:update', handleVehicleUpdate], ['vehicle:remove', handleVehicleRemove], ['tnt:ignite', handleTntIgnite],
+    ['player:damage', handlePlayerDamage], ['mob:attack', handleMobAttack], ['mob:snapshot', handleMobSnapshot], ['chat', handleChat],
+  ]);
+
+  async function handleMessage(socket, text, size) {
+    if (socket.readyState !== WebSocket.OPEN) return;
+    let message;
+    try { message = JSON.parse(text); } catch { return; }
+    if (!message || typeof message.type !== 'string') return;
+    const { type } = message;
+    const requestId = typeof message.requestId === 'string' ? message.requestId.slice(0, 80) : undefined;
+    socket.lastActivity = Date.now();
+    try {
+      const lobby = lobbyHandlers.get(type);
+      if (lobby) return lobby(socket, message, requestId);
+      const lifecycle = lifecycleHandlers.get(type);
+      const inRoom = roomHandlers.get(type);
+      if (!lifecycle && !inRoom) return; // unknown message type
+      if (size > (LARGE_MESSAGE_TYPES.has(type) ? MAX_MESSAGE : MAX_SMALL_MESSAGE)) return fail(socket, requestId, 'That message is too large.');
+      if (!socket.playerName) return fail(socket, requestId, 'Choose an available player name before joining a room.');
+      if (lifecycle) return await lifecycle(socket, message, requestId);
+      if (!socket.room) return fail(socket, requestId, 'Join a room first.');
+      return inRoom(socket, message, requestId, socket.room);
+    } catch (error) {
+      logger.warn?.('Multiplayer handler error:', type, error?.message);
+      fail(socket, requestId, 'The server could not process that request.');
+    }
+  }
+
+  /* -------------------------- connections ------------------------ */
+
   wss.on('connection', (socket, request) => {
+    socket.on('error', error => logger.warn?.('Multiplayer socket error:', error.message));
     socket.authAddress = resolveClientAddress(request, trustedProxyHops);
+    socket.addressKey = rateLimitKey(socket.authAddress);
     socket.playerName = null;
+    socket.room = null;
+    socket.clientId = null;
+    socket.lastState = null;
     socket.isAlive = true;
+    socket.lastActivity = Date.now();
     socket.lastStateAt = 0;
     socket.lastChatAt = 0;
     socket.lastAttackAt = 0;
@@ -314,258 +1012,44 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
     socket.vehicleTimes = new Map();
     socket.projectileTimes = new Map();
     socket.rateLimits = new Map();
-    socket.authPending = false;
+    socket.queue = Promise.resolve();
+    socket.queued = 0;
+
+    if (!originAllowed(request)) return closeSocket(socket, 1008, 'Origin not allowed');
+    if (wss.clients.size > maxConnections) return closeSocket(socket, 1013, 'The server is full. Try again shortly.');
+    if (maxConnectionsPerAddress > 0) {
+      const open = connectionsByAddress.get(socket.addressKey) || 0;
+      if (open >= maxConnectionsPerAddress) return closeSocket(socket, 1013, 'Too many connections from your network.');
+      connectionsByAddress.set(socket.addressKey, open + 1);
+    }
+
     socket.on('pong', () => { socket.isAlive = true; });
-    socket.on('message', async buffer => {
-      if (buffer.length > MAX_MESSAGE) { socket.close(1009, 'Message too large'); return; }
-      let message;
-      try { message = JSON.parse(buffer.toString()); } catch { return; }
-      if (!message || typeof message.type !== 'string') return;
-      const requestId = typeof message.requestId === 'string' ? message.requestId.slice(0, 80) : undefined;
-
-      if (message.type === 'player:claim') {
-        if (!allowRate(socket, 'player:claim', 12, 60_000)) return fail(socket, requestId, 'Too many name checks. Wait a minute before trying again.');
-        if (socket.playerName) return fail(socket, requestId, `You are already playing as ${socket.playerName}. Release your current name first to change it.`);
-        const name = String(message.name ?? '').trim();
-        if (!USERNAME_PATTERN.test(name)) return fail(socket, requestId, 'Use a name with 3–20 letters, numbers, or underscores.');
-        const key = name.toLowerCase();
-        if (claimedNames.has(key)) return fail(socket, requestId, 'That player name is already taken by someone online. Choose another name.');
-        socket.playerName = name;
-        claimedNames.set(key, socket);
-        send(socket, { type: 'player:claimed', requestId, name });
-        broadcastOnlinePlayers();
-        return;
-      }
-      if (message.type === 'player:release') {
-        if (socket.room) leave(socket);
-        releaseName(socket);
-        send(socket, { type: 'player:released', requestId });
-        return;
-      }
-      if (message.type === 'players:list') {
-        if (!allowRate(socket, 'players:list', 30, 10_000)) return fail(socket, requestId, 'The online-player list is refreshing too quickly. Try again in a moment.');
-        sendOnlinePlayers(socket, requestId);
-        return;
-      }
-      if (message.type === 'ping') {
-        send(socket, { type: 'pong', requestId, serverTime: Date.now() });
-        return;
-      }
-
-      if (message.type === 'rooms:list') {
-        sendRoomSnapshot(socket, requestId);
-        return;
-      }
-      if (!socket.playerName) return fail(socket, requestId, 'Choose an available player name before joining a room.');
-
-      if (message.type === 'room:create') {
-        if (socket.room) return fail(socket, requestId, 'Leave your current room first.');
-        const playerName = socket.playerName;
-        const name = cleanText(message.name, 32) || `${playerName}’s world`;
-        const password = String(message.password ?? '').slice(0, 64);
-        const access = message.access === 'private' ? 'private' : 'public';
-        const gameMode = message.gameMode === 'creative' ? 'creative' : 'survival';
-        const seed = cleanText(message.seed, 80) || 'Beta 1.7.3';
-        if (!playerName) return fail(socket, requestId, 'Choose a player name.');
-        if (password.length && password.length < 4) return fail(socket, requestId, 'Passwords must be at least four characters.');
-        if (rooms.size >= MAX_ROOMS) return fail(socket, requestId, `All ${MAX_ROOMS} rooms are in use. Try again later.`);
-        try {
-          const room = {
-            code: createCode(rooms), name, playerName, access, gameMode, seed,
-            visuals: sanitizeVisualSettings(message.visuals),
-            password: passwordRecord(password), clients: new Set(), edits: new Map(), items: new Map(),
-            gameState: null, mobs: [], vehicles: new Map(), projectiles: new Map(), host: socket,
-          };
-          rooms.set(room.code, room);
-          join(socket, room, playerName, requestId);
-        } catch (error) { fail(socket, requestId, error.message); }
-      } else if (message.type === 'room:join') {
-        const code = String(message.code ?? '').trim().toUpperCase();
-        const room = rooms.get(code);
-        const playerName = socket.playerName;
-        if (!validRoom(code) || !room) return fail(socket, requestId, 'Room not found. Check the code or ask the host to reopen it.');
-        if (room.password && !allowRoomPasswordAttempt(socket.authAddress, code)) return fail(socket, requestId, 'Too many room password attempts. Wait a minute and try again.');
-        if (!passwordMatches(room.password, String(message.password ?? '').slice(0, 64))) return fail(socket, requestId, 'Incorrect room password.');
-        join(socket, room, playerName, requestId);
-      } else if (message.type === 'room:leave') {
-        leave(socket);
-        send(socket, { type: 'room:left', requestId });
-      } else if (message.type === 'room:close') {
-        if (!socket.room || socket.room.host !== socket) return fail(socket, requestId, 'Only the host can close this room.');
-        const room = socket.room;
-        for (const peer of room.clients) {
-          send(peer, { type: 'room:closed', reason: 'The host closed the room.' });
-          peer.room = null;
-          if (peer !== socket) peer.close(1000, 'Room closed');
-        }
-        rooms.delete(room.code);
-        socket.room = null;
-        send(socket, { type: 'room:left', requestId });
-      } else if (!socket.room) {
-        fail(socket, requestId, 'Join a room first.');
-      } else if (message.type === 'player:state') {
-        const now = Date.now();
-        if (now - socket.lastStateAt < 40) return;
-        const state = message.state;
-        if (!state || ![state.x, state.y, state.z, state.yaw, state.pitch].every(Number.isFinite)) return;
-        if (Math.abs(state.x) > 30_000_000 || Math.abs(state.z) > 30_000_000 || state.y < -128 || state.y > 512) return;
-        socket.lastStateAt = now;
-        socket.lastState = { x: state.x, y: state.y, z: state.z, yaw: state.yaw, pitch: state.pitch, dead: !!state.dead };
-        broadcast(socket.room.clients, { type: 'player:state', id: socket.clientId, name: socket.playerName, ...socket.lastState }, socket);
-      } else if (message.type === 'world:snapshot') {
-        if (socket.room.host !== socket) return fail(socket, requestId, 'Only the host can publish the initial world snapshot.');
-        if (!allowRate(socket, 'world:snapshot', 60, 15_000)) return fail(socket, requestId, 'World setup is sending too quickly. Please retry.');
-        if (!Array.isArray(message.entries) || message.entries.length > 1000) return fail(socket, requestId, 'Invalid world snapshot batch.');
-        const batch = [];
-        const batchKeys = new Set();
-        for (const entry of message.entries) {
-          if (!Array.isArray(entry) || entry.length < 2) return fail(socket, requestId, 'The world contains an invalid block edit.');
-          const [key, value] = entry;
-          const match = typeof key === 'string' && /^-?\d{1,9},\d{1,3},-?\d{1,9}$/.exec(key);
-          const id = Array.isArray(value) ? value[0] : value;
-          const meta = Array.isArray(value) ? (value[1] ?? 0) : 0;
-          const [x, y, z] = match ? key.split(',').map(Number) : [];
-          if (!match || ![x, y, z, id, meta].every(Number.isInteger) || y < 0 || y >= 128 || id < 0 || id > 255 || meta < 0 || meta > 255 || Math.abs(x) > 30_000_000 || Math.abs(z) > 30_000_000) {
-            return fail(socket, requestId, 'The world contains an invalid block edit.');
-          }
-          batch.push([key, [id, meta]]);
-          batchKeys.add(key);
-        }
-        const newKeys = [...batchKeys].filter(key => !socket.room.edits.has(key));
-        if (socket.room.edits.size + newKeys.length > MAX_EDITS) return fail(socket, requestId, 'The shared world edit limit has been reached.');
-        for (const [key, edit] of batch) socket.room.edits.set(key, edit);
-        broadcast(socket.room.clients, { type: 'world:snapshot', entries: batch, done: false }, socket);
-        send(socket, { type: 'world:snapshot:accepted', requestId, count: batch.length });
-      } else if (message.type === 'world:edit') {
-        const edit = message.edit;
-        if (!allowRate(socket, 'world:edit', 80, 1000)) return;
-        if (!edit || ![edit.x, edit.y, edit.z, edit.id, edit.meta ?? 0].every(Number.isInteger)) return;
-        if (edit.y < 0 || edit.y >= 128 || edit.id < 0 || edit.id > 255 || Math.abs(edit.x) > 30_000_000 || Math.abs(edit.z) > 30_000_000) return;
-        const key = `${edit.x},${edit.y},${edit.z}`;
-        if (!socket.room.edits.has(key) && socket.room.edits.size >= MAX_EDITS) return fail(socket, requestId, 'The shared world edit limit has been reached.');
-        socket.room.edits.set(key, [edit.id, edit.meta || 0]);
-        broadcast(socket.room.clients, { type: 'world:edit', edit }, socket);
-      } else if (message.type === 'game:state') {
-        if (!allowRate(socket, 'game:state', 8, 1000)) return;
-        if (!message.state || typeof message.state !== 'object' || Array.isArray(message.state) || JSON.stringify(message.state).length > 96_000) return fail(socket, requestId, 'Invalid shared world state.');
-        socket.room.gameState = message.state;
-        broadcast(socket.room.clients, { type: 'game:state', state: message.state }, socket);
-      } else if (message.type === 'item:snapshot') {
-        if (socket.room.host !== socket) return fail(socket, requestId, 'Only the host can publish shared item state.');
-        if (!Array.isArray(message.items) || message.items.length > 4096) return fail(socket, requestId, 'Invalid shared item snapshot.');
-        const items = new Map();
-        for (const item of message.items) {
-          if (!item || typeof item.uid !== 'string' || item.uid.length > 80 || !Number.isInteger(item.id) || item.id < 0 || item.id > 4095 || !Number.isInteger(item.count) || item.count < 1 || item.count > 999 || !Array.isArray(item.pos) || item.pos.length !== 3 || !item.pos.every(Number.isFinite) || item.pos.some(value => Math.abs(value) > 30_000_000)) continue;
-          items.set(item.uid, { uid: item.uid, id: item.id, count: item.count, damage: Number.isInteger(item.damage) ? Math.max(0, item.damage) : 0, pos: item.pos, vy: Number.isFinite(item.vy) ? Math.max(-80, Math.min(80, item.vy)) : 0, age: Number.isFinite(item.age) ? Math.max(0, Math.min(300, item.age)) : 0 });
-        }
-        socket.room.items = items;
-        for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'item:snapshot', items: [...items.values()], done: true });
-      } else if (message.type === 'item:spawn') {
-        if (!allowRate(socket, 'item:spawn', 24, 1000)) return;
-        const source = message.item;
-        if (!source || typeof source.uid !== 'string' || source.uid.length > 80 || !Number.isInteger(source.id) || source.id < 0 || source.id > 4095 || !Number.isInteger(source.count) || source.count < 1 || source.count > 999 || !Array.isArray(source.pos) || source.pos.length !== 3 || !source.pos.every(Number.isFinite) || source.pos.some(value => Math.abs(value) > 30_000_000)) return;
-        if (socket.room.items.size >= 4096) return fail(socket, requestId, 'The shared item limit has been reached.');
-        const uid = `${socket.clientId}:${source.uid}`;
-        const item = { uid, id: source.id, count: source.count, damage: Number.isInteger(source.damage) ? Math.max(0, source.damage) : 0, pos: source.pos, vy: Number.isFinite(source.vy) ? Math.max(-80, Math.min(80, source.vy)) : 0, age: Number.isFinite(source.age) ? Math.max(0, Math.min(300, source.age)) : 0 };
-        socket.room.items.set(uid, item);
-        for (const peer of socket.room.clients) send(peer, { type: 'item:spawn', item });
-      } else if (message.type === 'item:pickup') {
-        if (!allowRate(socket, 'item:pickup', 12, 1000)) return;
-        const item = socket.room.items.get(String(message.uid ?? ''));
-        if (!item || !socket.lastState || Math.hypot(item.pos[0] - socket.lastState.x, item.pos[1] - socket.lastState.y, item.pos[2] - socket.lastState.z) > 5) return;
-        socket.room.items.delete(item.uid);
-        send(socket, { type: 'item:pickup', item });
-        for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'item:remove', uid: item.uid });
-      } else if (message.type === 'projectile:update') {
-        if (!allowRate(socket, 'projectile:update', 40, 1000)) return;
-        const now = Date.now();
-        const shot = message.projectile;
-        if (!shot || typeof shot.uid !== 'string' || shot.uid.length > 100 || !['player','mob'].includes(shot.owner) || !Array.isArray(shot.pos) || shot.pos.length !== 3 || !shot.pos.every(Number.isFinite) || shot.pos.some(value => Math.abs(value) > 30_000_000) || !Array.isArray(shot.vel) || shot.vel.length !== 3 || !shot.vel.every(Number.isFinite) || shot.vel.some(value => Math.abs(value) > 80)) return;
-        const existing = socket.room.projectiles.get(shot.uid);
-        // A room member may update only their own projectile. Without this
-        // check, a peer who learns a UID from a snapshot can replace or erase
-        // another player's projectile and desynchronize the shared simulation.
-        if (existing && existing.sourceId !== socket.clientId && socket !== socket.room.host) return;
-        if (now - (socket.projectileTimes.get(shot.uid) || 0) < 80) return;
-        if (!socket.projectileTimes.has(shot.uid) && socket.projectileTimes.size >= 512) return;
-        socket.projectileTimes.set(shot.uid, now);
-        if (socket.room.projectiles.size >= 256 && !existing) return;
-        const projectile = { uid: shot.uid, owner: shot.owner, pos: shot.pos, vel: shot.vel, age: Number.isFinite(shot.age) ? Math.max(0, Math.min(6, shot.age)) : 0, targetId: typeof shot.targetId === 'string' ? shot.targetId.slice(0, 80) : null, damage: Number.isFinite(shot.damage) ? Math.max(0, Math.min(40, shot.damage)) : 2, sourceId: existing?.sourceId ?? socket.clientId };
-        socket.room.projectiles.set(projectile.uid, projectile);
-        const { sourceId, ...publicProjectile } = projectile;
-        for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'projectile:update', projectile: publicProjectile });
-      } else if (message.type === 'projectile:remove') {
-        const uid = typeof message.uid === 'string' ? message.uid.slice(0, 100) : '';
-        const projectile = socket.room.projectiles.get(uid);
-        if (projectile && (projectile.sourceId === socket.clientId || socket === socket.room.host)) {
-          socket.room.projectiles.delete(uid);
-          for (const peer of socket.room.clients) peer.projectileTimes.delete(uid);
-          broadcast(socket.room.clients, { type: 'projectile:remove', uid }, socket);
-        }
-      } else if (message.type === 'vehicle:update') {
-        if (!allowRate(socket, 'vehicle:update', 80, 1000)) return;
-        const now = Date.now();
-        const vehicle = message.vehicle;
-        if (!vehicle || typeof vehicle.uid !== 'string' || vehicle.uid.length > 100 || !['boat','minecart','storage','powered'].includes(vehicle.type) || !Array.isArray(vehicle.pos) || vehicle.pos.length !== 3 || !vehicle.pos.every(Number.isFinite) || vehicle.pos.some(value => Math.abs(value) > 30_000_000) || !Number.isFinite(vehicle.rotation)) return;
-        if (now - (socket.vehicleTimes.get(vehicle.uid) || 0) < 75) return;
-        if (!socket.vehicleTimes.has(vehicle.uid) && socket.vehicleTimes.size >= 2048) return;
-        socket.vehicleTimes.set(vehicle.uid, now);
-        if (socket.room.vehicles.size >= 1024 && !socket.room.vehicles.has(vehicle.uid)) return;
-        const directions = [[1,0],[-1,0],[0,1],[0,-1]];
-        const safeDirection = value => Array.isArray(value) && value.length === 2 && directions.some(([x,z]) => x === value[0] && z === value[1]);
-        const safeVehicle = { uid: vehicle.uid, type: vehicle.type, pos: vehicle.pos, rotation: vehicle.rotation % (Math.PI * 2),
-          vx: Number.isFinite(vehicle.vx) ? Math.max(-20, Math.min(20, vehicle.vx)) : 0,
-          vz: Number.isFinite(vehicle.vz) ? Math.max(-20, Math.min(20, vehicle.vz)) : 0,
-          ...(vehicle.type === 'storage' && Array.isArray(vehicle.slots) && vehicle.slots.length === 27 ? { slots: vehicle.slots } : {}),
-          ...(vehicle.type === 'powered' ? { fuel: Number.isFinite(vehicle.fuel) ? Math.max(0, Math.min(3600, vehicle.fuel)) : 0 } : {}),
-          ...(vehicle.type !== 'boat' ? {
-            nodeX: Number.isInteger(vehicle.nodeX) ? Math.max(-30_000_000, Math.min(30_000_000, vehicle.nodeX)) : Math.floor(vehicle.pos[0]),
-            nodeZ: Number.isInteger(vehicle.nodeZ) ? Math.max(-30_000_000, Math.min(30_000_000, vehicle.nodeZ)) : Math.floor(vehicle.pos[2]),
-            target: safeDirection(vehicle.target) ? vehicle.target : null,
-            progress: Number.isFinite(vehicle.progress) ? Math.max(0, Math.min(.999, vehicle.progress)) : 0,
-            travel: safeDirection(vehicle.travel) ? vehicle.travel : [0,-1],
-            cartSpeed: Number.isFinite(vehicle.cartSpeed) ? Math.max(0, Math.min(8, vehicle.cartSpeed)) : 0,
-          } : {}) };
-        socket.room.vehicles.set(vehicle.uid, { vehicle: safeVehicle, riding: !!message.riding, owner: socket.clientId });
-        for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'vehicle:update', ...socket.room.vehicles.get(vehicle.uid) });
-      } else if (message.type === 'vehicle:remove') {
-        const uid = typeof message.uid === 'string' ? message.uid.slice(0, 100) : '';
-        if (uid && socket.room.vehicles.delete(uid)) {
-          for (const peer of socket.room.clients) peer.vehicleTimes.delete(uid);
-          broadcast(socket.room.clients, { type: 'vehicle:remove', uid }, socket);
-        }
-      } else if (message.type === 'tnt:ignite') {
-        const now = Date.now();
-        const { x, y, z } = message;
-        if (socket === socket.room.host || now - socket.lastTntAt < 500 || !socket.lastState || ![x, y, z].every(Number.isInteger) || y < 0 || y >= 128 || Math.hypot(x + 0.5 - socket.lastState.x, z + 0.5 - socket.lastState.z) > 7) return;
-        socket.lastTntAt = now;
-        send(socket.room.host, { type: 'tnt:ignite', x, y, z });
-      } else if (message.type === 'player:damage') {
-        if (socket !== socket.room.host || typeof message.targetId !== 'string' || !Number.isFinite(message.amount) || message.amount <= 0 || message.amount > 40) return;
-        const target = [...socket.room.clients].find(peer => peer.clientId === message.targetId);
-        if (target) send(target, { type: 'player:damage', amount: message.amount });
-      } else if (message.type === 'mob:attack') {
-        const now = Date.now();
-        if (socket === socket.room.host || now - socket.lastAttackAt < 350 || !socket.lastState || typeof message.uid !== 'string' || message.uid.length > 80) return;
-        socket.lastAttackAt = now;
-        send(socket.room.host, { type: 'mob:attack', attacker: { id: socket.clientId, name: socket.playerName, ...socket.lastState }, uid: message.uid, heldId: Number.isInteger(message.heldId) ? message.heldId : null, ranged: !!message.ranged });
-      } else if (message.type === 'mob:snapshot') {
-        if (socket.room.host !== socket) return fail(socket, requestId, 'Only the host can publish shared mob state.');
-        if (!Array.isArray(message.mobs) || message.mobs.length > 18) return fail(socket, requestId, 'Invalid shared mob snapshot.');
-        socket.room.mobs = message.mobs.filter(mob => mob && typeof mob.uid === 'string' && mob.uid.length <= 80 && typeof mob.type === 'string' && Array.isArray(mob.pos) && mob.pos.length === 3 && mob.pos.every(Number.isFinite) && [mob.yaw, mob.hp].every(Number.isFinite)).map(mob => ({ uid: mob.uid, type: mob.type, pos: mob.pos.map(value => Math.max(-30_000_000, Math.min(30_000_000, value))), yaw: mob.yaw, hp: Math.max(0, Math.min(1000, mob.hp)), sheared: !!mob.sheared, fuse: Number.isFinite(mob.fuse) ? mob.fuse : -1 }));
-        for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'mob:snapshot', mobs: socket.room.mobs });
-      } else if (message.type === 'chat') {
-        const now = Date.now();
-        if (now - socket.lastChatAt < 500) return;
-        const text = cleanText(message.text, 240);
-        if (!text) return;
-        socket.lastChatAt = now;
-        for (const peer of socket.room.clients) send(peer, { type: 'chat', id: socket.clientId, name: socket.playerName, text });
+    socket.on('message', (data, isBinary) => {
+      if (socket.closing) return;
+      socket.isAlive = true;
+      if (isBinary) return closeSocket(socket, 1003, 'Text messages only');
+      if (!allowRate(socket, '*', MESSAGE_RATE_LIMIT, 1000) || socket.queued >= MAX_QUEUED_MESSAGES) return closeSocket(socket, 1008, 'Too many messages');
+      const text = typeof data === 'string' ? data : data.toString();
+      const size = typeof data === 'string' ? Buffer.byteLength(data) : data.length;
+      // Per-socket serial queue: handlers that await (password hashing) can never interleave with later messages.
+      socket.queued++;
+      socket.queue = socket.queue
+        .then(() => handleMessage(socket, text, size))
+        .catch(error => logger.warn?.('Multiplayer message error:', error?.message))
+        .finally(() => { socket.queued--; });
+    });
+    socket.on('close', () => {
+      leave(socket);
+      releaseName(socket);
+      if (maxConnectionsPerAddress > 0) {
+        const open = (connectionsByAddress.get(socket.addressKey) || 1) - 1;
+        if (open > 0) connectionsByAddress.set(socket.addressKey, open);
+        else connectionsByAddress.delete(socket.addressKey);
       }
     });
-    socket.on('close', () => { leave(socket); releaseName(socket); });
-    socket.on('error', error => logger.warn?.('Multiplayer socket error:', error.message));
   });
+
+  /* ------------------------- housekeeping ------------------------ */
 
   const heartbeat = setInterval(() => {
     for (const socket of wss.clients) {
@@ -576,16 +1060,76 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
   }, 30_000);
   heartbeat.unref?.();
 
-  return { http, wss, rooms, close: () => new Promise(resolve => {
-    clearInterval(heartbeat);
-    for (const socket of wss.clients) socket.close();
-    wss.close(() => http.close(() => resolve()));
-  }) };
+  const maintenance = setInterval(() => {
+    const now = Date.now();
+    passwordLimiter.sweep(now);
+    missLimiter.sweep(now);
+    protectedCreateLimiter.sweep(now);
+    for (const room of rooms.values()) {
+      // Expire projectiles and items whose owner stopped updating them, so abandoned
+      // entries cannot fill the per-room caps or be replayed to every new joiner forever.
+      for (const [uid, shot] of room.projectiles) {
+        if (now - shot.lastUpdate <= PROJECTILE_TTL_MS) continue;
+        room.projectiles.delete(uid);
+        broadcast(room.clients, { type: 'projectile:remove', uid });
+      }
+      for (const [uid, since] of room.itemTimes) {
+        if (now - since <= ITEM_TTL_MS) continue;
+        room.itemTimes.delete(uid);
+        room.items.delete(uid);
+        broadcast(room.clients, { type: 'item:remove', uid });
+      }
+    }
+    for (const socket of wss.clients) {
+      if (!socket.playerName && now - socket.lastActivity > UNNAMED_IDLE_MS) closeSocket(socket, 1000, 'Idle');
+    }
+  }, 10_000);
+  maintenance.unref?.();
+
+  const stats = () => ({
+    rooms: rooms.size, players: claimedNames.size, connections: wss.clients.size,
+    uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
+  });
+
+  return {
+    http, wss, rooms, stats,
+    close: () => new Promise(resolveClose => {
+      clearInterval(heartbeat);
+      clearInterval(maintenance);
+      for (const socket of wss.clients) {
+        if (socket.room) send(socket, { type: 'room:closed', reason: 'The server is restarting.' });
+        closeSocket(socket, 1001, 'Server restarting');
+      }
+      const force = setTimeout(() => http.closeAllConnections?.(), 3000);
+      force.unref?.();
+      wss.close(() => http.close(() => { clearTimeout(force); resolveClose(); }));
+      http.closeIdleConnections?.();
+    }),
+  };
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+/* ------------------------------------------------------------------ */
+/* Entry point                                                        */
+/* ------------------------------------------------------------------ */
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   const service = createMultiplayerServer();
   const port = Math.max(1, Math.min(65535, Number(process.env.PORT) || 8787));
   const host = process.env.HOST || '0.0.0.0';
+  service.http.on('error', error => { console.error('HTTP server error:', error.message); process.exit(1); });
   service.http.listen(port, host, () => console.log(`AiSlopcraft online server listening on ${host}:${port}`));
+
+  // Hosting platforms send SIGTERM on every deploy/restart: tell players and exit cleanly.
+  let shuttingDown = false;
+  const shutdown = (reason, code = 0) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`${reason}; shutting down.`);
+    setTimeout(() => process.exit(code || 1), 10_000).unref();
+    service.close().then(() => process.exit(code));
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('unhandledRejection', reason => console.error('Unhandled rejection:', reason));
+  process.on('uncaughtException', error => { console.error('Uncaught exception:', error); shutdown('Uncaught exception', 1); });
 }
