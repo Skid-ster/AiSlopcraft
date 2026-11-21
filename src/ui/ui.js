@@ -106,6 +106,7 @@ export class UI {
           <button class="btn" id="btn-quit">Quit Game</button>
         </div>
         <div class="title-utility-row">
+          <button class="title-link" id="btn-help">How to Play</button>
           <button class="title-link" id="btn-pack">Resource Packs...</button>
           <button class="title-link" id="btn-saves">World Saves...</button>
         </div>
@@ -157,6 +158,7 @@ export class UI {
     div.querySelector('#btn-singleplayer').addEventListener('click', () => {
       this.game.audio.init(); this.game.audio.click(); this.openWorldSelection();
     });
+    div.querySelector('#btn-help').addEventListener('click', event => this.showHelp(event.currentTarget));
     const worldList = worldsScreen.querySelector('#world-list');
     const refreshWorldList = () => {
       const worlds = this.game.listSavedWorlds?.() || [];
@@ -1104,6 +1106,7 @@ export class UI {
       <div class="pause-inner">
         <h2>Game menu</h2>
         <button class="btn btn-big" id="btn-back">Back to game</button>
+        <button class="btn" id="btn-help-pause">How to Play</button>
         <button class="btn" id="btn-options2">Options...</button>
         <button class="btn" id="btn-respawn">Respawn</button>
         ${this.game.saveGame ? '<button class="btn" id="btn-save-now">Save World Now</button>' : ''}
@@ -1116,6 +1119,7 @@ export class UI {
       this.game.audio.click();
       this.setMode('game');
     });
+    pause.querySelector('#btn-help-pause').addEventListener('click', event => this.showHelp(event.currentTarget));
     pause.querySelector('#btn-options2').addEventListener('click', () => {
       this.game.audio.click();
       this.showOptions();
@@ -1137,6 +1141,49 @@ export class UI {
         this.game.saveAndQuit?.();
       });
     }
+
+    const help = document.createElement('div');
+    help.id = 'help-screen';
+    help.className = 'screen help-screen';
+    help.style.display = 'none';
+    help.setAttribute('role', 'dialog');
+    help.setAttribute('aria-modal', 'true');
+    help.setAttribute('aria-labelledby', 'help-title');
+    help.setAttribute('aria-describedby', 'help-description');
+    help.innerHTML = `
+      <section class="help-card">
+        <header class="help-heading"><div><h2 id="help-title">How to Play</h2><p id="help-description">A quick guide to getting started in AiSlopcraft.</p></div><button class="btn" id="help-close" type="button">Done</button></header>
+        <div class="help-columns">
+          <section><h3>Your first day</h3><ol>
+            <li>Choose <strong>Singleplayer</strong>, then create a Survival world.</li>
+            <li>Look around, break nearby trees, and turn logs into planks in your inventory.</li>
+            <li>Make a crafting table, tools, and a small shelter before night.</li>
+            <li>Explore for food and resources. This Beta-inspired game has <strong>no hunger or sprinting</strong>; food heals when used.</li>
+          </ol></section>
+          <section><h3>Controls</h3><dl class="help-controls">
+            <div><dt>W A S D</dt><dd>Move</dd></div><div><dt>Mouse</dt><dd>Look around · click the game to capture</dd></div>
+            <div><dt>Space / Shift</dt><dd>Jump / sneak</dd></div><div><dt>Left / right click</dt><dd>Mine or attack / place or use</dd></div>
+            <div><dt>E</dt><dd>Inventory · close containers</dd></div><div><dt>1–9 / wheel</dt><dd>Select a hotbar slot</dd></div>
+            <div><dt>Q / Ctrl+Q</dt><dd>Drop one item / drop a stack</dd></div><div><dt>Esc</dt><dd>Pause or close a screen</dd></div>
+            <div><dt>F3 / F1</dt><dd>Debug details / hide HUD</dd></div>
+            <div><dt>Tab / T</dt><dd>Multiplayer player list / chat</dd></div>
+          </dl></section>
+          <section><h3>Useful tips</h3><ul>
+            <li>Use <strong>Options → Controls</strong> to change key bindings and mouse sensitivity.</li>
+            <li>Use <strong>Options → Video Settings</strong> to lower render distance or render scale if performance is slow.</li>
+            <li>Pause to save your local world. <strong>World Saves...</strong> exports a portable backup.</li>
+            <li>In multiplayer, each player keeps their own inventory. Rooms are temporary and close if the host leaves or the server restarts.</li>
+          </ul></section>
+        </div>
+        <p class="help-footnote">This build currently requires a keyboard and mouse for gameplay; touch controls are not implemented yet.</p>
+      </section>`;
+    this.root.appendChild(help);
+    this.helpScreen = help;
+    this.helpCloseButton = help.querySelector('#help-close');
+    this.helpReturnMode = null;
+    this.helpReturnFocus = null;
+    this.helpCloseButton.addEventListener('click', () => this.closeHelp());
+    help.addEventListener('click', event => { if (event.target === help) this.closeHelp(); });
 
     // death
     const death = document.createElement('div');
@@ -1472,7 +1519,46 @@ export class UI {
     if (this.mode === 'chest' || this.mode === 'furnace') this.game.syncSharedState?.();
   }
 
+  showHelp(opener = document.activeElement) {
+    if (!this.helpScreen || this.helpScreen.style.display === 'flex') return;
+    this.helpReturnMode = this.mode;
+    this.helpReturnFocus = opener?.isConnected ? opener : null;
+    this.helpScreen.style.display = 'flex';
+    window.uiPause = true;
+    document.exitPointerLock?.();
+    this.helpCloseButton.focus();
+  }
+
+  closeHelp() {
+    if (!this.helpScreen || this.helpScreen.style.display === 'none') return;
+    this.helpScreen.style.display = 'none';
+    const returnMode = this.helpReturnMode;
+    const returnFocus = this.helpReturnFocus;
+    this.helpReturnMode = null;
+    this.helpReturnFocus = null;
+    window.uiPause = this.mode !== 'game';
+    if (returnMode === 'game') this.setMode('game');
+    else if (returnFocus?.isConnected) returnFocus.focus();
+  }
+
   onKey(e) {
+    if (this.helpScreen?.style.display === 'flex') {
+      if (e.code === 'Escape') {
+        e.preventDefault();
+        this.closeHelp();
+      } else if (e.code === 'Tab') {
+        const focusable = [...this.helpScreen.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), [tabindex]:not([tabindex="-1"])')];
+        if (focusable.length) {
+          const first = focusable[0], last = focusable.at(-1);
+          if (e.shiftKey && (document.activeElement === first || !this.helpScreen.contains(document.activeElement))) {
+            e.preventDefault(); last.focus();
+          } else if (!e.shiftKey && (document.activeElement === last || !this.helpScreen.contains(document.activeElement))) {
+            e.preventDefault(); first.focus();
+          }
+        }
+      }
+      return;
+    }
     if (e.target?.id === 'network-chat-input') {
       if (e.code === 'Escape') {
         e.preventDefault();

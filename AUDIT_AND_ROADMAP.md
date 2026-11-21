@@ -8,8 +8,9 @@ This is a risk-based code review, not a proof that every defect has been found. 
 
 ### Fixed in the working tree
 
-1. **A room guest could overwrite or delete another player's active projectile.** The relay accepted `projectile:update` and `projectile:remove` for any UID visible in a room snapshot. A malicious client could therefore change the projectile source/state or remove it, causing inconsistent shared combat. The relay now allows updates/removal only by the original source or the room host, and preserves the original owner when the host relays state. A multiplayer regression test checks that a late joiner cannot take over, mutate, or remove the host's projectile, and that the host can remove it normally.
-2. **Development-tool dependency advisories.** `npm audit` reported one high and one moderate advisory through Vite 5/esbuild. Vite was updated to 6.4.6; `npm audit` now reports **zero vulnerabilities**. This was tested with the production build and full test suite.
+1. **First-time players lacked an in-game guide.** Added a keyboard-accessible How to Play dialog on the title and pause menus with a first-day path, key controls, performance/save tips, and honest notices about temporary multiplayer rooms and missing touch controls. Escape/backdrop close it, focus returns to the opener, and pause remains paused. Added UI regression tests.
+2. **A room guest could overwrite or delete another player's active projectile.** The relay accepted `projectile:update` and `projectile:remove` for any UID visible in a room snapshot. A malicious client could therefore change the projectile source/state or remove it, causing inconsistent shared combat. The relay now allows updates/removal only by the original source or the room host, and preserves the original owner when the host relays state. A multiplayer regression test checks that a late joiner cannot take over, mutate, or remove the host's projectile, and that the host can remove it normally.
+3. **Development-tool dependency advisories.** `npm audit` reported one high and one moderate advisory through Vite 5/esbuild. Vite was updated to 6.4.6; `npm audit` now reports **zero vulnerabilities**. This was tested with the production build and full test suite.
 
 ### Open security/reliability risks found
 
@@ -52,12 +53,13 @@ This is a risk-based code review, not a proof that every defect has been found. 
 - [ ] Create a feature checklist tied to the stated Beta 1.7.3-inspired scope; mark exact behavior vs. approximations (AI, redstone, fluids, crafting, resource packs, sounds, world generation).
 - [ ] Use property-based or invariant tests for inventories/stack conservation, crafting/smelting, save normalization, world coordinates, and multiplayer state transitions.
 - [ ] Profile generation, chunk meshing, lighting, shadow/postprocessing passes, entity counts, and texture imports on representative low/high-end hardware; add budgets and regressions.
-- [ ] Add accessibility checks for contrast, focus, keyboard navigation, readable status/errors, reduced motion, and touch target sizes while retaining the classic visual style.
+- [x] Add a keyboard-accessible How to Play guide with focus management, Escape/backdrop dismissal, and gameplay/save/network guidance.
+- [ ] Complete accessibility checks for contrast, all-screen focus order, readable status/errors, reduced motion, and touch target sizes while retaining the classic visual style; touch gameplay itself still needs implementing.
 - **Exit criteria:** published feature matrix is honest about unsupported features; performance and accessibility targets are measured rather than assumed.
 
 ## Verification run for this pass
 
-- `npm test` — passed, including the new projectile authorization regression.
+- `npm test` — passed, including the How to Play accessibility/focus tests, projectile authorization regression, and forwarded-header parsing cases.
 - `npm run build` — passed on Vite 6.4.6.
 - `npm audit` — zero vulnerabilities after the Vite upgrade.
 - `git diff --check` — passed.

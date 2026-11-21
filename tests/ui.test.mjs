@@ -103,6 +103,14 @@ try {
   check('resource pack manager is available from the title screen', !!btn('btn-pack'));
   check('title keeps the classic game buttons and removes unfinished Realms/language controls', !!btn('btn-singleplayer') && !!btn('btn-multiplayer') && !btn('btn-realms') && !btn('btn-language') && !!btn('btn-pack') && !!btn('btn-saves') && !!btn('btn-quit'));
   check('title uses a two-column primary layout and explains online accounts', document.querySelectorAll('.title-primary-stack .btn').length === 2 && document.querySelector('.title-multiplayer-hint')?.textContent.includes('free account'));
+  btn('btn-help').click();
+  check('How to Play opens an accessible guide with real keyboard and gameplay instructions', visible('help-screen') && btn('help-screen').getAttribute('role') === 'dialog' && document.querySelector('#help-screen').textContent.includes('touch controls are not implemented'));
+  check('How to Play moves keyboard focus into the guide', document.activeElement === btn('help-close'));
+  const helpTab = new dom.window.KeyboardEvent('keydown', { code: 'Tab', bubbles: true, cancelable: true });
+  document.dispatchEvent(helpTab);
+  check('guide keeps keyboard focus inside its modal', helpTab.defaultPrevented && document.activeElement === btn('help-close'));
+  document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { code: 'Escape', bubbles: true, cancelable: true }));
+  check('Escape closes How to Play and returns focus to its opener', !visible('help-screen') && document.activeElement === btn('btn-help'));
   btn('btn-saves').click();
   check('portable world-save screen opens from the title', visible('world-save-screen') && !!btn('save-import-file'));
   btn('save-export').click();
@@ -325,6 +333,10 @@ try {
   // ---------- pause menu ----------
   ui.onKey(key('Escape'));
   check('Escape opens pause', ui.mode === 'pause' && visible('pause-screen'));
+  btn('btn-help-pause').click();
+  check('paused players can open How to Play without resuming the simulation', visible('help-screen') && ui.mode === 'pause' && window.uiPause);
+  btn('help-close').click();
+  check('closing the guide returns to the paused menu', !visible('help-screen') && visible('pause-screen') && ui.mode === 'pause');
   btn('btn-save-now').click();
   check('pause menu can save the local world immediately', calls.some(c => c[0] === 'game.saveGame'));
   btn('btn-options2').click();

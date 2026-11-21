@@ -85,7 +85,7 @@ For local development, run `npm run multiplayer` in one terminal and `npm run de
 | T | Multiplayer chat when connected |
 | Hold Tab | Show the multiplayer player list and live relay ping |
 
-Change difficulty, video, controls, sound, and gameplay options from the title or pause menu. Shader presets can be switched live in Video Settings. From the title screen, **Texture Packs...** opens the local pack importer.
+Change difficulty, video, controls, sound, and gameplay options from the title or pause menu. Shader presets can be switched live in Video Settings. The **How to Play** guide is available from the title and pause menus. This build currently requires a keyboard and mouse for gameplay; touch-only gameplay controls are not implemented. From the title screen, **Texture Packs...** opens the local pack importer.
 
 ## Managing Java 1.7.x texture packs
 
