@@ -1589,7 +1589,7 @@ function updateCrops(dt) {
 let placeCooldown = 0;
 const tntFuses = []; // {x, y, z, timer}
 document.addEventListener('mousedown', (e) => {
-  if (ui.mode !== 'game' || !player.pointerLocked) return;
+  if (ui.mode !== 'game' || !player.controlsActive) return;
   if (`Mouse${e.button}` === player.bindings.attack) {
     const target = vehicles.target(player);
     if (target && vehicles.remove(target)) {
@@ -1750,7 +1750,7 @@ function frame() {
           if (networkVehicleTimer <= 0) { game.publishVehicleState(vehicles.mounted, true); networkVehicleTimer = 0.15; }
         }
       }
-      if (player.leftDown && player.pointerLocked) {
+      if (player.leftDown && player.controlsActive) {
         if (mobs.raycastTarget(player, 3.5)) {
           mobs.attack(player, player.heldStack?.id ?? null, audio, 3.5, game.networkRoom?.role === 'guest'
             ? (uid, heldId) => game.multiplayerClient?.send('mob:attack', { uid, heldId })
@@ -1764,7 +1764,7 @@ function frame() {
       }
 
       // D. Continuous block placement with repeat cooldown
-      if (player.rightDown && player.pointerLocked) {
+      if (player.rightDown && player.controlsActive) {
         placeCooldown -= dt;
         if (placeCooldown <= 0) {
           tryPlaceBlock();
@@ -1829,7 +1829,7 @@ function frame() {
 
     // A. Target selection wireframe
     const hit = player.raycast(world, 5);
-    if (hit && player.pointerLocked && ui.mode === 'game') {
+    if (hit && player.controlsActive && ui.mode === 'game') {
       selectionWireframe.position.set(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5);
       selectionWireframe.visible = true;
     } else {
@@ -1837,7 +1837,7 @@ function frame() {
     }
 
     // B. Block break cracking stages (0-9)
-    if (player.mining.active && player.mining.total > 0 && player.pointerLocked && ui.mode === 'game') {
+    if (player.mining.active && player.mining.total > 0 && player.controlsActive && ui.mode === 'game') {
       const stage = Math.min(9, Math.floor((player.mining.progress / player.mining.total) * 10));
       updateCrackOverlayUV(stage);
       crackOverlayMesh.position.set(player.mining.x + 0.5, player.mining.y + 0.5, player.mining.z + 0.5);
@@ -1851,7 +1851,7 @@ function frame() {
       firstPersonArm.root.visible = true;
       firstPersonArm.setHeldItem(player.heldStack);
       const isMoving = player.onGround && Math.hypot(player.vel.x, player.vel.z) > 0.5;
-      firstPersonArm.update(dt, isMoving, player.leftDown && player.pointerLocked, 0);
+      firstPersonArm.update(dt, isMoving, player.leftDown && player.controlsActive, 0);
       lighting.refreshObject(firstPersonArm.root, world, player.pos, 1.62);
     } else {
       firstPersonArm.root.visible = false;
@@ -1900,7 +1900,7 @@ function frame() {
     }
 
     ui.update();
-    if (ui.hintEl) ui.hintEl.style.display = ui.mode === 'game' && !player.pointerLocked ? 'block' : 'none';
+    if (ui.hintEl) ui.hintEl.style.display = ui.mode === 'game' && !player.pointerLocked && !player.touchSupported ? 'block' : 'none';
     if (player.dead && ui.mode !== 'death') {
       vehicles.dismount(player, true);
       if (!game.keepInventory) {

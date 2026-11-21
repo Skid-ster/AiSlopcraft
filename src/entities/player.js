@@ -115,6 +115,11 @@ export class Player {
     this.stats = { distance: 0, jumps: 0, blocksPlaced: 0, blocksMined: 0 };
 
     this.keys = {};
+    this.touchKeys = new Set();
+    this.touchPointers = new Set();
+    this.touchActive = false;
+    this.touchSupported = (globalThis.navigator?.maxTouchPoints || 0) > 0
+      || !!globalThis.matchMedia?.('(pointer: coarse)').matches;
     this.pointerLocked = false;
     this.mouseDX = 0; this.mouseDY = 0;
     this.leftDown = false; this.rightDown = false;
@@ -123,7 +128,7 @@ export class Player {
     this.invertMouse = false;
 
     canvas.addEventListener('click', () => {
-      if (!this.pointerLocked && !window.uiPause) canvas.requestPointerLock?.();
+      if (!this.touchSupported && !this.pointerLocked && !window.uiPause) canvas.requestPointerLock?.();
     });
     document.addEventListener('pointerlockchange', () => {
       this.pointerLocked = document.pointerLockElement === canvas;
@@ -167,6 +172,31 @@ export class Player {
   }
 
   get heldStack() { return this.inventory[this.hotbarIndex]; }
+  get controlsActive() { return this.pointerLocked || this.touchActive; }
+
+  isKeyDown(code) { return !!this.keys[code] || this.touchKeys.has(code); }
+
+  setTouchKey(code, down) {
+    if (!code) return;
+    if (down) this.touchKeys.add(code);
+    else this.touchKeys.delete(code);
+  }
+
+  setTouchPointer(pointerId, active) {
+    if (active) this.touchPointers.add(pointerId);
+    else this.touchPointers.delete(pointerId);
+    this.touchActive = this.touchPointers.size > 0;
+  }
+
+  clearTouchInput() {
+    this.touchPointers.clear();
+    this.touchKeys.clear();
+    this.touchActive = false;
+    this.leftDown = false;
+    this.rightDown = false;
+    this.mining.active = false;
+    this.mining.progress = 0;
+  }
 
   get armorPoints() {
     let total = 0;
@@ -240,9 +270,9 @@ export class Player {
     this.pitch = Math.max(-lim, Math.min(lim, this.pitch));
 
     // movement input
-    const forward = (this.keys[this.bindings.forward] ? 1 : 0) - (this.keys[this.bindings.back] ? 1 : 0);
-    const strafe = (this.keys[this.bindings.right] ? 1 : 0) - (this.keys[this.bindings.left] ? 1 : 0);
-    this.sneaking = !!(this.keys[this.bindings.sneak]);
+    const forward = (this.isKeyDown(this.bindings.forward) ? 1 : 0) - (this.isKeyDown(this.bindings.back) ? 1 : 0);
+    const strafe = (this.isKeyDown(this.bindings.right) ? 1 : 0) - (this.isKeyDown(this.bindings.left) ? 1 : 0);
+    this.sneaking = !!(this.isKeyDown(this.bindings.sneak));
 
     // check fluids / ladders / cobwebs / ground material
     const bx = Math.floor(this.pos.x), bz = Math.floor(this.pos.z);
@@ -278,7 +308,7 @@ export class Player {
     // Creative players fly freely: jump rises and sneak descends. This branch
     // intentionally skips block collision and all survival physics/damage.
     if (this.gameMode === 'creative') {
-      const vertical = Number(!!this.keys[this.bindings.jump]) - Number(!!this.keys[this.bindings.sneak]);
+      const vertical = Number(!!this.isKeyDown(this.bindings.jump)) - Number(!!this.isKeyDown(this.bindings.sneak));
       this.vel.set(ax * 8.5, vertical * 8.5, az * 8.5);
       this.pos.addScaledVector(this.vel, dt);
       this.onGround = false;
@@ -304,11 +334,11 @@ export class Player {
     // gravity / swimming / ladders / cobweb
     if (this.inCobweb) {
       this.vel.y = Math.max(-1.2, this.vel.y - 8 * dt);
-      if (this.keys[this.bindings.jump]) this.vel.y = 0.8;
+      if (this.isKeyDown(this.bindings.jump)) this.vel.y = 0.8;
       this.fallStart = null;
     } else if (this.onLadder) {
       this.fallStart = null;
-      if (this.keys[this.bindings.jump] || len > 0) {
+      if (this.isKeyDown(this.bindings.jump) || len > 0) {
         this.vel.y = 3.6;
       } else if (this.sneaking) {
         this.vel.y = 0;
@@ -317,14 +347,14 @@ export class Player {
       }
     } else if (this.inWater || this.inLava) {
       this.vel.y -= 7 * dt;
-      if (this.keys[this.bindings.jump]) this.vel.y += 10.5 * dt;
+      if (this.isKeyDown(this.bindings.jump)) this.vel.y += 10.5 * dt;
       this.vel.y *= Math.pow(0.88, dt * 20);
     } else {
       this.vel.y -= 28 * dt;
     }
 
     // jump (0.42 blocks/tick = 8.4 b/s ≈ 1.25 block jump)
-    if (this.keys[this.bindings.jump] && this.onGround && !this.inWater && !this.onLadder && !this.inCobweb) {
+    if (this.isKeyDown(this.bindings.jump) && this.onGround && !this.inWater && !this.onLadder && !this.inCobweb) {
       this.vel.y = 8.45;
       this.onGround = false;
       this.stats.jumps++;
@@ -370,7 +400,7 @@ export class Player {
     const blockedX = this.moveAxis(0, dx, world) === 'blocked' || (dx !== 0 && this.vel.x === 0);
     const blockedZ = this.moveAxis(2, dz, world) === 'blocked' || (dz !== 0 && this.vel.z === 0);
     // Swim-up boost when jumping against a shoreline lip from water!
-    if ((this.inWater || this.inLava) && this.keys[this.bindings.jump] && (blockedX || blockedZ)) {
+    if ((this.inWater || this.inLava) && this.isKeyDown(this.bindings.jump) && (blockedX || blockedZ)) {
       this.vel.y = Math.max(this.vel.y, 6.2);
     }
     this.onGround = this.checkGround(world);

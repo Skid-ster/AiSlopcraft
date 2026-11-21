@@ -51,6 +51,19 @@ const player = {
   air: 300,
   dead: false,
   pointerLocked: false,
+  touchSupported: true,
+  touchKeys: new Set(),
+  touchPointers: new Set(),
+  touchActive: false,
+  bindings: { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sneak: 'ShiftLeft', attack: 'Mouse0', use: 'Mouse2' },
+  mouseDX: 0,
+  mouseDY: 0,
+  leftDown: false,
+  rightDown: false,
+  mining: { active: false, progress: 0 },
+  setTouchKey(code, down) { if (down) this.touchKeys.add(code); else this.touchKeys.delete(code); },
+  setTouchPointer(id, active) { if (active) this.touchPointers.add(id); else this.touchPointers.delete(id); this.touchActive = this.touchPointers.size > 0; },
+  clearTouchInput() { this.touchPointers.clear(); this.touchKeys.clear(); this.touchActive = false; this.leftDown = false; this.rightDown = false; this.mining.active = false; this.mining.progress = 0; },
   hotbarIndex: 0,
   cursorStack: null,
   inventory: new Array(36).fill(null),
@@ -102,9 +115,9 @@ try {
 
   check('resource pack manager is available from the title screen', !!btn('btn-pack'));
   check('title keeps the classic game buttons and removes unfinished Realms/language controls', !!btn('btn-singleplayer') && !!btn('btn-multiplayer') && !btn('btn-realms') && !btn('btn-language') && !!btn('btn-pack') && !!btn('btn-saves') && !!btn('btn-quit'));
-  check('title uses a two-column primary layout and explains online accounts', document.querySelectorAll('.title-primary-stack .btn').length === 2 && document.querySelector('.title-multiplayer-hint')?.textContent.includes('free account'));
+  check('title uses a two-column primary layout and explains no-account online play', document.querySelectorAll('.title-primary-stack .btn').length === 2 && document.querySelector('.title-multiplayer-hint')?.textContent.includes('no account'));
   btn('btn-help').click();
-  check('How to Play opens an accessible guide with real keyboard and gameplay instructions', visible('help-screen') && btn('help-screen').getAttribute('role') === 'dialog' && document.querySelector('#help-screen').textContent.includes('touch controls are not implemented'));
+  check('How to Play opens an accessible guide with real keyboard and gameplay instructions', visible('help-screen') && btn('help-screen').getAttribute('role') === 'dialog' && document.querySelector('#help-screen').textContent.includes('virtual joystick'));
   check('How to Play moves keyboard focus into the guide', document.activeElement === btn('help-close'));
   const helpTab = new dom.window.KeyboardEvent('keydown', { code: 'Tab', bubbles: true, cancelable: true });
   document.dispatchEvent(helpTab);
@@ -180,13 +193,28 @@ try {
 
   // ---------- title: multiplayer lobby ----------
   check('Multiplayer button is enabled', !btn('btn-multiplayer').disabled);
-  check('title clearly explains that multiplayer needs a free account', document.querySelector('.title-multiplayer-hint')?.textContent.includes('free account'));
+  check('title clearly explains that multiplayer uses a unique temporary name and no account', document.querySelector('.title-multiplayer-hint')?.textContent.includes('unique name') && document.querySelector('.title-multiplayer-hint')?.textContent.includes('no account'));
   btn('btn-multiplayer').click();
   check('Multiplayer lobby opens', document.getElementById('multiplayer-screen').style.display === 'flex');
   check('custom relay configuration is hidden under advanced settings by default', !!document.querySelector('.mp-custom-relay') && !document.querySelector('.mp-custom-relay').open);
-  check('multiplayer requires an account with username and password fields', !!btn('mp-username') && !!btn('mp-auth-password') && !!btn('mp-login') && !!btn('mp-signup'));
-  check('signup accepts the requested eight-character password example', btn('mp-auth-password').minLength === 8 && btn('mp-auth-password').maxLength === 128);
-  check('account panel warns about unavailable password resets and free-host storage loss', document.querySelector('#mp-auth-panel small')?.textContent.includes('free-hosted accounts may be lost'));
+  check('multiplayer has a unique-name field but no account or password controls', !!btn('mp-username') && !!btn('mp-claim') && !btn('mp-auth-password') && !btn('mp-login') && !btn('mp-signup'));
+  check('name rules explain the 3–20 character limit and connection-only reservation', btn('mp-username').minLength === 3 && btn('mp-username').maxLength === 20 && document.querySelector('#mp-name-panel').textContent.includes('while you are connected'));
+  check('public online leaderboard is visible before choosing a name', !!btn('mp-online-list') && !!btn('mp-online-refresh') && !document.querySelector('#mp-online-panel').hidden);
+  const fakeNameClient = {
+    playerName: null,
+    async claimPlayerName(name) { this.playerName = name; return { name }; },
+    async releasePlayerName() { this.playerName = null; },
+  };
+  ui.prepareMultiplayerClient = async () => fakeNameClient;
+  ui.multiplayerClient = fakeNameClient;
+  btn('mp-username').value = 'FriendlyBuilder';
+  await ui.claimMultiplayerName();
+  check('claiming a name enables hosting and hides the name form', fakeNameClient.playerName === 'FriendlyBuilder' && btn('mp-name-active').hidden === false && btn('mp-create').disabled === false);
+  ui.renderOnlinePlayers(['FriendlyBuilder', 'Visitor']);
+  check('global online leaderboard lists all connected names and identifies me', btn('mp-online-count').textContent === '2 online' && btn('mp-online-list').textContent.includes('Visitor') && btn('mp-online-list').textContent.includes('You'));
+  await ui.logoutMultiplayer();
+  check('log out releases the temporary name and disables room creation', fakeNameClient.playerName === null && btn('mp-name-panel').hidden === false && btn('mp-create').disabled);
+  ui.openMultiplayer();
   check('static-only hosting links to the Azure multiplayer setup guide', document.getElementById('mp-status').textContent.includes('static hosting') && document.querySelector('.mp-deploy-link')?.href.endsWith('#deploy-to-azure'));
   check('deployment help states the five-room and five-player limits', document.querySelector('.mp-deploy-help')?.textContent.includes('5 rooms') && document.querySelector('.mp-deploy-help')?.textContent.includes('5 players per room'));
   check('host can choose individual or forced shader and texture settings', !!btn('mp-visual-policy') && !!btn('mp-visual-policy').querySelector('[value="forced"]'));
@@ -198,10 +226,12 @@ try {
   let createdVisuals = null;
   let publishedEdits = [];
   ui.multiplayerClient = {
+    playerName: 'Host',
     async createRoom(options) { createdVisuals = options.visuals; return { name: 'Test room', gameMode: 'survival' }; },
     async request(type, payload) { if (type === 'world:snapshot') publishedEdits.push(...payload.entries); return { type: 'world:snapshot:accepted' }; },
     send() {},
   };
+  ui.updateMultiplayerNameUI();
   ui.connectMultiplayer = async () => ({ playerName: 'Host' });
   ui.enterMultiplayer = async () => {};
   btn('mp-visual-policy').value = 'individual';
@@ -265,6 +295,46 @@ try {
   check('mode is game', ui.mode === 'game');
   check('HUD visible', document.getElementById('hud').style.display === 'block');
   check('game unpaused (uiPause false)', global.window.uiPause === false);
+  check('touch gameplay controls appear in the active game', document.getElementById('touch-controls').style.display === 'block' && !!btn('touch-joystick') && !!btn('touch-mine') && !!btn('touch-use') && !!btn('touch-pause'));
+  const touchPointerEvent = (type, pointerId = 77, clientX = 10, clientY = 10) => {
+    const event = new dom.window.Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperties(event, { pointerId: { value: pointerId }, pointerType: { value: 'touch' }, clientX: { value: clientX }, clientY: { value: clientY } });
+    return event;
+  };
+  btn('touch-jump').dispatchEvent(touchPointerEvent('pointerdown'));
+  check('touch jump holds the configured jump input', player.touchActive && player.touchKeys.has('Space'));
+  btn('touch-jump').dispatchEvent(touchPointerEvent('pointerup'));
+  check('touch jump releases cleanly when the finger lifts', !player.touchActive && !player.touchKeys.has('Space'));
+  btn('touch-mine').dispatchEvent(touchPointerEvent('pointerdown', 78));
+  btn('touch-mine').dispatchEvent(touchPointerEvent('pointerdown', 82));
+  check('touch mine holds attack input', player.leftDown && player.touchActive);
+  btn('touch-mine').dispatchEvent(touchPointerEvent('pointercancel', 78));
+  check('releasing one of two attack touches keeps the other held', player.leftDown && player.touchActive);
+  btn('touch-mine').dispatchEvent(touchPointerEvent('pointerup', 82));
+  check('cancelled touch mine releases attack input after the last finger lifts', !player.leftDown && !player.touchActive);
+  btn('touch-use').dispatchEvent(touchPointerEvent('pointerdown', 79));
+  check('touch use holds block-use input', player.rightDown && player.touchActive);
+  btn('touch-use').dispatchEvent(touchPointerEvent('pointerup', 79));
+  check('touch use releases on finger lift', !player.rightDown && !player.touchActive);
+  const joystick = btn('touch-joystick');
+  Object.defineProperty(joystick, 'getBoundingClientRect', { value: () => ({ left: 0, top: 0, width: 100, height: 100 }) });
+  joystick.dispatchEvent(touchPointerEvent('pointerdown', 80, 50, 50));
+  joystick.dispatchEvent(touchPointerEvent('pointermove', 80, 50, 10));
+  check('virtual joystick moves in the direction of the dragged finger', player.touchKeys.has('KeyW'));
+  joystick.dispatchEvent(touchPointerEvent('pointerup', 80));
+  check('virtual joystick releases movement and recentres', !player.touchKeys.has('KeyW') && btn('touch-joystick-knob').style.transform === 'translate(0, 0)');
+  const lookZone = btn('touch-look-zone');
+  lookZone.dispatchEvent(touchPointerEvent('pointerdown', 81, 100, 100));
+  lookZone.dispatchEvent(touchPointerEvent('pointermove', 81, 112, 94));
+  check('dragging the look zone updates camera rotation input', player.mouseDX === 27 && player.mouseDY === -13.5);
+  lookZone.dispatchEvent(touchPointerEvent('pointerup', 81));
+  btn('touch-jump').dispatchEvent(touchPointerEvent('pointerdown', 83));
+  window.dispatchEvent(new dom.window.Event('blur'));
+  check('window focus loss clears held touch keys and pointers', !player.touchActive && !player.touchKeys.has('Space'));
+  btn('touch-pause').click();
+  check('touch pause button opens pause menu and releases gameplay input', ui.mode === 'pause' && !player.touchActive && document.getElementById('touch-controls').style.display === 'none');
+  btn('btn-back').click();
+  check('resuming restores touch controls', ui.mode === 'game' && document.getElementById('touch-controls').style.display === 'block');
 
   // ---------- hotbar tooltip ----------
   player.inventory[1] = { id: PLANKS, count: 2, damage: 0 };
@@ -322,6 +392,16 @@ try {
   check('E closes inventory, back to game', ui.mode === 'game' && !visible('inventory-screen'));
   check('cursor stack returned via addItem on close',
     calls.some(c => c[0] === 'addItem' && c[1] === STICK && c[2] === 4));
+  ui.setMode('inventory');
+  check('touch users get a visible close control when gameplay controls are hidden in inventory', !btn('touch-panel-return').hidden && document.getElementById('touch-controls').style.display === 'none');
+  btn('touch-panel-return').click();
+  check('touch close control returns from inventory to the game', ui.mode === 'game' && btn('touch-panel-return').hidden);
+  for (const panelMode of ['crafting', 'furnace', 'chest']) {
+    ui.setMode(panelMode);
+    check(`touch close control is available in ${panelMode} panels`, !btn('touch-panel-return').hidden);
+    btn('touch-panel-return').click();
+    check(`touch close control exits ${panelMode} panels`, ui.mode === 'game');
+  }
 
   // Cake uses three milk buckets, which must be returned to the crafting grid.
   ui.setMode('crafting');
