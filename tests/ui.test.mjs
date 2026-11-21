@@ -101,7 +101,8 @@ try {
   ui = new UI(game);
 
   check('resource pack manager is available from the title screen', !!btn('btn-pack'));
-  check('title keeps Singleplayer and Multiplayer, with no unsupported Realms button', !!btn('btn-singleplayer') && !!btn('btn-multiplayer') && !btn('btn-realms') && !!btn('btn-pack') && !!btn('btn-saves') && !!btn('btn-quit'));
+  check('title keeps the classic game buttons and removes unfinished Realms/language controls', !!btn('btn-singleplayer') && !!btn('btn-multiplayer') && !btn('btn-realms') && !btn('btn-language') && !!btn('btn-pack') && !!btn('btn-saves') && !!btn('btn-quit'));
+  check('title uses a two-column primary layout and explains online accounts', document.querySelectorAll('.title-primary-stack .btn').length === 2 && document.querySelector('.title-multiplayer-hint')?.textContent.includes('free account'));
   btn('btn-saves').click();
   check('portable world-save screen opens from the title', visible('world-save-screen') && !!btn('save-import-file'));
   btn('save-export').click();
@@ -171,7 +172,7 @@ try {
 
   // ---------- title: multiplayer lobby ----------
   check('Multiplayer button is enabled', !btn('btn-multiplayer').disabled);
-  check('title clearly tells players where to create an online account', document.querySelector('.title-multiplayer-hint')?.textContent.includes('sign up or log in'));
+  check('title clearly explains that multiplayer needs a free account', document.querySelector('.title-multiplayer-hint')?.textContent.includes('free account'));
   btn('btn-multiplayer').click();
   check('Multiplayer lobby opens', document.getElementById('multiplayer-screen').style.display === 'flex');
   check('custom relay configuration is hidden under advanced settings by default', !!document.querySelector('.mp-custom-relay') && !document.querySelector('.mp-custom-relay').open);

@@ -99,10 +99,9 @@ export class UI {
         <div class="title-primary-stack">
           <button class="btn" id="btn-singleplayer">Singleplayer</button>
           <button class="btn" id="btn-multiplayer">Multiplayer</button>
-          <small class="title-multiplayer-hint">Online play: sign up or log in from Multiplayer</small>
+          <small class="title-multiplayer-hint">Online play requires a free account</small>
         </div>
         <div class="title-button-row title-secondary-row title-controls-row">
-          <button class="btn language-button" id="btn-language" title="Language settings are not available yet" aria-label="Language settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c5 5 5 13 0 18m0-18c-5 5-5 13 0 18"/></svg></button>
           <button class="btn" id="btn-options">Options...</button>
           <button class="btn" id="btn-quit">Quit Game</button>
         </div>
@@ -157,9 +156,6 @@ export class UI {
     this.worldCreateScreen = createScreen;
     div.querySelector('#btn-singleplayer').addEventListener('click', () => {
       this.game.audio.init(); this.game.audio.click(); this.openWorldSelection();
-    });
-    div.querySelector('#btn-language').addEventListener('click', () => {
-      div.querySelector('#title-status').textContent = 'Language selection is not available in this browser build.';
     });
     const worldList = worldsScreen.querySelector('#world-list');
     const refreshWorldList = () => {
