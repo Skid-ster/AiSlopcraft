@@ -14,6 +14,7 @@ This is a risk-based code review, not a proof that every defect has been found. 
 4. **Development-tool dependency advisories.** `npm audit` reported one high and one moderate advisory through Vite 5/esbuild. Vite was updated to 6.4.6; `npm audit` now reports **zero vulnerabilities**. This was tested with the production build and full test suite.
 5. **Production HTTP responses lacked baseline browser security headers.** The combined static/relay server now sends a restrictive self-hosted content-security policy, same-origin frame protection, strict-origin referrer handling, MIME sniffing protection, and a permissions policy. Multiplayer WebSocket, inline UI style updates, and locally generated/imported imagery are explicitly accommodated; response headers are covered by integration tests.
 6. **Release checks were only run manually.** Added a pull-request CI workflow that installs from the lockfile, runs the full suite, builds the site, and audits dependencies. GitHub Pages now uses the same Node 22 line as the documented server deployment.
+7. **Render had no repeatable post-deploy check.** The Blueprint now explicitly stays at one instance for process-local room/name state, and `npm run smoke:deploy` verifies the combined site, health endpoint, limits, secure WebSocket, public roster, and name claim/release against a supplied `BASE_URL`.
 
 ### Open security/reliability risks found
 
@@ -47,7 +48,8 @@ This is a risk-based code review, not a proof that every defect has been found. 
 - [ ] Define server-authoritative ownership for player positions, inventory, pickups, combat, vehicles, world edits, and container transactions; migrate incrementally and retain the five-room/five-player caps.
 - [ ] Add integration/load tests for five rooms × five players, join snapshots near caps, malformed/oversized traffic, slow clients, duplicate-name races, and server restart behavior.
 - [ ] Preserve the chosen temporary-session contract (no accounts or persistent player records). If the service scales beyond one instance, add a shared online-name/room coordinator; do not add permanent profiles unless the product requirements change.
-- [ ] Validate deployment from a clean environment: build, health endpoint, secure WebSocket, simultaneous name claims from two clients, live leaderboard updates, room close/restart. Only call hosting live after this has been verified.
+- [x] Add `npm run smoke:deploy` to verify root page, health/limits, secure WebSocket, live roster, and name claim/release after deployment; validated it against the local production server.
+- [ ] Validate a real Render deployment from a clean environment, including simultaneous claims from separate clients, room close/restart, and free-service wake/reconnect behavior. Only call hosting live after this has been verified.
 - **Exit criteria:** observed hosting behavior matches documented limits and data-loss semantics, with tested recovery steps.
 
 ### Phase 3 — gameplay completeness and polish
@@ -64,7 +66,7 @@ This is a risk-based code review, not a proof that every defect has been found. 
 - `npm ci --include=dev` — clean lockfile install completed.
 - `npm test` — passed, including How to Play accessibility/focus, touch input lifecycle and panel return, same-origin WebSocket URL selection, live-player broadcasts/name throttling, projectile authorization, proxy parsing, and production-header regressions.
 - `npm run build` — passed on Vite 6.4.6.
-- Production smoke test — built root page, `/health`, security headers, WebSocket online list, name claim, and release passed.
+- `BASE_URL=http://127.0.0.1:8791 npm run smoke:deploy` against the built local production server — passed (root, health/limits, security headers, WebSocket list, claim, release). This does not verify a live Render deployment.
 - `npm audit` — zero vulnerabilities.
 - `git diff --check` — passed.
 

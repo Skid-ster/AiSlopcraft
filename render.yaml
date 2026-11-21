@@ -3,6 +3,8 @@ services:
     name: aislopcraft-online
     runtime: node
     plan: free
+    numInstances: 1 # Rooms and claimed names are process-local; keep one instance.
+    autoDeploy: true
     buildCommand: npm ci --include=dev && npm run build
     startCommand: npm run multiplayer
     healthCheckPath: /health
