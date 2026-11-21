@@ -198,11 +198,16 @@ try {
   check('Multiplayer button is enabled', !btn('btn-multiplayer').disabled);
   check('title clearly explains that multiplayer uses a unique temporary name and no account', document.querySelector('.title-multiplayer-hint')?.textContent.includes('unique name') && document.querySelector('.title-multiplayer-hint')?.textContent.includes('no account'));
   btn('btn-multiplayer').click();
-  check('Multiplayer lobby opens', document.getElementById('multiplayer-screen').style.display === 'flex');
+  check('Multiplayer lobby opens as an accessible dialog and focuses the name field', document.getElementById('multiplayer-screen').style.display === 'flex' && document.getElementById('multiplayer-screen').getAttribute('role') === 'dialog' && document.activeElement === btn('mp-username'));
+  document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { code: 'Escape', bubbles: true, cancelable: true }));
+  check('Escape closes Multiplayer and restores focus to its opener', document.getElementById('multiplayer-screen').style.display === 'none' && document.activeElement === btn('btn-multiplayer'));
+  btn('btn-multiplayer').click();
   check('custom relay configuration is hidden under advanced settings by default', !!document.querySelector('.mp-custom-relay') && !document.querySelector('.mp-custom-relay').open);
   check('multiplayer has a unique-name field but no account or password controls', !!btn('mp-username') && !!btn('mp-claim') && !!btn('mp-release-name') && !btn('mp-auth-password') && !btn('mp-login') && !btn('mp-signup'));
-  check('name rules explain the 3–20 character limit and connection-only reservation', btn('mp-username').minLength === 3 && btn('mp-username').maxLength === 20 && document.querySelector('#mp-name-panel').textContent.includes('reserved while connected'));
-  check('public online leaderboard is visible before choosing a name', !!btn('mp-online-list') && !!btn('mp-online-refresh') && !document.querySelector('#mp-online-panel').hidden);
+  check('name rules explain the 3–20 character limit and connection-only reservation', btn('mp-username').minLength === 3 && btn('mp-username').maxLength === 20 && document.querySelector('#mp-name-panel').textContent.includes('held while connected'));
+  check('multiplayer quick path keeps advanced options and player details collapsed', !document.querySelector('.mp-more-options').open && !document.querySelector('.mp-invite-options').open && !document.querySelector('#mp-online-panel').open);
+  check('create and join are the primary lobby actions with useful defaults', btn('mp-world-name').value === 'My world' && btn('mp-mode').value === 'survival' && btn('mp-create').textContent === 'Create public world' && !!btn('mp-refresh'));
+  check('public online player list is optional and can be expanded', !!btn('mp-online-list') && !!btn('mp-online-refresh') && !document.querySelector('#mp-online-panel').hidden);
   const fakeNameClient = {
     playerName: null,
     async claimPlayerName(name) { this.playerName = name; return { name }; },
@@ -217,6 +222,20 @@ try {
   check('global online leaderboard lists all connected names and identifies me', btn('mp-online-count').textContent === '2 online' && btn('mp-online-list').textContent.includes('Visitor') && btn('mp-online-list').textContent.includes('You'));
   await ui.releaseMultiplayerName();
   check('releasing the temporary name disables room creation', fakeNameClient.playerName === null && btn('mp-name-panel').hidden === false && btn('mp-create').disabled);
+  const lockedRoom = { name: 'Private world', code: 'ABC234', players: 1, maxPlayers: 5, gameMode: 'survival', passwordProtected: true, visualMode: 'individual' };
+  const roomService = {
+    playerName: 'FriendlyBuilder',
+    async listRooms() { return { rooms: [lockedRoom] }; },
+    async listOnlinePlayers() { return { players: ['FriendlyBuilder'] }; },
+  };
+  ui.multiplayerClient = roomService;
+  ui.multiplayerName = 'FriendlyBuilder';
+  ui.prepareMultiplayerClient = async () => roomService;
+  ui.updateMultiplayerNameUI();
+  await ui.refreshPublicRooms();
+  check('public room list refreshes and displays a password hint', document.querySelector('.mp-room')?.textContent.includes('password required') && !document.querySelector('.mp-room').disabled);
+  document.querySelector('.mp-room').click();
+  check('choosing a protected public room opens invite details and focuses its password field', btn('mp-code').value === 'ABC234' && document.querySelector('.mp-invite-options').open && document.activeElement === btn('mp-join-password'));
   ui.openMultiplayer();
   check('static-only hosting links to the Azure multiplayer setup guide', document.getElementById('mp-status').textContent.includes('static hosting') && document.querySelector('.mp-deploy-link')?.href.endsWith('#deploy-to-azure'));
   check('deployment help states the five-room and five-player limits', document.querySelector('.mp-deploy-help')?.textContent.includes('5 rooms') && document.querySelector('.mp-deploy-help')?.textContent.includes('5 players per room'));
@@ -250,6 +269,10 @@ try {
   check('forced policy enables explicit shader and texture-pack selection', !btn('mp-host-shader').disabled && !btn('mp-host-texture-pack').disabled);
   await ui.createMultiplayerRoom();
   check('forced room creation sends the selected shader and host texture pack', createdVisuals?.mode === 'forced' && createdVisuals.shaderStyle === 'psx' && createdVisuals.resourcePack?.name === 'Host Pack');
+  check('Lobby offers public/private and survival/creative options',
+    document.getElementById('mp-access').options.length === 2 && document.getElementById('mp-mode').options.length === 2);
+  btn('mp-back').click();
+  check('Back closes Multiplayer and returns keyboard focus to its opener', document.getElementById('multiplayer-screen').style.display === 'none' && document.activeElement === btn('btn-multiplayer'));
   game.networkRoom = { name: 'Test room', gameMode: 'survival', code: 'ABC234', id: 'host-id', playerName: 'Host', role: 'host', maxPlayers: 5,
     players: [{ id: 'host-id', name: 'Host', role: 'host' }, { id: 'guest-id', name: 'Guest', role: 'player' }] };
   game.remotePlayers = new Map([['guest-id', {}]]);
@@ -271,9 +294,6 @@ try {
   game.networkRoom = null;
   game.multiplayerClient = null;
   ui.updateNetworkPanel();
-  check('Lobby offers public/private and survival/creative options',
-    document.getElementById('mp-access').options.length === 2 && document.getElementById('mp-mode').options.length === 2);
-  btn('mp-back').click();
 
   // ---------- title: Singleplayer ----------
   testSavedWorlds = [{ id: 'save-id-1', seed: 'map-seed-1', name: 'Existing World', gameMode: 'survival' }];

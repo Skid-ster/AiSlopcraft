@@ -1151,3 +1151,70 @@ html, body {
   .network-room-line { align-items: flex-start; }
   .network-room-line button { max-width: 86px; }
 }
+/* Simple, fast multiplayer lobby: default path is name → create or join. */
+.multiplayer-screen { align-items: center; }
+.multiplayer-card { width: min(820px, 96vw); }
+.multiplayer-card > h2 { margin-bottom: 4px; }
+.multiplayer-card > .mp-connect-help { margin-bottom: 10px; }
+.mp-name-panel { margin: 8px 0 12px; padding: 12px 14px; }
+.mp-name-panel h3 { margin-bottom: 5px; }
+.mp-name-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; margin-top: 8px; }
+.mp-name-field { margin: 0 !important; }
+.mp-name-entry #mp-claim { width: auto; min-width: 132px; margin: 0; }
+#mp-name-help { display: block; margin-top: 7px; }
+.mp-name-active { margin: 8px 0 12px; }
+.mp-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; }
+.mp-columns .mp-action-card { display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 14px; }
+.mp-action-card > h3 { margin-bottom: 3px; }
+.mp-card-help { min-height: 2.8em; margin: 0 0 5px; color: var(--ui-muted); font: 11px/1.5 'Pixel UI', monospace; }
+.mp-action-card label { margin: 6px 0; }
+.mp-action-card .mp-primary-action { margin-top: 10px; }
+.mp-action-card .mp-more-options { margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.18); }
+.mp-more-options > summary, .mp-invite-options > summary, .mp-custom-relay > summary {
+  min-height: 36px; display: flex; align-items: center; color: #e9e2cf; font: 11px/1.4 'Pixel UI', monospace;
+  cursor: pointer; list-style-position: inside;
+}
+.mp-more-options[open] > summary, .mp-invite-options[open] > summary { margin-bottom: 7px; }
+.mp-more-options > summary:hover, .mp-invite-options > summary:hover, .mp-custom-relay > summary:hover { color: #fff1a8; }
+.mp-more-options > label { margin: 8px 0; }
+.mp-more-options .mp-visual-help { display: block; margin: 4px 0 0; }
+.mp-room-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 2px 0 7px; color: #eee; font: 11px 'Pixel UI', monospace; }
+.multiplayer-card .mp-text-action { min-height: 36px; padding: 6px 10px; border: 1px solid #17120f; color: #fff; background: linear-gradient(#77736a,#4d4a43); font: 10px 'Pixel UI', monospace; cursor: pointer; }
+.multiplayer-card .mp-text-action:hover { background: linear-gradient(#81965d,#5d713e); }
+.mp-room-list { min-height: 92px; max-height: 200px; align-content: start; padding: 2px 0; }
+.mp-room-list > span { align-self: center; padding: 12px 8px; color: #d0cec6; font: 11px/1.5 'Pixel UI', monospace; }
+.mp-room { text-shadow: 1px 1px #111; }
+.mp-invite-options { margin-top: auto; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.18); }
+.mp-invite-options label { margin: 6px 0; }
+.mp-invite-options .btn { margin-top: 4px; }
+.mp-online-panel { margin: 10px 0 0; padding: 0 12px; }
+.mp-online-panel > summary { min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #f1e39b; font: 11px 'Pixel UI', monospace; cursor: pointer; list-style-position: inside; }
+.mp-online-panel[open] > summary { margin-bottom: 5px; }
+.mp-online-panel > small { display: block; margin: 5px 0 10px; }
+.mp-online-panel > .btn { margin: 4px 0 0; }
+.mp-online-panel[open] { padding-bottom: 10px; }
+.mp-status { margin: 9px 0; min-height: 0; }
+.mp-footer { padding-top: 8px; }
+.mp-footer > span { min-width: 0; }
+.multiplayer-card .btn:disabled, .multiplayer-card button:disabled {
+  opacity: .55; color: #d0cec6; cursor: not-allowed; filter: saturate(.55);
+}
+.mp-room:focus-visible, .mp-text-action:focus-visible, .mp-more-options > summary:focus-visible,
+.mp-invite-options > summary:focus-visible, .mp-online-panel > summary:focus-visible {
+  outline: 3px solid #ffe681; outline-offset: 3px;
+}
+
+@media (max-width: 600px) {
+  .multiplayer-screen { padding: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom)); }
+  .multiplayer-card { width: 100%; padding: 12px; }
+  .mp-connect-help { text-align: left; }
+  .mp-name-panel { padding: 11px; }
+  .mp-name-entry { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .mp-name-entry #mp-claim { width: 100%; }
+  .mp-columns { grid-template-columns: minmax(0, 1fr); gap: 9px; }
+  .mp-action-card .mp-card-help { min-height: 0; }
+  .mp-room-list { max-height: min(32vh, 220px); }
+  .mp-footer { flex-direction: row; align-items: center; gap: 10px; }
+  .mp-footer .btn { width: auto; min-width: 90px; flex: 0 0 auto; }
+  .mp-footer > span { font-size: 9px; }
+}
