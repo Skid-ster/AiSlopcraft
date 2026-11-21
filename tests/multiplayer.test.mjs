@@ -93,7 +93,7 @@ function waitFor(socket, predicate, timeout = 3000) {
 function request(socket, type, payload = {}) {
   const requestId = `${type}-${Math.random()}`;
   const response = waitFor(socket, message => message.requestId === requestId);
-  socket.send(JSON.stringify({ type, requestId, ...payload }));
+  socket.send(JSON.stringify({ type, requestId, ...(['room:create', 'room:join'].includes(type) ? { edition: 'classic' } : {}), ...payload }));
   return response;
 }
 function crc32(bytes) {
@@ -182,10 +182,12 @@ try {
   assert.equal(created.visuals.resourcePack.name, 'Local pack');
   assert.ok(created.visuals.resourcePack.atlasData.startsWith('data:image/png;base64,'));
   assert.match(created.code, /^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/);
-  const initialWorld = await request(host, 'world:snapshot', { entries: [['12,70,-8', [5, 2]], ['13,70,-8', [1, 0]]] });
+  const initialWorld = await request(host, 'world:snapshot', { entries: [['12,40,-8', [5, 2]], ['13,40,-8', [1, 0]]] });
   assert.equal(initialWorld.type, 'world:snapshot:accepted', 'host can efficiently publish saved edits in a bounded batch');
   assert.equal(initialWorld.count, 2);
-  assert.deepEqual(service.rooms.get(created.code).edits.get('12,70,-8'), [5, 2]);
+  assert.deepEqual(service.rooms.get(created.code).edits.get('12,40,-8'), [5, 2]);
+  const outOfBoundsClassicEdit = await request(host, 'world:snapshot', { entries: [['0,64,0', [1, 0]]] });
+  assert.equal(outOfBoundsClassicEdit.type, 'error', 'Classic multiplayer rejects edits above its 64-block build limit');
 
   const wrongPass = await connect();
   const rejected = await request(wrongPass, 'room:join', { code: created.code, playerName: 'Intruder', password: 'wrong' });
@@ -210,22 +212,22 @@ try {
   const joinedNotice = await joinedEvent;
   assert.equal(joinedNotice.name, 'Builder');
   assert.equal(joinedNotice.role, 'player', 'existing clients receive player-list role updates');
-  const guestSnapshotRejected = await request(guest, 'world:snapshot', { entries: [['1,70,1', [1, 0]]] });
+  const guestSnapshotRejected = await request(guest, 'world:snapshot', { entries: [['1,40,1', [1, 0]]] });
   assert.equal(guestSnapshotRejected.type, 'error', 'only the host can publish the initial world snapshot');
 
   const remoteEdit = waitFor(guest, message => message.type === 'world:edit');
-  host.send(JSON.stringify({ type: 'world:edit', edit: { x: 4, y: 70, z: -3, id: 1, meta: 0 } }));
-  assert.deepEqual((await remoteEdit).edit, { x: 4, y: 70, z: -3, id: 1, meta: 0 });
+  host.send(JSON.stringify({ type: 'world:edit', edit: { x: 4, y: 40, z: -3, id: 1, meta: 0 } }));
+  assert.deepEqual((await remoteEdit).edit, { x: 4, y: 40, z: -3, id: 1, meta: 0 });
 
   const reverseEdit = waitFor(host, message => message.type === 'world:edit');
-  guest.send(JSON.stringify({ type: 'world:edit', edit: { x: 4, y: 70, z: -3, id: 0, meta: 0 } }));
+  guest.send(JSON.stringify({ type: 'world:edit', edit: { x: 4, y: 40, z: -3, id: 0, meta: 0 } }));
   assert.equal((await reverseEdit).edit.id, 0, 'air edits replicate so old blocks are removed');
 
   const newcomer = await connect('LateJoiner');
   const snapshot = waitFor(newcomer, message => message.type === 'world:snapshot' && message.done);
 
   const itemNotice = waitFor(guest, message => message.type === 'item:snapshot');
-  host.send(JSON.stringify({ type: 'item:snapshot', items: [{ uid: 'drop-1', id: 1, count: 3, damage: 0, pos: [4.5, 71, -2.5], vy: 0, age: 2 }] }));
+  host.send(JSON.stringify({ type: 'item:snapshot', items: [{ uid: 'drop-1', id: 1, count: 3, damage: 0, pos: [4.5, 41, -2.5], vy: 0, age: 2 }] }));
   assert.equal((await itemNotice).items[0].uid, 'drop-1', 'shared item drops replicate from the host');
   const hostStateNotice = waitFor(guest, message => message.type === 'game:state');
   host.send(JSON.stringify({ type: 'game:state', state: { timeOfDay: 0.4, chests: [['1,2,3', new Array(27).fill(null)]], furnaces: [] } }));
@@ -234,19 +236,19 @@ try {
   host.send(JSON.stringify({ type: 'mob:snapshot', mobs: [{ uid: 'mob-1', type: 'zombie', pos: [5, 70, 5], yaw: 1, hp: 16, sheared: false, fuse: -1 }] }));
   assert.equal((await mobNotice).mobs[0].uid, 'mob-1', 'host mob state replicates to guests');
   const stateOnHost = waitFor(host, message => message.type === 'player:state' && message.id === joined.id);
-  guest.send(JSON.stringify({ type: 'player:state', state: { x: 5, y: 70, z: 4, yaw: 0, pitch: 0, dead: false } }));
+  guest.send(JSON.stringify({ type: 'player:state', state: { x: 5, y: 40, z: 4, yaw: 0, pitch: 0, dead: false } }));
   await stateOnHost;
   const attackOnHost = waitFor(host, message => message.type === 'mob:attack');
   guest.send(JSON.stringify({ type: 'mob:attack', uid: 'mob-1', heldId: 276 }));
   assert.equal((await attackOnHost).attacker.id, joined.id, 'guest mob attacks are forwarded for host validation');
   const tntOnHost = waitFor(host, message => message.type === 'tnt:ignite');
-  guest.send(JSON.stringify({ type: 'tnt:ignite', x: 5, y: 70, z: 5 }));
+  guest.send(JSON.stringify({ type: 'tnt:ignite', x: 5, y: 40, z: 5 }));
   assert.equal((await tntOnHost).x, 5, 'nearby guest TNT ignitions are forwarded to the host simulator');
   const vehicleNotice = waitFor(guest, message => message.type === 'vehicle:update');
   host.send(JSON.stringify({ type: 'vehicle:update', riding: false, vehicle: { uid: 'boat-1', type: 'boat', pos: [6, 70, 6], rotation: 0, vx: 1, vz: 0 } }));
   assert.equal((await vehicleNotice).vehicle.uid, 'boat-1', 'vehicle state is replicated across the room');
   const projectileNotice = waitFor(guest, message => message.type === 'projectile:update');
-  host.send(JSON.stringify({ type: 'projectile:update', projectile: { uid: 'arrow-1', owner: 'mob', pos: [6, 71, 6], vel: [1, 0, 0], age: 0.4 } }));
+  host.send(JSON.stringify({ type: 'projectile:update', projectile: { uid: 'arrow-1', owner: 'mob', pos: [6, 41, 6], vel: [1, 0, 0], age: 0.4 } }));
   assert.equal((await projectileNotice).projectile.uid, 'arrow-1', 'in-flight projectiles replicate to other players');
   const spawnOnHost = waitFor(host, message => message.type === 'item:spawn' && message.item.id === 2);
   const spawnOnPeer = waitFor(guest, message => message.type === 'item:spawn' && message.item.id === 2);
@@ -265,8 +267,8 @@ try {
   const newcomerJoined = await request(newcomer, 'room:join', { code: created.code, playerName: 'Late joiner', password: 'blockparty' });
   assert.equal(newcomerJoined.type, 'room:joined');
   const savedSnapshot = await snapshot;
-  assert.ok(savedSnapshot.entries.some(([key, [id]]) => key === '4,70,-3' && id === 0), 'new players receive current world edits');
-  assert.ok(savedSnapshot.entries.some(([key, [id, meta]]) => key === '12,70,-8' && id === 5 && meta === 2), 'joining snapshots include the host-published saved world batches');
+  assert.ok(savedSnapshot.entries.some(([key, [id]]) => key === '4,40,-3' && id === 0), 'new players receive current world edits');
+  assert.ok(savedSnapshot.entries.some(([key, [id, meta]]) => key === '12,40,-8' && id === 5 && meta === 2), 'joining snapshots include the host-published saved world batches');
   assert.equal((await lateItems).items[0].uid, 'drop-1', 'late joiners receive current dropped items');
   assert.equal((await lateState).state.timeOfDay, 0.4, 'late joiners receive shared state');
   assert.equal((await lateMobs).mobs[0].uid, 'mob-1', 'late joiners receive current mobs');
@@ -276,7 +278,7 @@ try {
   newcomer.send(JSON.stringify({ type: 'projectile:remove', uid: 'arrow-1' }));
   await request(newcomer, 'ping'); // Confirms the relay processed both preceding messages.
   assert.equal(service.rooms.get(created.code).projectiles.get('arrow-1').sourceId, created.id, 'a guest cannot take ownership of another player’s projectile');
-  assert.deepEqual(service.rooms.get(created.code).projectiles.get('arrow-1').pos, [6, 71, 6], 'a guest cannot overwrite another player’s projectile state');
+  assert.deepEqual(service.rooms.get(created.code).projectiles.get('arrow-1').pos, [6, 41, 6], 'a guest cannot overwrite another player’s projectile state');
   assert.equal(service.rooms.get(created.code).projectiles.has('arrow-1'), true, 'a guest cannot remove another player’s projectile');
   const projectileRemoved = waitFor(guest, message => message.type === 'projectile:remove' && message.uid === 'arrow-1');
   host.send(JSON.stringify({ type: 'projectile:remove', uid: 'arrow-1' }));
@@ -284,13 +286,13 @@ try {
   assert.equal(service.rooms.get(created.code).projectiles.has('arrow-1'), false, 'projectile owners can remove their own projectiles');
   newcomer.send(JSON.stringify({ type: 'item:pickup', uid: 'drop-1' }));
   const pickupStateOnHost = waitFor(host, message => message.type === 'player:state' && message.id === newcomerJoined.id);
-  newcomer.send(JSON.stringify({ type: 'player:state', state: { x: 50, y: 70, z: 50, yaw: 0, pitch: 0, dead: false } }));
+  newcomer.send(JSON.stringify({ type: 'player:state', state: { x: 50, y: 40, z: 50, yaw: 0, pitch: 0, dead: false } }));
   await pickupStateOnHost;
   assert.equal(service.rooms.get(created.code).items.has('drop-1'), true, 'players cannot claim a shared drop from across the map');
   await new Promise(resolve => setTimeout(resolve, 45)); // Player-position updates are intentionally capped at 25 Hz.
   const itemRemoved = waitFor(host, message => message.type === 'item:remove' && message.uid === 'drop-1');
   const pickupGrant = waitFor(newcomer, message => message.type === 'item:pickup');
-  newcomer.send(JSON.stringify({ type: 'player:state', state: { x: 4.5, y: 70, z: -2.5, yaw: 0, pitch: 0, dead: false } }));
+  newcomer.send(JSON.stringify({ type: 'player:state', state: { x: 4.5, y: 40, z: -2.5, yaw: 0, pitch: 0, dead: false } }));
   await waitFor(host, message => message.type === 'player:state' && message.id === newcomerJoined.id);
   newcomer.send(JSON.stringify({ type: 'item:pickup', uid: 'drop-1' }));
   assert.equal((await pickupGrant).item.count, 3, 'only a valid shared drop can be claimed');
@@ -314,7 +316,32 @@ try {
   assert.equal((await closed).type, 'room:closed', 'host can close and clean up the lobby');
   assert.equal(service.rooms.size, 0);
 
+  const classicHost = await connect('ClassicHost');
+  const classicRoom = await request(classicHost, 'room:create', {
+    playerName: 'ClassicHost', name: 'Classic Commons', edition: 'classic', gameMode: 'survival', seed: 'classic-world-seed',
+  });
+  assert.equal(classicRoom.type, 'room:joined');
+  assert.equal(classicRoom.edition, 'classic');
+  assert.equal(classicRoom.gameMode, 'creative', 'Classic rooms always use creative mode');
+  assert.equal(classicRoom.seed, 'classic-world-seed');
+  const wrongEditionGuest = await connect('WrongEdition');
+  const wrongEditionJoin = await request(wrongEditionGuest, 'room:join', { code: classicRoom.code, edition: 'beta' });
+  assert.equal(wrongEditionJoin.type, 'error', 'Beta clients cannot join a Classic room');
+  assert.match(wrongEditionJoin.message, /classic edition/i);
+  const classicGuest = await connect('ClassicGuest');
+  const classicJoin = await request(classicGuest, 'room:join', { code: classicRoom.code, edition: 'classic' });
+  assert.equal(classicJoin.type, 'room:joined');
+  assert.equal(classicJoin.edition, 'classic');
+  const classicListings = await request(classicGuest, 'rooms:list');
+  assert.equal(classicListings.rooms[0].edition, 'classic');
+  assert.equal(classicListings.rooms[0].seed, 'classic-world-seed');
+  await request(classicGuest, 'room:leave');
+  await request(classicHost, 'room:close');
+
   const individualHost = await connect();
+  const betaRoomRejected = await request(individualHost, 'room:create', { edition: 'beta', playerName: 'Solo' });
+  assert.equal(betaRoomRejected.type, 'error', 'relay does not allocate multiplayer rooms for the Beta edition');
+  assert.match(betaRoomRejected.message, /only in the Classic edition/i);
   const individual = await request(individualHost, 'room:create', { playerName: 'Solo', name: 'Personal visuals' });
   assert.deepEqual(individual.visuals, { mode: 'individual' }, 'rooms default to player-controlled visuals');
   await request(individualHost, 'room:close');

@@ -102,6 +102,8 @@ export class Player {
     this.breath = 0;
     this.air = 300;
     this.gameMode = 'survival';
+    this.classicFlying = false;
+    this._lastClassicJumpAt = -Infinity;
     this.viewBobbing = true;
     this._bobPhase = 0;
     this._bobStrength = 0;
@@ -160,6 +162,14 @@ export class Player {
     document.addEventListener('contextmenu', e => e.preventDefault());
     document.addEventListener('keydown', (e) => {
       this.keys[e.code] = true;
+      if (this.gameMode === 'classic' && e.code === this.bindings.jump && !e.repeat) {
+        const now = globalThis.performance?.now?.() ?? Date.now();
+        if (now - this._lastClassicJumpAt < 320) {
+          this.classicFlying = !this.classicFlying;
+          this.vel.set(0, 0, 0);
+        }
+        this._lastClassicJumpAt = now;
+      }
       for (let i = 1; i <= 9; i++) if (e.code === this.bindings[`hotbar${i}`]) this.hotbarIndex = i - 1;
       if (e.code === this.bindings.attack) this.leftDown = true;
       if (e.code === this.bindings.use) this.rightDown = true;
@@ -219,6 +229,8 @@ export class Player {
     this.pitch = 0;
     this.health = this.maxHealth;
     this.dead = false;
+    this.classicFlying = false;
+    this._lastClassicJumpAt = -Infinity;
     this.fallStart = null;
     this.air = 300;
     this.breath = 0;
@@ -242,6 +254,7 @@ export class Player {
   }
 
   _solidBlockAt(world, x, y, z) {
+    if (world.edition === 'classic' && (x < world.minWorldCoord || x > world.maxWorldCoord || z < world.minWorldCoord || z > world.maxWorldCoord)) return true;
     if (typeof world.isSolidAt === 'function') return world.isSolidAt(x, y, z);
     return getBlock(world.getBlock(x, y, z)).solid;
   }
@@ -305,8 +318,29 @@ export class Player {
     const len = Math.hypot(ax, az);
     if (len > 0) { ax /= len; az /= len; }
 
-    // Creative players fly freely: jump rises and sneak descends. This branch
-    // intentionally skips block collision and all survival physics/damage.
+    // Classic's double-tap flight keeps ordinary walking/collision until enabled.
+    // While flying it still collides with blocks, unlike the game's unrestricted
+    // creative noclip mode; jump rises and sneak descends.
+    if (this.gameMode === 'classic' && this.classicFlying) {
+      const vertical = Number(!!this.isKeyDown(this.bindings.jump)) - Number(!!this.isKeyDown(this.bindings.sneak));
+      this.vel.set(ax * 8.5, vertical * 8.5, az * 8.5);
+      this.moveAxis(1, this.vel.y * dt, world);
+      this.moveAxis(0, this.vel.x * dt, world);
+      this.moveAxis(2, this.vel.z * dt, world);
+      this.onGround = false;
+      this.fallStart = null;
+      this.camera.position.set(this.pos.x, this.pos.y + EYE, this.pos.z);
+      const direction = new THREE.Vector3(
+        -Math.sin(this.yaw) * Math.cos(this.pitch),
+        Math.sin(this.pitch),
+        -Math.cos(this.yaw) * Math.cos(this.pitch)
+      );
+      this.camera.lookAt(this.camera.position.clone().add(direction));
+      this._lastX = this.pos.x; this._lastZ = this.pos.z;
+      return;
+    }
+
+    // Beta creative players fly freely and skip block collision and survival physics.
     if (this.gameMode === 'creative') {
       const vertical = Number(!!this.isKeyDown(this.bindings.jump)) - Number(!!this.isKeyDown(this.bindings.sneak));
       this.vel.set(ax * 8.5, vertical * 8.5, az * 8.5);
@@ -575,7 +609,7 @@ export class Player {
   }
 
   damage(amount, audio, bypassArmor = false) {
-    if (this.dead || this.gameMode === 'creative') return;
+    if (this.dead || this.gameMode === 'creative' || this.gameMode === 'classic') return;
     if (this.hurtTime > 0.35) return;
 
     let finalDamage = amount;

@@ -1,14 +1,19 @@
 // World manager: chunk loading, block access, lighting propagation (beta-style).
 import { Chunk, CH, WORLD_H, SEA_LEVEL } from './chunk.js';
 import { WorldGen } from './worldgen.js';
+import { ClassicWorldGen } from './classic-worldgen.js';
 import { AIR, WATER, LAVA, ICE, getBlock, LEAVES, WOOD_DOOR, IRON_DOOR } from './blocks.js';
 import { WorldLighting, lightOpacity, lightEmission } from './lighting.js';
 
 export class World {
-  constructor(seed, scene) {
+  constructor(seed, scene, edition = 'beta') {
     this.seed = seed;
     this.scene = scene;
-    this.gen = new WorldGen(seed);
+    this.edition = edition === 'classic' ? 'classic' : 'beta';
+    this.minWorldCoord = this.edition === 'classic' ? -128 : -Infinity;
+    this.maxWorldCoord = this.edition === 'classic' ? 127 : Infinity;
+    this.maxWorldY = this.edition === 'classic' ? 63 : WORLD_H - 1;
+    this.gen = this.edition === 'classic' ? new ClassicWorldGen(seed) : new WorldGen(seed);
     this.chunks = new Map(); // "cx,cz" -> Chunk
     this.edits = new Map();  // player block edits "x,y,z" -> id
     this.metaEdits = new Map(); // player block metadata "x,y,z" -> meta
@@ -35,7 +40,8 @@ export class World {
   key(cx, cz) { return cx + ',' + cz; }
 
   recordEdit(x, y, z, id, meta = 0) {
-    if (![x, y, z, id, meta].every(Number.isInteger) || y < 0 || y >= WORLD_H || id < 0 || id > 255 || meta < 0 || meta > 255) return false;
+    if (![x, y, z, id, meta].every(Number.isInteger) || y < 0 || y > this.maxWorldY || id < 0 || id > 255 || meta < 0 || meta > 255
+        || x < this.minWorldCoord || x > this.maxWorldCoord || z < this.minWorldCoord || z > this.maxWorldCoord) return false;
     const key = `${x},${y},${z}`;
     this.edits.set(key, id);
     if (meta) this.metaEdits.set(key, meta); else this.metaEdits.delete(key);
@@ -60,6 +66,7 @@ export class World {
   }
 
   generateChunk(cx, cz) {
+    if (this.edition === 'classic' && (cx < -8 || cx > 7 || cz < -8 || cz > 7)) return null;
     const c = this.ensureChunk(cx, cz);
     const wasDecorated = c.decorated;
     if (!c.generated) this.gen.fillChunk(c);
@@ -83,7 +90,11 @@ export class World {
 
   // Generation-time block access (may touch not-yet-lit chunks)
   getBlockGen(x, y, z) {
-    if (y < 0 || y >= WORLD_H) return AIR;
+    if (this.edition === 'classic') {
+      if (x < this.minWorldCoord || x > this.maxWorldCoord || z < this.minWorldCoord || z > this.maxWorldCoord) return AIR;
+      if (y < 0) return BEDROCK;
+      if (y > this.maxWorldY) return AIR;
+    } else if (y < 0 || y >= WORLD_H) return AIR;
     const cx = Math.floor(x / CH), cz = Math.floor(z / CH);
     const c = this.getChunk(cx, cz);
     if (!c) {
@@ -95,7 +106,9 @@ export class World {
   }
 
   setBlockGen(x, y, z, id) {
-    if (y < 0 || y >= WORLD_H) return;
+    if (this.edition === 'classic') {
+      if (y < 0 || y > this.maxWorldY || x < this.minWorldCoord || x > this.maxWorldCoord || z < this.minWorldCoord || z > this.maxWorldCoord) return;
+    } else if (y < 0 || y >= WORLD_H) return;
     const cx = Math.floor(x / CH), cz = Math.floor(z / CH);
     const c = this.ensureChunk(cx, cz);
     if (!c.generated) this.gen.fillChunk(c);
@@ -116,7 +129,10 @@ export class World {
   }
 
   getBlock(x, y, z) {
-    if (y < 0 || y >= WORLD_H) return AIR;
+    if (this.edition === 'classic') {
+      if (y < 0) return BEDROCK;
+      if (y > this.maxWorldY || x < this.minWorldCoord || x > this.maxWorldCoord || z < this.minWorldCoord || z > this.maxWorldCoord) return AIR;
+    } else if (y < 0 || y >= WORLD_H) return AIR;
     const cx = Math.floor(x / CH), cz = Math.floor(z / CH);
     const c = this.chunks.get(this.key(cx, cz));
     if (!c || !c.generated) return AIR;
@@ -124,7 +140,7 @@ export class World {
   }
 
   getMeta(x, y, z) {
-    if (y < 0 || y >= WORLD_H) return 0;
+    if (y < 0 || y > this.maxWorldY || x < this.minWorldCoord || x > this.maxWorldCoord || z < this.minWorldCoord || z > this.maxWorldCoord) return 0;
     const cx = Math.floor(x / CH), cz = Math.floor(z / CH);
     const c = this.chunks.get(this.key(cx, cz));
     if (!c || !c.generated) return 0;
@@ -132,7 +148,7 @@ export class World {
   }
 
   setMeta(x, y, z, meta) {
-    if (y < 0 || y >= WORLD_H) return false;
+    if (y < 0 || y > this.maxWorldY || x < this.minWorldCoord || x > this.maxWorldCoord || z < this.minWorldCoord || z > this.maxWorldCoord) return false;
     const cx = Math.floor(x / CH), cz = Math.floor(z / CH);
     const c = this.chunks.get(this.key(cx, cz));
     if (!c || !c.generated) return false;
@@ -163,7 +179,7 @@ export class World {
   }
 
   setBlock(x, y, z, id, meta = 0) {
-    if (y < 0 || y >= WORLD_H) return false;
+    if (y < 0 || y > this.maxWorldY || x < this.minWorldCoord || x > this.maxWorldCoord || z < this.minWorldCoord || z > this.maxWorldCoord) return false;
     const cx = Math.floor(x / CH), cz = Math.floor(z / CH);
     const c = this.chunks.get(this.key(cx, cz));
     if (!c || !c.generated) return false;

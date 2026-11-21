@@ -107,6 +107,8 @@ const distance3 = (pos, state) => Math.hypot(pos[0] - state.x, pos[1] - state.y,
 const validBlockEdit = (x, y, z, id, meta) => [x, y, z, id, meta].every(Number.isInteger)
   && y >= 0 && y < WORLD_HEIGHT && id >= 0 && id <= 255 && meta >= 0 && meta <= 255
   && Math.abs(x) <= COORD_LIMIT && Math.abs(z) <= COORD_LIMIT;
+const validRoomBlockEdit = (room, x, y, z, id, meta) => validBlockEdit(x, y, z, id, meta)
+  && (room.edition !== 'classic' || (y <= 63 && x >= -128 && x <= 127 && z >= -128 && z <= 127));
 
 function envInt(name, fallback) {
   const value = Number.parseInt(process.env[name] ?? '', 10);
@@ -576,8 +578,8 @@ export function createMultiplayerServer({
   }
 
   const roomSummary = room => ({
-    code: room.code, name: room.name, players: room.clients.size, maxPlayers,
-    gameMode: room.gameMode, access: room.access, passwordProtected: Boolean(room.password), visualMode: room.visuals?.mode || 'individual',
+    code: room.code, name: room.name, players: room.clients.size, maxPlayers, seed: room.seed,
+    edition: room.edition || 'beta', gameMode: room.gameMode, access: room.access, passwordProtected: Boolean(room.password), visualMode: room.visuals?.mode || 'individual',
   });
 
   function resetRoomState(socket) {
@@ -636,7 +638,7 @@ export function createMultiplayerServer({
     send(socket, {
       type: 'room:joined', requestId, id, code: room.code, name: room.name,
       playerName: name, role: socket === room.host ? 'host' : 'guest',
-      gameMode: room.gameMode, seed: room.seed, access: room.access, visuals: room.visuals,
+      edition: room.edition || 'beta', gameMode: room.gameMode, seed: room.seed, access: room.access, visuals: room.visuals,
       players: [...room.clients].map(peer => ({ id: peer.clientId, name: peer.playerName, role: peer === room.host ? 'host' : 'player' })),
     });
     if (socket !== room.host) {
@@ -701,14 +703,17 @@ export function createMultiplayerServer({
   /* ----------------------- room lifecycle ------------------------ */
 
   async function handleRoomCreate(socket, message, requestId) {
+    if (!socket.playerName) return fail(socket, requestId, 'Choose an available player name before creating a room.');
+    if (message.edition !== 'classic') return fail(socket, requestId, 'Online rooms are available only in the Classic edition.');
     if (socket.room) return fail(socket, requestId, 'Leave your current room first.');
     if (!allowRate(socket, 'room:create', 20, 60_000)) return fail(socket, requestId, 'You are creating rooms too quickly. Wait a minute and try again.');
     const playerName = socket.playerName;
     const name = cleanText(message.name, 32) || `${playerName}’s world`;
     const password = String(message.password ?? '').slice(0, 64);
     const access = message.access === 'private' ? 'private' : 'public';
-    const gameMode = message.gameMode === 'creative' ? 'creative' : 'survival';
-    const seed = cleanText(message.seed, 80) || 'Beta 1.7.3';
+    const edition = 'classic';
+    const gameMode = 'creative';
+    const seed = cleanText(message.seed, 80) || 'Classic';
     if (password.length && password.length < 4) return fail(socket, requestId, 'Passwords must be at least four characters.');
     if (rooms.size >= maxRooms) return fail(socket, requestId, `All ${maxRooms} rooms are in use. Try again later.`);
     if (password && !protectedCreateLimiter.allow(socket.addressKey)) return fail(socket, requestId, 'Too many password-protected rooms were created recently. Wait a minute and try again.');
@@ -719,7 +724,7 @@ export function createMultiplayerServer({
       if (socket.readyState !== WebSocket.OPEN || socket.room || !socket.playerName) return;
       if (rooms.size >= maxRooms) return fail(socket, requestId, `All ${maxRooms} rooms are in use. Try again later.`);
       const room = {
-        code: createCode(), name, playerName, access, gameMode, seed, visuals, password: record,
+        code: createCode(), name, playerName, access, edition, gameMode, seed, visuals, password: record,
         clients: new Set(), edits: new Map(), items: new Map(), itemTimes: new Map(),
         gameState: null, mobs: [], vehicles: new Map(), projectiles: new Map(), host: socket,
       };
@@ -729,6 +734,7 @@ export function createMultiplayerServer({
   }
 
   async function handleRoomJoin(socket, message, requestId) {
+    if (message.edition !== 'classic') return fail(socket, requestId, 'Online rooms are available only in the Classic edition.');
     const code = String(message.code ?? '').trim().toUpperCase();
     const room = rooms.get(code);
     if (!validRoom(code) || !room) {
@@ -738,6 +744,8 @@ export function createMultiplayerServer({
     }
     if (room.password && !passwordLimiter.allow(`${socket.addressKey}:${code}`)) return fail(socket, requestId, 'Too many room password attempts. Wait a minute and try again.');
     if (!(await passwordMatches(room.password, String(message.password ?? '').slice(0, 64)))) return fail(socket, requestId, 'Incorrect room password.');
+    const requestedEdition = message.edition === 'classic' ? 'classic' : 'beta';
+    if ((room.edition || 'beta') !== requestedEdition) return fail(socket, requestId, `This room uses the ${room.edition || 'beta'} edition. Open that edition to join.`);
     if (socket.readyState !== WebSocket.OPEN || !socket.playerName) return;
     if (rooms.get(code) !== room) return fail(socket, requestId, 'Room not found. Check the code or ask the host to reopen it.');
     join(socket, room, socket.playerName, requestId);
@@ -780,7 +788,7 @@ export function createMultiplayerServer({
       const id = Array.isArray(value) ? value[0] : value;
       const meta = Array.isArray(value) ? (value[1] ?? 0) : 0;
       const [x, y, z] = match ? key.split(',').map(Number) : [];
-      if (!match || !validBlockEdit(x, y, z, id, meta)) return fail(socket, requestId, 'The world contains an invalid block edit.');
+      if (!match || !validRoomBlockEdit(room, x, y, z, id, meta)) return fail(socket, requestId, 'The world contains an invalid block edit.');
       // Canonical key, so "007,5,3" and "7,5,3" cannot become two entries for one block.
       batch.set(`${x},${y},${z}`, [id, meta]);
     }
@@ -796,7 +804,7 @@ export function createMultiplayerServer({
   function handleWorldEdit(socket, message, requestId, room) {
     const edit = message.edit;
     if (!allowRate(socket, 'world:edit', 80, 1000)) return;
-    if (!edit || !validBlockEdit(edit.x, edit.y, edit.z, edit.id, edit.meta ?? 0)) return;
+    if (!edit || !validRoomBlockEdit(room, edit.x, edit.y, edit.z, edit.id, edit.meta ?? 0)) return;
     // Edits are relayed as received, so bound their size to stop padded payloads from being amplified to every peer.
     if (JSON.stringify(edit).length > 256) return;
     const key = `${edit.x},${edit.y},${edit.z}`;
