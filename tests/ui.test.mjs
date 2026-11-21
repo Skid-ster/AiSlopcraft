@@ -27,7 +27,7 @@ dom.window.HTMLCanvasElement.prototype.getContext = () => new Proxy({}, {
   set: () => true,
 });
 
-const { UI } = await import('../src/ui/ui.js');
+const { UI, suggestedMultiplayerRelay } = await import('../src/ui/ui.js');
 const { sanitizeSettings } = await import('../src/settings.js');
 
 let failures = 0;
@@ -35,6 +35,9 @@ function check(name, cond, extra) {
   console.log((cond ? 'PASS' : 'FAIL') + '  ' + name + (cond || !extra ? '' : '  → ' + extra));
   if (!cond) failures++;
 }
+check('local multiplayer uses the same-origin Vite WebSocket proxy', suggestedMultiplayerRelay({ hostname: 'localhost', host: 'localhost:5173', protocol: 'http:' }) === 'ws://localhost:5173/ws');
+check('secure deployments automatically use same-origin WSS', suggestedMultiplayerRelay({ hostname: 'game.example', host: 'game.example', protocol: 'https:' }) === 'wss://game.example/ws');
+check('static GitHub Pages does not pretend to provide a room service', suggestedMultiplayerRelay({ hostname: 'skid-ster.github.io', host: 'skid-ster.github.io', protocol: 'https:' }) === '');
 const key = (code) => ({ code, preventDefault() {} });
 const click = (button = 0) => ({ button, preventDefault() {} });
 const visible = (id) => document.getElementById(id)?.style.display !== 'none';
@@ -197,8 +200,8 @@ try {
   btn('btn-multiplayer').click();
   check('Multiplayer lobby opens', document.getElementById('multiplayer-screen').style.display === 'flex');
   check('custom relay configuration is hidden under advanced settings by default', !!document.querySelector('.mp-custom-relay') && !document.querySelector('.mp-custom-relay').open);
-  check('multiplayer has a unique-name field but no account or password controls', !!btn('mp-username') && !!btn('mp-claim') && !btn('mp-auth-password') && !btn('mp-login') && !btn('mp-signup'));
-  check('name rules explain the 3–20 character limit and connection-only reservation', btn('mp-username').minLength === 3 && btn('mp-username').maxLength === 20 && document.querySelector('#mp-name-panel').textContent.includes('while you are connected'));
+  check('multiplayer has a unique-name field but no account or password controls', !!btn('mp-username') && !!btn('mp-claim') && !!btn('mp-release-name') && !btn('mp-auth-password') && !btn('mp-login') && !btn('mp-signup'));
+  check('name rules explain the 3–20 character limit and connection-only reservation', btn('mp-username').minLength === 3 && btn('mp-username').maxLength === 20 && document.querySelector('#mp-name-panel').textContent.includes('reserved while connected'));
   check('public online leaderboard is visible before choosing a name', !!btn('mp-online-list') && !!btn('mp-online-refresh') && !document.querySelector('#mp-online-panel').hidden);
   const fakeNameClient = {
     playerName: null,
@@ -212,8 +215,8 @@ try {
   check('claiming a name enables hosting and hides the name form', fakeNameClient.playerName === 'FriendlyBuilder' && btn('mp-name-active').hidden === false && btn('mp-create').disabled === false);
   ui.renderOnlinePlayers(['FriendlyBuilder', 'Visitor']);
   check('global online leaderboard lists all connected names and identifies me', btn('mp-online-count').textContent === '2 online' && btn('mp-online-list').textContent.includes('Visitor') && btn('mp-online-list').textContent.includes('You'));
-  await ui.logoutMultiplayer();
-  check('log out releases the temporary name and disables room creation', fakeNameClient.playerName === null && btn('mp-name-panel').hidden === false && btn('mp-create').disabled);
+  await ui.releaseMultiplayerName();
+  check('releasing the temporary name disables room creation', fakeNameClient.playerName === null && btn('mp-name-panel').hidden === false && btn('mp-create').disabled);
   ui.openMultiplayer();
   check('static-only hosting links to the Azure multiplayer setup guide', document.getElementById('mp-status').textContent.includes('static hosting') && document.querySelector('.mp-deploy-link')?.href.endsWith('#deploy-to-azure'));
   check('deployment help states the five-room and five-player limits', document.querySelector('.mp-deploy-help')?.textContent.includes('5 rooms') && document.querySelector('.mp-deploy-help')?.textContent.includes('5 players per room'));

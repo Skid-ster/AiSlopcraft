@@ -13,6 +13,7 @@ This is a risk-based code review, not a proof that every defect has been found. 
 3. **A room guest could overwrite or delete another player's active projectile.** The relay accepted `projectile:update` and `projectile:remove` for any UID visible in a room snapshot. A malicious client could therefore change the projectile source/state or remove it, causing inconsistent shared combat. The relay now allows updates/removal only by the original source or the room host, and preserves the original owner when the host relays state. A multiplayer regression test checks that a late joiner cannot take over, mutate, or remove the host's projectile, and that the host can remove it normally.
 4. **Development-tool dependency advisories.** `npm audit` reported one high and one moderate advisory through Vite 5/esbuild. Vite was updated to 6.4.6; `npm audit` now reports **zero vulnerabilities**. This was tested with the production build and full test suite.
 5. **Production HTTP responses lacked baseline browser security headers.** The combined static/relay server now sends a restrictive self-hosted content-security policy, same-origin frame protection, strict-origin referrer handling, MIME sniffing protection, and a permissions policy. Multiplayer WebSocket, inline UI style updates, and locally generated/imported imagery are explicitly accommodated; response headers are covered by integration tests.
+6. **Release checks were only run manually.** Added a pull-request CI workflow that installs from the lockfile, runs the full suite, builds the site, and audits dependencies. GitHub Pages now uses the same Node 22 line as the documented server deployment.
 
 ### Open security/reliability risks found
 
@@ -60,8 +61,10 @@ This is a risk-based code review, not a proof that every defect has been found. 
 
 ## Verification run for this pass
 
-- `npm test` — passed, including How to Play accessibility/focus, touch input lifecycle and panel return, live-player broadcasts/name throttling, projectile authorization, proxy parsing, and production-header regressions.
+- `npm ci --include=dev` — clean lockfile install completed.
+- `npm test` — passed, including How to Play accessibility/focus, touch input lifecycle and panel return, same-origin WebSocket URL selection, live-player broadcasts/name throttling, projectile authorization, proxy parsing, and production-header regressions.
 - `npm run build` — passed on Vite 6.4.6.
+- Production smoke test — built root page, `/health`, security headers, WebSocket online list, name claim, and release passed.
 - `npm audit` — zero vulnerabilities.
 - `git diff --check` — passed.
 

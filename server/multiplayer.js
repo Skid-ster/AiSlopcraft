@@ -325,7 +325,7 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
 
       if (message.type === 'player:claim') {
         if (!allowRate(socket, 'player:claim', 12, 60_000)) return fail(socket, requestId, 'Too many name checks. Wait a minute before trying again.');
-        if (socket.playerName) return fail(socket, requestId, `You are already playing as ${socket.playerName}. Log out first to change names.`);
+        if (socket.playerName) return fail(socket, requestId, `You are already playing as ${socket.playerName}. Release your current name first to change it.`);
         const name = String(message.name ?? '').trim();
         if (!USERNAME_PATTERN.test(name)) return fail(socket, requestId, 'Use a name with 3–20 letters, numbers, or underscores.');
         const key = name.toLowerCase();

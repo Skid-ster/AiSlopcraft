@@ -13,7 +13,7 @@ It aims for the feel of that era: no hunger bar or sprinting, food heals directl
 - **Craft and smelt:** 2×2 inventory recipes, 3×3 crafting-table recipes, and furnaces with input, fuel, progress, and output slots.
 - **Farm and build:** till and irrigate farmland, grow and harvest crops, plant saplings, use doors, ladders, beds, cake, buckets, TNT, and more.
 - **Meet the mobs:** farm animals and hostile night creatures, including zombie and skeleton sunlight damage, creeper fuses, spider movement, mob drops, melee combat, and skeleton arrows. Peaceful, Easy, Normal, and Hard difficulty settings adjust hostile encounters and damage.
-- **Play together:** choose a temporary unique player name—no account or password—and browse the public live online-player list before joining or hosting one of up to five co-op rooms (five players each). Names are reserved server-wide only while connected, then released on log out/disconnect. Rooms share block edits, chat, player positions, host-simulated mobs and combat, time, containers, dropped items, vehicles, and active projectile visuals. See [Multiplayer](#multiplayer) for hosting and room-state limitations.
+- **Play together:** choose a temporary unique player name—no account or password—and browse the public live online-player list before joining or hosting one of up to five co-op rooms (five players each). Names are reserved server-wide only while connected, then released with the lobby's **Release player name** control or on disconnect. Rooms share block edits, chat, player positions, host-simulated mobs and combat, time, containers, dropped items, vehicles, and active projectile visuals. See [Multiplayer](#multiplayer) for hosting and room-state limitations.
 - **Tune the look:** a native Three.js/WebGL renderer with five live presets—Classic, Vibrant, Cinematic, Shader Lite, and **PSX (1.7.10)**. Cinematic and Shader Lite use stabilized directional sun shadows; Shader Lite adds animated water, reflections, and specular highlights. PSX is a real multi-pass WebGL preset adapted from the PS1-style affine mapping, depth-scaled vertex snapping, 25% render resolution, 24-step color grading, and ordered dithering in [ckosmic/Minecraft-PSX](https://github.com/ckosmic/minecraft-psx), whose README documents testing on Minecraft 1.7.10 and whose repository declares MIT terms (the checked-in license still has unfilled copyright placeholders). The shader logic is adapted to AiSlopcraft's Three.js render pipeline; it does not make arbitrary OptiFine shaderpack ZIPs executable. Fog, day/night lighting, brightness, and local light on entities are supported.
 - **Use the classic-style interface:** title and texture-pack screens, options, inventory and crafting, hotbar, health/armor/air indicators, pause and death screens, item tooltips, and an F3 debug overlay.
 
@@ -34,7 +34,13 @@ To make a production build:
 npm run build
 ```
 
-The generated site is written to `dist/`.
+The generated site is written to `dist/`. For a local production smoke test, build first and then run the combined static-site/WebSocket service:
+
+```bash
+npm start
+```
+
+Open `http://localhost:8787/` and check `http://localhost:8787/health`. This production server expects the build to exist; the Render Blueprint and Azure deployment instructions build it before starting.
 
 ## Multiplayer
 
@@ -50,11 +56,15 @@ Online multiplayer needs a reachable Node process to coordinate rooms and relay 
 
 Azure keeps the **service process** available only while the App Service and subscription remain active; check your student-credit balance and expiry. Rooms and world edits are still temporary in-memory sessions: they end if the host leaves or the app restarts/deploys. Keeping world saves across restarts would require a database/storage feature not included here. GitHub Pages remains the singleplayer/static option and cannot itself host rooms.
 
-Players on different networks connect to the same Azure URL. The host and guests need the same world seed; invite links include the host's seed and service URL.
+### Lower-setup option: Render Blueprint
+
+A `render.yaml` Blueprint is included for a single combined web service. In Render, choose **New → Blueprint**, connect this repository and the branch you want to publish, then review and create the `aislopcraft-online` service. The Blueprint builds the frontend and starts the WebSocket room relay on the same origin; players use the site URL without entering a relay address. It requests Render's `free` plan where available—check the current plan terms before creating the service. Free services may sleep when idle and room state is in memory, so rooms and names disappear on restarts or deploys. After deployment, verify `/health` returns `status: ok` before sharing the URL. **No hosted service is provisioned by this repository change.**
+
+Players on different networks connect to the same service URL. The host and guests need the same world seed; invite links include the host's seed and service URL.
 
 ### Player names and live leaderboard
 
-Online play does not create accounts and never asks for a password or email. Choose a 3–20 character name using letters, numbers, or underscores. Names are case-insensitively unique across one room service while their player is connected. If a name is taken, the lobby says so and lets the player choose another. **Log out or disconnect to release the name**; the name is not permanently yours and someone else can claim it while you are offline. The browser may remember your last choice locally for convenience, but that does not reserve it.
+Online play does not create accounts and never asks for a password or email. Choose a 3–20 character name using letters, numbers, or underscores. Names are case-insensitively unique across one room service while their player is connected. If a name is taken, the lobby says so and lets the player choose another. **Release the name in the lobby or disconnect** to make it available; it is not permanently yours and someone else can claim it when you are offline. The browser may remember your last choice locally for convenience, but that does not reserve it.
 
 The **Online leaderboard** is a public live list of everyone connected to that room service, whether in a room or the lobby. It is an online roster, not a persistent score/rank table; no permanent profile or player history is stored. It resets when the service restarts. Keep one service instance: names and rooms live in that process, and running multiple instances without shared coordination could allow duplicate names and split room lists.
 

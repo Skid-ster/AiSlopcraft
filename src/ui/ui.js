@@ -14,11 +14,12 @@ function stackLimit(stack) {
   return itemStackLimit(stack.id);
 }
 
-function suggestedMultiplayerRelay() {
-  const { hostname, host, protocol } = window.location;
-  if (hostname === 'localhost' || hostname === '127.0.0.1') return `ws://${hostname}:8787/ws`;
+export function suggestedMultiplayerRelay(location = window.location) {
+  const { hostname, host, protocol } = location;
   // GitHub Pages is static hosting and cannot serve the WebSocket endpoint.
   if (hostname.endsWith('.github.io')) return '';
+  // Keep browser traffic same-origin. Vite proxies /ws during development;
+  // the production relay serves it directly. Never point browser code at localhost.
   return `${protocol === 'https:' ? 'wss:' : 'ws:'}//${host}/ws`;
 }
 
@@ -399,7 +400,7 @@ export class UI {
         </details>
         <section class="mp-name-panel" id="mp-name-panel">
           <h3>Choose your player name</h3>
-          <p>No account, email, or password. Names are unique across this server while you are connected; log out or close the game to release yours.</p>
+          <p>No account, email, or password. Your name is reserved while connected; release it here or disconnect to make it available again.</p>
           <label>Player name
             <input id="mp-username" maxlength="20" minlength="3" pattern="[A-Za-z0-9_]{3,20}" placeholder="Builder42" autocomplete="nickname" aria-describedby="mp-name-help">
           </label>
@@ -408,7 +409,7 @@ export class UI {
         </section>
         <div class="mp-name-active" id="mp-name-active" hidden>
           <span id="mp-name-label"></span>
-          <button class="btn" id="mp-logout" type="button">Log out and release name</button>
+          <button class="btn" id="mp-release-name" type="button">Release player name</button>
         </div>
         <section class="mp-online-panel" id="mp-online-panel" aria-labelledby="mp-online-title">
           <div class="mp-online-heading"><h3 id="mp-online-title">Online leaderboard</h3><span id="mp-online-count">0 online</span></div>
@@ -462,7 +463,7 @@ export class UI {
     multiplayer.querySelector('#mp-username').addEventListener('keydown', event => {
       if (event.key === 'Enter') { event.preventDefault(); this.claimMultiplayerName(); }
     });
-    multiplayer.querySelector('#mp-logout').addEventListener('click', () => this.logoutMultiplayer());
+    multiplayer.querySelector('#mp-release-name').addEventListener('click', () => this.releaseMultiplayerName());
     multiplayer.querySelector('#mp-create').addEventListener('click', () => this.createMultiplayerRoom());
     multiplayer.querySelector('#mp-join').addEventListener('click', () => this.joinMultiplayerRoom());
     multiplayer.querySelector('#mp-access').addEventListener('change', () => {
@@ -617,7 +618,7 @@ export class UI {
       this.multiplayerName = result.name;
       try { window.localStorage.setItem('aislopcraft:player-name', result.name); } catch {}
       this.updateMultiplayerNameUI();
-      status.textContent = `Welcome, ${result.name}. You can now browse, host, or join a world. Your name is reserved until you log out or disconnect.`;
+      status.textContent = `Welcome, ${result.name}. You can now browse, host, or join a world. Your name is reserved until you release it or disconnect.`;
     } catch (error) { status.textContent = error.message; }
     finally { button.disabled = false; }
   }
@@ -632,16 +633,16 @@ export class UI {
     }
   }
 
-  async logoutMultiplayer() {
+  async releaseMultiplayerName() {
     const client = this.multiplayerClient;
     if (!client) return;
     try {
       await client.releasePlayerName();
       this.multiplayerName = null;
       this.updateMultiplayerNameUI();
-      this.multiplayerScreen.querySelector('#mp-status').textContent = 'Logged out. Your player name is available for someone else to use.';
+      this.multiplayerScreen.querySelector('#mp-status').textContent = 'Name released. It is available for someone else to use.';
     } catch (error) {
-      this.multiplayerScreen.querySelector('#mp-status').textContent = `Could not release the name: ${error.message}`;
+      this.multiplayerScreen.querySelector('#mp-status').textContent = `Could not release the player name: ${error.message}`;
     }
   }
 
@@ -1360,7 +1361,9 @@ export class UI {
             <div><dt>Q / Ctrl+Q</dt><dd>Drop one item / drop a stack</dd></div><div><dt>Esc</dt><dd>Pause or close a screen</dd></div>
             <div><dt>F3 / F1</dt><dd>Debug details / hide HUD</dd></div>
             <div><dt>Tab / T</dt><dd>Multiplayer player list / chat</dd></div>
-            <div><dt>Touch screen</dt><dd>Move joystick · drag to look · action buttons · Pause</dd></div>
+            <div><dt>Touch move/look</dt><dd>Left joystick to move · drag the open center to look</dd></div>
+            <div><dt>Touch actions</dt><dd>Hold Mine to break · tap Use · hold Jump or Sneak</dd></div>
+            <div><dt>Touch menu</dt><dd>Inventory, hotbar, multiplayer chat and Pause buttons</dd></div>
           </dl></section>
           <section><h3>Useful tips</h3><ul>
             <li>Use <strong>Options → Controls</strong> to change key bindings and mouse sensitivity.</li>
@@ -1369,7 +1372,7 @@ export class UI {
             <li>In multiplayer, each player keeps their own inventory. Rooms are temporary and close if the host leaves or the server restarts.</li>
           </ul></section>
         </div>
-        <p class="help-footnote">On touchscreens, use the virtual joystick, drag the open center area to look, and hold or tap the action buttons. Landscape orientation leaves more room for play.</p>
+        <p class="help-footnote">On touchscreens, use the virtual joystick to move and drag the open center to look. Hold Mine until the block breaks or an attack lands; Use acts on press. Landscape orientation leaves more room for play. Local worlds autosave; multiplayer rooms are temporary.</p>
       </section>`;
     this.root.appendChild(help);
     this.helpScreen = help;
