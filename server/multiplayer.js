@@ -233,7 +233,7 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
       type: 'room:joined', requestId, id, code: room.code, name: room.name,
       playerName: name, role: socket === room.host ? 'host' : 'guest',
       gameMode: room.gameMode, seed: room.seed, access: room.access, visuals: room.visuals,
-      players: [...room.clients].map(peer => ({ id: peer.clientId, name: peer.playerName })),
+      players: [...room.clients].map(peer => ({ id: peer.clientId, name: peer.playerName, role: peer === room.host ? 'host' : 'player' })),
     });
     if (socket !== room.host) {
       const edits = [...room.edits.entries()];
@@ -250,7 +250,7 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
     }
     for (const peer of room.clients) {
       if (peer === socket) continue;
-      send(peer, { type: 'player:joined', id, name });
+      send(peer, { type: 'player:joined', id, name, role: socket === room.host ? 'host' : 'player' });
       if (peer.lastState) send(socket, { type: 'player:state', id: peer.clientId, name: peer.playerName, ...peer.lastState });
     }
   }
@@ -328,6 +328,10 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
         return;
       }
       if (!socket.account) return fail(socket, requestId, 'Sign up or log in before using multiplayer.');
+      if (message.type === 'ping') {
+        send(socket, { type: 'pong', requestId, serverTime: Date.now() });
+        return;
+      }
 
       if (message.type === 'rooms:list') {
         socket.pendingRequestId = requestId;

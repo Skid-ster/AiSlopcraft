@@ -104,6 +104,12 @@ export class MultiplayerClient {
   }
 
   listRooms() { return this.request('rooms:list'); }
+  async ping() {
+    const now = () => globalThis.performance?.now?.() ?? Date.now();
+    const startedAt = now();
+    await this.request('ping');
+    return Math.max(0, Math.round(now() - startedAt));
+  }
   createRoom(options) { return this.request('room:create', options).then(message => { this.room = message; return message; }); }
   joinRoom(options) { return this.request('room:join', options).then(message => { this.room = message; return message; }); }
   leave() {

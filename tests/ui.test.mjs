@@ -208,11 +208,27 @@ try {
   check('forced policy enables explicit shader and texture-pack selection', !btn('mp-host-shader').disabled && !btn('mp-host-texture-pack').disabled);
   await ui.createMultiplayerRoom();
   check('forced room creation sends the selected shader and host texture pack', createdVisuals?.mode === 'forced' && createdVisuals.shaderStyle === 'psx' && createdVisuals.resourcePack?.name === 'Host Pack');
-  game.networkRoom = { name: 'Test room', gameMode: 'survival', code: 'ABC234' };
+  game.networkRoom = { name: 'Test room', gameMode: 'survival', code: 'ABC234', id: 'host-id', playerName: 'Host', role: 'host', maxPlayers: 5,
+    players: [{ id: 'host-id', name: 'Host', role: 'host' }, { id: 'guest-id', name: 'Guest', role: 'player' }] };
   game.remotePlayers = new Map([['guest-id', {}]]);
+  game.multiplayerClient = { async ping() { return 23; } };
+  ui.mode = 'game';
   ui.updateNetworkPanel();
   check('multiplayer HUD shows the actual five-player room capacity', document.getElementById('network-room-label').textContent.includes('2/5'));
+  document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { code: 'Tab', bubbles: true, cancelable: true }));
+  check('holding Tab opens a live multiplayer player roster', document.getElementById('network-player-list').style.display === 'block');
+  check('player roster identifies the host, guest and room capacity', document.getElementById('network-player-count').textContent === '2 / 5' && document.getElementById('network-player-rows').textContent.includes('HOST · YOU') && document.getElementById('network-player-rows').textContent.includes('Guest'));
+  document.dispatchEvent(new dom.window.KeyboardEvent('keyup', { code: 'Tab', bubbles: true }));
+  check('releasing Tab closes the player roster', document.getElementById('network-player-list').style.display === 'none');
+  document.getElementById('network-players').click();
+  check('Players button pins the player roster open for touch users', document.getElementById('network-player-list').style.display === 'block');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  check('player roster measures live relay round-trip latency', document.getElementById('network-ping').textContent.includes('23 ms'));
+  document.getElementById('network-players').click();
+  ui.mode = 'title';
   game.networkRoom = null;
+  game.multiplayerClient = null;
+  ui.updateNetworkPanel();
   check('Lobby offers public/private and survival/creative options',
     document.getElementById('mp-access').options.length === 2 && document.getElementById('mp-mode').options.length === 2);
   btn('mp-back').click();

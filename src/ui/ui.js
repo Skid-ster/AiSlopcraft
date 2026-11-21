@@ -49,6 +49,10 @@ export class UI {
     this._mouseY = 0;
     this._hoveredStack = null;
     this.optionsMenu = null;
+    this.playerListHeld = false;
+    this.playerListPinned = false;
+    this.playerPingTimer = null;
+    this.playerPingInFlight = false;
 
     this.buildTitle();
     this.buildHud();
@@ -60,6 +64,11 @@ export class UI {
     window.uiPause = true;
 
     document.addEventListener('keydown', (e) => this.onKey(e));
+    document.addEventListener('keyup', e => this.onKeyUp(e));
+    window.addEventListener('blur', () => {
+      this.playerListHeld = false;
+      this.updateNetworkPlayerList();
+    });
     document.addEventListener('mousemove', (e) => {
       this._mouseX = e.clientX;
       this._mouseY = e.clientY;
@@ -763,11 +772,17 @@ export class UI {
       <div class="toast-msg" id="toast-msg"></div>
       <div class="hint" id="hint">Click to play &nbsp;|&nbsp; WASD move · Space jump · Shift sneak · Q drop · E inventory · F3 debug · Esc pause</div>
       <div class="network-panel" id="network-panel" style="display:none">
-        <div class="network-room-line"><span id="network-room-label"></span><button id="network-copy" type="button">Copy invite</button><button id="network-leave" type="button">Leave</button></div>
+        <div class="network-room-line"><span id="network-room-label"></span><button id="network-players" type="button" aria-expanded="false">Players (Tab)</button><button id="network-copy" type="button">Invite</button><button id="network-leave" type="button">Leave</button></div>
         <div class="network-chat-log" id="network-chat-log" aria-live="polite"></div>
         <form id="network-chat-form" style="display:none"><input id="network-chat-input" maxlength="240" placeholder="Message…" autocomplete="off"><button type="submit">Send</button></form>
         <button id="network-chat-open" type="button">Chat (T)</button>
       </div>
+      <section class="network-player-list" id="network-player-list" aria-label="Players in this world" aria-live="polite" style="display:none">
+        <header><strong>PLAYERS</strong><span id="network-player-count">0 / 5</span></header>
+        <div id="network-player-rows"></div>
+        <footer id="network-ping">Connection check: ready</footer>
+        <small>Hold Tab to view · use Players to pin open</small>
+      </section>
     `;
     this.root.appendChild(div);
     this.hotbarEl = div.querySelector('#hotbar');
@@ -803,6 +818,10 @@ export class UI {
       catch { window.prompt('Copy this invite link:', invite.toString()); }
     });
     div.querySelector('#network-leave').addEventListener('click', () => this.game.leaveMultiplayer?.());
+    div.querySelector('#network-players').addEventListener('click', () => {
+      this.playerListPinned = !this.playerListPinned;
+      this.updateNetworkPlayerList();
+    });
     div.querySelector('#network-chat-open').addEventListener('click', () => this.openNetworkChat());
     div.querySelector('#network-chat-form').addEventListener('submit', event => {
       event.preventDefault();
@@ -846,12 +865,82 @@ export class UI {
     const room = this.game.networkRoom;
     if (this.networkPanel) {
       this.networkPanel.style.display = room ? 'block' : 'none';
-      if (room) this.networkPanel.querySelector('#network-room-label').textContent = `${room.name} · ${room.gameMode} · ${(this.game.remotePlayers?.size || 0) + 1}/5 · ${room.code}`;
+      if (room) {
+        const count = room.players?.length || (this.game.remotePlayers?.size || 0) + 1;
+        this.networkPanel.querySelector('#network-room-label').textContent = `${room.name} · ${room.gameMode} · ${count}/${room.maxPlayers || 5} · ${room.code}`;
+      }
     }
     const saveNow = document.getElementById('btn-save-now');
     if (saveNow) saveNow.hidden = !!room;
     const saveQuit = document.getElementById('btn-save-quit');
     if (saveQuit) saveQuit.textContent = room ? 'Leave Multiplayer & Quit to Title' : 'Save & Quit to Title';
+    if (this.hintEl && room) this.hintEl.textContent = 'Click to play · WASD move · Space jump · Shift sneak · Q drop · E inventory · Tab players · T chat · Esc pause';
+    else if (this.hintEl) this.hintEl.textContent = 'Click to play · WASD move · Space jump · Shift sneak · Q drop · E inventory · F3 debug · Esc pause';
+    this.updateNetworkPlayerList();
+  }
+
+  updateNetworkPlayerList() {
+    const room = this.game.networkRoom;
+    const list = document.getElementById('network-player-list');
+    if (!list) return;
+    if (!room) { this.playerListHeld = false; this.playerListPinned = false; }
+    const open = Boolean(room && this.mode === 'game' && (this.playerListHeld || this.playerListPinned));
+    list.style.display = open ? 'block' : 'none';
+    const button = this.networkPanel?.querySelector('#network-players');
+    button?.setAttribute('aria-expanded', String(open));
+    const rows = list.querySelector('#network-player-rows');
+    const players = [...(room?.players || [])];
+    if (room && !players.some(player => player.id === room.id)) {
+      players.push({ id: room.id, name: room.playerName || this.game.multiplayerClient?.account?.username || 'You', role: room.role });
+    }
+    players.sort((a, b) => Number(b.role === 'host') - Number(a.role === 'host') || String(a.name).localeCompare(String(b.name)));
+    list.querySelector('#network-player-count').textContent = `${players.length} / ${room?.maxPlayers || 5}`;
+    rows.replaceChildren();
+    if (!players.length) {
+      const empty = document.createElement('div'); empty.className = 'network-player-empty'; empty.textContent = 'No players connected'; rows.appendChild(empty);
+    }
+    for (const player of players) {
+      const row = document.createElement('div'); row.className = 'network-player-row';
+      if (player.id === room?.id) row.classList.add('is-you');
+      const name = document.createElement('span'); name.className = 'network-player-name'; name.textContent = String(player.name || 'Player').slice(0, 20);
+      const badge = document.createElement('span'); badge.className = 'network-player-badge';
+      if (player.role === 'host' || (player.id === room?.id && room.role === 'host')) badge.classList.add('is-host');
+      badge.textContent = player.id === room?.id ? (room.role === 'host' ? 'HOST · YOU' : 'YOU') : player.role === 'host' ? 'HOST' : 'ONLINE';
+      row.append(name, badge); rows.appendChild(row);
+    }
+    const ping = list.querySelector('#network-ping');
+    if (open) {
+      if (this.playerPingTimer === null) {
+        this.checkPlayerConnection();
+        this.playerPingTimer = setInterval(() => this.checkPlayerConnection(), 5000);
+      }
+    } else {
+      if (this.playerPingTimer !== null) clearInterval(this.playerPingTimer);
+      this.playerPingTimer = null;
+      this.playerPingInFlight = false;
+      ping.textContent = 'Connection check: ready';
+    }
+  }
+
+  async checkPlayerConnection() {
+    const ping = document.getElementById('network-ping');
+    const client = this.game.multiplayerClient;
+    if (!ping || this.playerPingInFlight || !this.game.networkRoom) return;
+    if (typeof client?.ping !== 'function') { ping.textContent = 'Connection check: unavailable'; return; }
+    this.playerPingInFlight = true;
+    ping.textContent = 'Checking connection…';
+    try {
+      const latency = await client.ping();
+      if (this.playerListHeld || this.playerListPinned) ping.textContent = `Connection: ${latency} ms round trip`;
+    } catch {
+      if (this.playerListHeld || this.playerListPinned) ping.textContent = 'Connection: reconnect required';
+    } finally { this.playerPingInFlight = false; }
+  }
+
+  onKeyUp(e) {
+    if (e.code !== 'Tab') return;
+    this.playerListHeld = false;
+    this.updateNetworkPlayerList();
   }
 
   notify(message, duration = 2400) {
@@ -1398,6 +1487,12 @@ export class UI {
       }
       return;
     }
+    if (e.code === 'Tab' && this.mode === 'game' && this.game.networkRoom) {
+      e.preventDefault();
+      this.playerListHeld = true;
+      this.updateNetworkPlayerList();
+      return;
+    }
     if (e.code === 'KeyT' && this.mode === 'game' && this.game.networkRoom) {
       e.preventDefault();
       this.openNetworkChat();
@@ -1461,6 +1556,11 @@ export class UI {
 
   setMode(mode) {
     this.mode = mode;
+    if (mode !== 'game') {
+      this.playerListHeld = false;
+      this.playerListPinned = false;
+      this.updateNetworkPlayerList();
+    }
     if (mode === 'inventory') this.craftSize = 2;
     else if (mode === 'crafting') this.craftSize = 3;
 

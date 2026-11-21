@@ -434,11 +434,13 @@ const game = {
     const on = (type, handler) => this.networkOffs.push(client.on(type, handler));
     on('player:joined', message => {
       if (!this.networkRoom) return;
+      this.networkRoom.players = [...(this.networkRoom.players || []).filter(peer => peer.id !== message.id), { id: message.id, name: message.name, role: message.role || 'player' }];
       createRemoteAvatar(message.id, message.name);
       ui?.notify?.(`${message.name} joined the world.`);
       ui?.updateNetworkPanel?.();
     });
     on('player:left', message => {
+      if (this.networkRoom) this.networkRoom.players = (this.networkRoom.players || []).filter(peer => peer.id !== message.id);
       removeRemoteAvatar(message.id);
       ui?.notify?.(`${message.name} left the world.`);
       ui?.updateNetworkPanel?.();

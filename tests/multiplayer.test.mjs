@@ -146,6 +146,9 @@ try {
   });
   assert.equal(created.type, 'room:joined');
   assert.equal(created.role, 'host');
+  assert.equal(created.players[0].role, 'host', 'room roster identifies its host');
+  const pingResponse = await request(host, 'ping');
+  assert.equal(pingResponse.type, 'pong', 'authenticated players can measure relay round-trip latency');
   assert.equal(created.gameMode, 'creative');
   assert.equal(created.visuals.mode, 'forced');
   assert.equal(created.visuals.shaderStyle, 'shader');
@@ -174,9 +177,12 @@ try {
   const joinedEvent = waitFor(host, message => message.type === 'player:joined');
   const joined = await request(guest, 'room:join', { code: created.code, playerName: 'Builder', password: 'blockparty' });
   assert.equal(joined.type, 'room:joined');
+  assert.equal(joined.players.find(player => player.id === joined.id).role, 'player', 'roster distinguishes guests from the host');
   assert.equal(joined.gameMode, 'creative');
   assert.deepEqual(joined.visuals, created.visuals, 'joining clients receive the host shader and texture atlas');
-  assert.equal((await joinedEvent).name, 'Builder');
+  const joinedNotice = await joinedEvent;
+  assert.equal(joinedNotice.name, 'Builder');
+  assert.equal(joinedNotice.role, 'player', 'existing clients receive player-list role updates');
   const guestSnapshotRejected = await request(guest, 'world:snapshot', { entries: [['1,70,1', [1, 0]]] });
   assert.equal(guestSnapshotRejected.type, 'error', 'only the host can publish the initial world snapshot');
 

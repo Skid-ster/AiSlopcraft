@@ -819,6 +819,26 @@ html, body {
 .network-panel { position: absolute; top: 12px; right: 12px; width: min(360px, 92vw); padding: 8px; border: 2px solid #111; background: rgba(18,18,18,.82); color: #fff; font: 9px/1.5 'Courier New', monospace; pointer-events: auto; text-shadow: 1px 1px #000; }
 .network-room-line { display: flex; gap: 6px; align-items: center; justify-content: space-between; }
 .network-room-line span { flex: 1; overflow-wrap: anywhere; }
+.network-player-list {
+  position: absolute; top: 74px; left: 50%; transform: translateX(-50%);
+  width: min(360px, 90vw); padding: 12px 14px 10px;
+  border: 2px solid #121212; outline: 1px solid rgba(255,255,255,.42);
+  background: rgba(0,0,0,.84); color: #f4f4f4;
+  box-shadow: 0 5px 20px rgba(0,0,0,.55), inset 0 0 0 2px rgba(255,255,255,.08);
+  font: 10px/1.5 'Pixel UI', 'Courier New', monospace; pointer-events: none;
+  text-shadow: 1px 1px #111; z-index: 6;
+}
+.network-player-list header { display: flex; justify-content: space-between; padding-bottom: 7px; border-bottom: 1px solid #777; color: #f5f5f5; }
+.network-player-list header strong { color: #fff; letter-spacing: 1px; }
+.network-player-list header span, .network-player-list footer { color: #b8e986; }
+.network-player-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 28px; padding: 3px 7px; margin-top: 5px; background: rgba(255,255,255,.08); }
+.network-player-row.is-you { background: rgba(139,190,77,.2); }
+.network-player-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.network-player-badge { flex: 0 0 auto; color: #d6d6d6; font-size: 8px; }
+.network-player-row.is-you .network-player-badge, .network-player-badge.is-host { color: #e8d77b; }
+.network-player-empty { padding: 12px 4px; color: #bbb; text-align: center; }
+.network-player-list footer { margin-top: 9px; padding-top: 6px; border-top: 1px solid #555; }
+.network-player-list small { display: block; margin-top: 5px; color: #aaa; font-size: 7px; text-align: center; }
 .network-panel button { padding: 5px 7px; border: 1px solid #111; color: white; background: #555; font: 9px 'Courier New', monospace; cursor: pointer; }
 .network-panel button:hover { background: #78864c; }
 .network-chat-log { max-height: 112px; overflow: auto; margin-top: 5px; color: #eee; overflow-wrap: anywhere; }

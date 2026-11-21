@@ -81,6 +81,7 @@ For local development, run `npm run multiplayer` in one terminal and `npm run de
 | F3 | Toggle debug overlay |
 | F1 | Toggle HUD |
 | T | Multiplayer chat when connected |
+| Hold Tab | Show the multiplayer player list and live relay ping |
 
 Change difficulty, video, controls, sound, and gameplay options from the title or pause menu. Shader presets can be switched live in Video Settings. From the title screen, **Texture Packs...** opens the local pack importer.
 
