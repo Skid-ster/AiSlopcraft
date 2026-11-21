@@ -14,11 +14,12 @@ function stackLimit(stack) {
   return itemStackLimit(stack.id);
 }
 
-function suggestedMultiplayerRelay() {
-  const { hostname, host, protocol } = window.location;
-  if (hostname === 'localhost' || hostname === '127.0.0.1') return `ws://${hostname}:8787/ws`;
+export function suggestedMultiplayerRelay(location = window.location) {
+  const { hostname, host, protocol } = location;
   // GitHub Pages is static hosting and cannot serve the WebSocket endpoint.
   if (hostname.endsWith('.github.io')) return '';
+  // Keep browser traffic same-origin. Vite proxies /ws during development;
+  // the production relay serves it directly. Never point browser code at localhost.
   return `${protocol === 'https:' ? 'wss:' : 'ws:'}//${host}/ws`;
 }
 
@@ -49,6 +50,21 @@ export class UI {
     this._mouseY = 0;
     this._hoveredStack = null;
     this.optionsMenu = null;
+    this.playerListHeld = false;
+    this.playerListPinned = false;
+    this.playerPingTimer = null;
+    this.playerPingInFlight = false;
+    this.touchEnabled = Boolean(game.player?.touchSupported || window.matchMedia?.('(pointer: coarse)')?.matches || window.navigator?.maxTouchPoints > 0);
+    this.touchPointerActions = new Map();
+    this.touchLookPositions = new Map();
+    this.joystickPointerId = null;
+    this.joystickKeys = new Set();
+    // Remove credentials left by older account-based versions; temporary names
+    // never use or persist authentication tokens.
+    try {
+      window.localStorage.removeItem('aislopcraft:account-token');
+      window.localStorage.removeItem('aislopcraft:account-name');
+    } catch {}
 
     this.buildTitle();
     this.buildHud();
@@ -60,6 +76,12 @@ export class UI {
     window.uiPause = true;
 
     document.addEventListener('keydown', (e) => this.onKey(e));
+    document.addEventListener('keyup', e => this.onKeyUp(e));
+    window.addEventListener('blur', () => {
+      this.playerListHeld = false;
+      this.releaseTouchInputs();
+      this.updateNetworkPlayerList();
+    });
     document.addEventListener('mousemove', (e) => {
       this._mouseX = e.clientX;
       this._mouseY = e.clientY;
@@ -90,14 +112,14 @@ export class UI {
         <div class="title-primary-stack">
           <button class="btn" id="btn-singleplayer">Singleplayer</button>
           <button class="btn" id="btn-multiplayer">Multiplayer</button>
-          <small class="title-multiplayer-hint">Online play: sign up or log in from Multiplayer</small>
+          <small class="title-multiplayer-hint">Online play needs a unique name · no account or password</small>
         </div>
         <div class="title-button-row title-secondary-row title-controls-row">
-          <button class="btn language-button" id="btn-language" title="Language settings are not available yet" aria-label="Language settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c5 5 5 13 0 18m0-18c-5 5-5 13 0 18"/></svg></button>
           <button class="btn" id="btn-options">Options...</button>
           <button class="btn" id="btn-quit">Quit Game</button>
         </div>
         <div class="title-utility-row">
+          <button class="title-link" id="btn-help">How to Play</button>
           <button class="title-link" id="btn-pack">Resource Packs...</button>
           <button class="title-link" id="btn-saves">World Saves...</button>
         </div>
@@ -149,9 +171,7 @@ export class UI {
     div.querySelector('#btn-singleplayer').addEventListener('click', () => {
       this.game.audio.init(); this.game.audio.click(); this.openWorldSelection();
     });
-    div.querySelector('#btn-language').addEventListener('click', () => {
-      div.querySelector('#title-status').textContent = 'Language selection is not available in this browser build.';
-    });
+    div.querySelector('#btn-help').addEventListener('click', event => this.showHelp(event.currentTarget));
     const worldList = worldsScreen.querySelector('#world-list');
     const refreshWorldList = () => {
       const worlds = this.game.listSavedWorlds?.() || [];
@@ -378,25 +398,25 @@ export class UI {
           </label>
           <small>Only needed when this game is hosted on a static site. Leave blank to use the automatic address.</small>
         </details>
-        <section class="mp-auth-panel" id="mp-auth-panel">
-          <h3>Account required</h3>
-          <p>Sign up once, then log in on any device. Your account name is your player name.</p>
-          <label>Username
-            <input id="mp-username" maxlength="20" minlength="3" pattern="[A-Za-z0-9_]{3,20}" placeholder="play565" autocomplete="username">
+        <section class="mp-name-panel" id="mp-name-panel">
+          <h3>Choose your player name</h3>
+          <p>No account, email, or password. Your name is reserved while connected; release it here or disconnect to make it available again.</p>
+          <label>Player name
+            <input id="mp-username" maxlength="20" minlength="3" pattern="[A-Za-z0-9_]{3,20}" placeholder="Builder42" autocomplete="nickname" aria-describedby="mp-name-help">
           </label>
-          <label>Password
-            <input id="mp-auth-password" type="password" minlength="8" maxlength="128" placeholder="At least 8 characters" autocomplete="current-password">
-          </label>
-          <div class="mp-auth-actions">
-            <button class="btn" id="mp-login" type="button">Log in</button>
-            <button class="btn" id="mp-signup" type="button">Create account</button>
-          </div>
-          <small>No email is required. Password reset is unavailable, and free-hosted accounts may be lost if the server resets. Use a unique password you can remember.</small>
+          <small id="mp-name-help">Use 3–20 letters, numbers, or underscores. If someone online already has that name, choose another.</small>
+          <button class="btn" id="mp-claim" type="button">Play online with this name</button>
         </section>
-        <div class="mp-account-panel" id="mp-account-panel" hidden>
-          <span id="mp-account-label">Signed in</span>
-          <button class="btn" id="mp-logout" type="button">Log out</button>
+        <div class="mp-name-active" id="mp-name-active" hidden>
+          <span id="mp-name-label"></span>
+          <button class="btn" id="mp-release-name" type="button">Release player name</button>
         </div>
+        <section class="mp-online-panel" id="mp-online-panel" aria-labelledby="mp-online-title">
+          <div class="mp-online-heading"><h3 id="mp-online-title">Online leaderboard</h3><span id="mp-online-count">0 online</span></div>
+          <ul id="mp-online-list" aria-live="polite"><li>Connect to see everyone online.</li></ul>
+          <button class="btn" id="mp-online-refresh" type="button">Refresh online players</button>
+          <small>Live list of everyone connected to this room service—not a permanent score ranking.</small>
+        </section>
         <div class="mp-columns">
           <section>
             <h3>Create a world</h3>
@@ -438,12 +458,12 @@ export class UI {
     div.querySelector('#btn-multiplayer').addEventListener('click', () => this.openMultiplayer());
     multiplayer.querySelector('#mp-back').addEventListener('click', () => { multiplayer.style.display = 'none'; });
     multiplayer.querySelector('#mp-refresh').addEventListener('click', () => this.refreshPublicRooms());
-    multiplayer.querySelector('#mp-login').addEventListener('click', () => this.authenticateMultiplayer('auth:login'));
-    multiplayer.querySelector('#mp-signup').addEventListener('click', () => this.authenticateMultiplayer('auth:signup'));
-    multiplayer.querySelector('#mp-auth-password').addEventListener('keydown', event => {
-      if (event.key === 'Enter') { event.preventDefault(); this.authenticateMultiplayer('auth:login'); }
+    multiplayer.querySelector('#mp-online-refresh').addEventListener('click', () => this.refreshOnlinePlayers());
+    multiplayer.querySelector('#mp-claim').addEventListener('click', () => this.claimMultiplayerName());
+    multiplayer.querySelector('#mp-username').addEventListener('keydown', event => {
+      if (event.key === 'Enter') { event.preventDefault(); this.claimMultiplayerName(); }
     });
-    multiplayer.querySelector('#mp-logout').addEventListener('click', () => this.logoutMultiplayer());
+    multiplayer.querySelector('#mp-release-name').addEventListener('click', () => this.releaseMultiplayerName());
     multiplayer.querySelector('#mp-create').addEventListener('click', () => this.createMultiplayerRoom());
     multiplayer.querySelector('#mp-join').addEventListener('click', () => this.joinMultiplayerRoom());
     multiplayer.querySelector('#mp-access').addEventListener('change', () => {
@@ -455,9 +475,9 @@ export class UI {
     });
     this.multiplayerClient = this.game.multiplayerClient || null;
     multiplayer.querySelector('#mp-relay').value = this.game.multiplayerRelay || window.localStorage.getItem('aislopcraft:multiplayer-relay') || '';
-    multiplayer.querySelector('#mp-username').value = window.localStorage.getItem('aislopcraft:account-name') || '';
-    this.multiplayerAccount = this.multiplayerClient?.account || null;
-    this.updateMultiplayerAccountUI();
+    multiplayer.querySelector('#mp-username').value = window.localStorage.getItem('aislopcraft:player-name') || '';
+    this.multiplayerName = this.multiplayerClient?.playerName || null;
+    this.updateMultiplayerNameUI();
     multiplayer.querySelector('#mp-code').value = new URLSearchParams(window.location.search).get('room') || '';
   }
 
@@ -497,8 +517,8 @@ export class UI {
     for (const control of this.multiplayerScreen.querySelectorAll('[data-forced-visual]')) control.disabled = policy.value !== 'forced';
     const status = this.multiplayerScreen.querySelector('#mp-status');
     if (this.game.multiplayerClient) this.multiplayerClient = this.game.multiplayerClient;
-    this.multiplayerAccount = this.multiplayerClient?.account || this.multiplayerAccount || null;
-    this.updateMultiplayerAccountUI();
+    this.multiplayerName = this.multiplayerClient?.playerName || this.multiplayerName || null;
+    this.updateMultiplayerNameUI();
     const hasRelay = this.multiplayerScreen.querySelector('#mp-relay').value.trim() || this.game.multiplayerRelay || suggestedMultiplayerRelay();
     status.replaceChildren();
     if (!hasRelay) {
@@ -520,22 +540,54 @@ export class UI {
         status.append(' Add a reachable service under Advanced settings.');
       }
     } else {
-      status.textContent = this.multiplayerAccount ? `Signed in as ${this.multiplayerAccount.username}.` : 'Sign in or create an account to play online.';
-    }
-    if (!this.multiplayerAccount && window.localStorage.getItem('aislopcraft:account-token')) {
-      void this.restoreMultiplayerAccount().catch(error => { status.textContent = error.message; });
+      status.textContent = this.multiplayerName ? `Playing as ${this.multiplayerName}. Your name is reserved while connected.` : 'Choose an available player name to play online. No password or account needed.';
+      void this.prepareMultiplayerClient().then(() => this.refreshOnlinePlayers()).catch(() => {});
     }
   }
 
-  updateMultiplayerAccountUI() {
+  updateMultiplayerNameUI() {
     if (!this.multiplayerScreen) return;
-    const account = this.multiplayerAccount;
-    this.multiplayerScreen.classList.toggle('mp-authenticated', Boolean(account));
-    this.multiplayerScreen.querySelector('#mp-auth-panel').hidden = Boolean(account);
-    this.multiplayerScreen.querySelector('#mp-account-panel').hidden = !account;
-    this.multiplayerScreen.querySelector('#mp-account-label').textContent = account ? `Signed in as ${account.username}` : '';
-    const username = this.multiplayerScreen.querySelector('#mp-username');
-    if (account) username.value = account.username;
+    const name = this.multiplayerClient?.playerName || this.multiplayerName || null;
+    this.multiplayerName = name;
+    this.multiplayerScreen.classList.toggle('mp-named', Boolean(name));
+    this.multiplayerScreen.querySelector('#mp-name-panel').hidden = Boolean(name);
+    this.multiplayerScreen.querySelector('#mp-name-active').hidden = !name;
+    this.multiplayerScreen.querySelector('#mp-name-label').textContent = name ? `Playing as ${name}. This name is held only while you are connected.` : '';
+    this.multiplayerScreen.querySelector('#mp-create').disabled = !name;
+    this.multiplayerScreen.querySelector('#mp-join').disabled = !name;
+    if (!name && !this.multiplayerScreen.querySelector('#mp-username').value) {
+      try { this.multiplayerScreen.querySelector('#mp-username').value = window.localStorage.getItem('aislopcraft:player-name') || ''; } catch {}
+    }
+  }
+
+  renderOnlinePlayers(players = []) {
+    if (!this.multiplayerScreen) return;
+    const list = this.multiplayerScreen.querySelector('#mp-online-list');
+    const count = this.multiplayerScreen.querySelector('#mp-online-count');
+    list.replaceChildren();
+    count.textContent = `${players.length} online`;
+    if (!players.length) {
+      const empty = document.createElement('li'); empty.textContent = 'Nobody is online yet.'; list.appendChild(empty); return;
+    }
+    for (const name of players) {
+      const row = document.createElement('li');
+      const playerName = document.createElement('span'); playerName.textContent = name;
+      const status = document.createElement('small'); status.textContent = name === this.multiplayerName ? 'You' : 'Online';
+      row.append(playerName, status);
+      list.appendChild(row);
+    }
+  }
+
+  attachMultiplayerListeners(client) {
+    if (this._onlinePlayersClient === client) return;
+    this._onlinePlayersClient = client;
+    client.on('players:list', message => this.renderOnlinePlayers(message.players));
+    client.on('disconnected', () => {
+      if (this.multiplayerClient !== client) return;
+      this.multiplayerName = null;
+      this.updateMultiplayerNameUI();
+      if (this.multiplayerScreen) this.multiplayerScreen.querySelector('#mp-status').textContent = 'Disconnected. Your player name is available again; reconnect and claim it to play.';
+    });
   }
 
   async prepareMultiplayerClient() {
@@ -544,81 +596,63 @@ export class UI {
     if (!relay) throw new Error('This static site cannot host rooms. Open the Azure setup guide or enter a custom WebSocket service under Advanced.');
     const { MultiplayerClient } = await import('../network/multiplayer.js');
     if (!this.multiplayerClient) this.multiplayerClient = new MultiplayerClient();
+    this.attachMultiplayerListeners(this.multiplayerClient);
     await this.multiplayerClient.connect(relay);
     this.game.multiplayerRelay = relay;
-    window.localStorage.setItem('aislopcraft:multiplayer-relay', relay);
+    try { window.localStorage.setItem('aislopcraft:multiplayer-relay', relay); } catch {}
     return this.multiplayerClient;
   }
 
-  async authenticateMultiplayer(type) {
+  async claimMultiplayerName() {
     const screen = this.multiplayerScreen;
     const status = screen.querySelector('#mp-status');
-    const username = screen.querySelector('#mp-username').value.trim();
-    const password = screen.querySelector('#mp-auth-password').value;
-    if (!username || !password) { status.textContent = 'Enter a username and password.'; return; }
-    const buttons = [screen.querySelector('#mp-login'), screen.querySelector('#mp-signup')];
-    buttons.forEach(button => { button.disabled = true; });
-    status.textContent = type === 'auth:signup' ? 'Creating your account…' : 'Signing in…';
+    const input = screen.querySelector('#mp-username');
+    const name = input.value.trim();
+    if (!/^[A-Za-z0-9_]{3,20}$/.test(name)) { status.textContent = 'Use 3–20 letters, numbers, or underscores for your player name.'; input.focus(); return; }
+    const button = screen.querySelector('#mp-claim');
+    button.disabled = true;
+    status.textContent = 'Connecting and checking whether that name is free…';
     try {
       const client = await this.prepareMultiplayerClient();
-      const result = await client.request(type, { username, password });
-      this.multiplayerAccount = result.account;
-      client.account = result.account;
-      window.localStorage.setItem('aislopcraft:account-token', result.token);
-      window.localStorage.setItem('aislopcraft:account-name', result.account.username);
-      screen.querySelector('#mp-auth-password').value = '';
-      this.updateMultiplayerAccountUI();
-      status.textContent = `Welcome, ${result.account.username}. You can now browse or create a room.`;
+      const result = await client.claimPlayerName(name);
+      this.multiplayerName = result.name;
+      try { window.localStorage.setItem('aislopcraft:player-name', result.name); } catch {}
+      this.updateMultiplayerNameUI();
+      status.textContent = `Welcome, ${result.name}. You can now browse, host, or join a world. Your name is reserved until you release it or disconnect.`;
     } catch (error) { status.textContent = error.message; }
-    finally { buttons.forEach(button => { button.disabled = false; }); }
+    finally { button.disabled = false; }
   }
 
-  async restoreMultiplayerAccount() {
-    const token = window.localStorage.getItem('aislopcraft:account-token');
-    if (!token) return null;
-    const client = await this.prepareMultiplayerClient();
+  async refreshOnlinePlayers() {
     try {
-      const result = await client.request('auth:resume', { token });
-      this.multiplayerAccount = result.account;
-      client.account = result.account;
-      this.updateMultiplayerAccountUI();
-      this.multiplayerScreen.querySelector('#mp-status').textContent = `Welcome back, ${result.account.username}.`;
-      return result.account;
+      const client = await this.prepareMultiplayerClient();
+      const result = await client.listOnlinePlayers();
+      this.renderOnlinePlayers(result.players);
     } catch (error) {
-      if (/sign in again|expired/i.test(error.message)) window.localStorage.removeItem('aislopcraft:account-token');
-      this.multiplayerAccount = null;
-      client.account = null;
-      this.updateMultiplayerAccountUI();
-      throw error;
+      this.multiplayerScreen.querySelector('#mp-online-list').textContent = error.message;
     }
   }
 
-  async logoutMultiplayer() {
+  async releaseMultiplayerName() {
     const client = this.multiplayerClient;
+    if (!client) return;
     try {
-      if (client?.account && client.socket?.readyState === WebSocket.OPEN) await client.request('auth:logout');
-    } catch {}
-    client?.disconnect(false);
-    this.multiplayerClient = null;
-    this.multiplayerAccount = null;
-    window.localStorage.removeItem('aislopcraft:account-token');
-    this.updateMultiplayerAccountUI();
-    this.multiplayerScreen.querySelector('#mp-status').textContent = 'You are signed out. Log in or create an account to continue.';
+      await client.releasePlayerName();
+      this.multiplayerName = null;
+      this.updateMultiplayerNameUI();
+      this.multiplayerScreen.querySelector('#mp-status').textContent = 'Name released. It is available for someone else to use.';
+    } catch (error) {
+      this.multiplayerScreen.querySelector('#mp-status').textContent = `Could not release the player name: ${error.message}`;
+    }
   }
 
   async connectMultiplayer() {
     const status = this.multiplayerScreen.querySelector('#mp-status');
-    const token = window.localStorage.getItem('aislopcraft:account-token');
-    if (!this.multiplayerAccount && !token) throw new Error('Create an account or log in before playing online.');
+    if (!this.multiplayerClient?.playerName && !this.multiplayerName) throw new Error('Choose an available player name first.');
     status.textContent = 'Connecting to the room service…';
     const client = await this.prepareMultiplayerClient();
-    if (!client.account) {
-      const result = await client.request('auth:resume', { token });
-      client.account = result.account;
-      this.multiplayerAccount = result.account;
-      this.updateMultiplayerAccountUI();
-    }
-    return { playerName: client.account.username, status };
+    if (!client.playerName) throw new Error('Your name reservation ended. Claim an available name again.');
+    return { playerName: client.playerName, status };
   }
 
   async refreshPublicRooms() {
@@ -626,8 +660,9 @@ export class UI {
     const list = screen.querySelector('#mp-room-list');
     const status = screen.querySelector('#mp-status');
     try {
-      await this.connectMultiplayer();
-      const result = await this.multiplayerClient.listRooms();
+      const client = await this.prepareMultiplayerClient();
+      const [result, online] = await Promise.all([client.listRooms(), client.listOnlinePlayers()]);
+      this.renderOnlinePlayers(online.players);
       list.replaceChildren();
       if (!result.rooms.length) { list.textContent = 'No public worlds are online right now.'; return; }
       for (const room of result.rooms) {
@@ -763,13 +798,46 @@ export class UI {
       <div class="toast-msg" id="toast-msg"></div>
       <div class="hint" id="hint">Click to play &nbsp;|&nbsp; WASD move · Space jump · Shift sneak · Q drop · E inventory · F3 debug · Esc pause</div>
       <div class="network-panel" id="network-panel" style="display:none">
-        <div class="network-room-line"><span id="network-room-label"></span><button id="network-copy" type="button">Copy invite</button><button id="network-leave" type="button">Leave</button></div>
+        <div class="network-room-line"><span id="network-room-label"></span><button id="network-players" type="button" aria-expanded="false">Players (Tab)</button><button id="network-copy" type="button">Invite</button><button id="network-leave" type="button">Leave</button></div>
         <div class="network-chat-log" id="network-chat-log" aria-live="polite"></div>
         <form id="network-chat-form" style="display:none"><input id="network-chat-input" maxlength="240" placeholder="Message…" autocomplete="off"><button type="submit">Send</button></form>
         <button id="network-chat-open" type="button">Chat (T)</button>
       </div>
+      <section class="network-player-list" id="network-player-list" aria-label="Players in this world" aria-live="polite" style="display:none">
+        <header><strong>PLAYERS</strong><span id="network-player-count">0 / 5</span></header>
+        <div id="network-player-rows"></div>
+        <footer id="network-ping">Connection check: ready</footer>
+        <small>Hold Tab to view · use Players to pin open</small>
+      </section>
+      <div class="touch-controls" id="touch-controls" aria-label="Touch game controls">
+        <div class="touch-look-zone" id="touch-look-zone" aria-label="Drag to look"><span>DRAG TO LOOK</span></div>
+        <div class="touch-joystick" id="touch-joystick" role="group" aria-label="Move joystick"><div class="touch-joystick-knob" id="touch-joystick-knob"></div></div>
+        <div class="touch-action-cluster">
+          <button type="button" id="touch-mine" aria-label="Mine or attack">Mine</button>
+          <button type="button" id="touch-use" aria-label="Place a block or use item">Use</button>
+          <button type="button" id="touch-jump" aria-label="Jump">Jump</button>
+          <button type="button" id="touch-sneak" aria-label="Sneak">Sneak</button>
+          <button type="button" id="touch-inventory" aria-label="Open or close inventory">Inventory</button>
+          <button type="button" id="touch-pause" aria-label="Pause game">Pause</button>
+          <button type="button" id="touch-slot-prev" aria-label="Select previous hotbar slot">◀ Slot</button>
+          <button type="button" id="touch-slot-next" aria-label="Select next hotbar slot">Slot ▶</button>
+          <button type="button" id="touch-chat" aria-label="Open multiplayer chat" hidden>Chat</button>
+        </div>
+      </div>
     `;
     this.root.appendChild(div);
+    this.touchPanelReturnEl = document.createElement('button');
+    this.touchPanelReturnEl.type = 'button';
+    this.touchPanelReturnEl.id = 'touch-panel-return';
+    this.touchPanelReturnEl.className = 'btn touch-panel-return';
+    this.touchPanelReturnEl.textContent = 'Back to game';
+    this.touchPanelReturnEl.setAttribute('aria-label', 'Close panel and return to the game');
+    this.touchPanelReturnEl.hidden = true;
+    this.touchPanelReturnEl.addEventListener('click', () => {
+      this.game.audio?.click?.();
+      this.setMode('game');
+    });
+    this.root.appendChild(this.touchPanelReturnEl);
     this.hotbarEl = div.querySelector('#hotbar');
     this.heartsEl = div.querySelector('#hearts');
     this.armorBarEl = div.querySelector('#armor-bar');
@@ -803,6 +871,10 @@ export class UI {
       catch { window.prompt('Copy this invite link:', invite.toString()); }
     });
     div.querySelector('#network-leave').addEventListener('click', () => this.game.leaveMultiplayer?.());
+    div.querySelector('#network-players').addEventListener('click', () => {
+      this.playerListPinned = !this.playerListPinned;
+      this.updateNetworkPlayerList();
+    });
     div.querySelector('#network-chat-open').addEventListener('click', () => this.openNetworkChat());
     div.querySelector('#network-chat-form').addEventListener('submit', event => {
       event.preventDefault();
@@ -813,9 +885,146 @@ export class UI {
       div.querySelector('#network-chat-form').style.display = 'none';
       div.querySelector('#network-chat-open').style.display = 'block';
       input.blur();
-      if (this.mode === 'game') document.getElementById('game-canvas')?.requestPointerLock?.();
+      if (this.mode === 'game' && !this.touchEnabled) document.getElementById('game-canvas')?.requestPointerLock?.();
     });
     this.networkPanel = networkPanel;
+    this.touchControlsEl = div.querySelector('#touch-controls');
+    div.classList.toggle('touch-device', this.touchEnabled);
+    this.initTouchControls();
+  }
+
+  initTouchControls() {
+    const player = this.game.player;
+    if (!this.touchEnabled || !player) return;
+    const controls = this.touchControlsEl;
+    const look = controls.querySelector('#touch-look-zone');
+    const joystick = controls.querySelector('#touch-joystick');
+    const knob = controls.querySelector('#touch-joystick-knob');
+    const activePointer = event => {
+      event.preventDefault();
+      if (this.mode !== 'game') return false;
+      player.setTouchPointer(event.pointerId, true);
+      try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch {}
+      return true;
+    };
+    const releasePointer = pointerId => {
+      const action = this.touchPointerActions.get(pointerId);
+      this.touchPointerActions.delete(pointerId);
+      if (action === 'attack' && ![...this.touchPointerActions.values()].includes('attack')) {
+        player.leftDown = false; player.mining.active = false; player.mining.progress = 0;
+      }
+      if (action === 'use' && ![...this.touchPointerActions.values()].includes('use')) player.rightDown = false;
+      if (action?.startsWith('key:')) {
+        const code = action.slice(4);
+        const stillHeldByButton = [...this.touchPointerActions.values()].includes(action);
+        if (!stillHeldByButton && !this.joystickKeys.has(code)) player.setTouchKey(code, false);
+      }
+      this.touchLookPositions.delete(pointerId);
+      player.setTouchPointer(pointerId, false);
+      if (this.joystickPointerId === pointerId) {
+        this.joystickPointerId = null;
+        for (const code of this.joystickKeys) {
+          if (![...this.touchPointerActions.values()].includes(`key:${code}`)) player.setTouchKey(code, false);
+        }
+        this.joystickKeys.clear();
+        knob.style.transform = 'translate(0, 0)';
+      }
+    };
+    const releaseEvents = element => {
+      element.addEventListener('pointerup', event => releasePointer(event.pointerId));
+      element.addEventListener('pointercancel', event => releasePointer(event.pointerId));
+      element.addEventListener('lostpointercapture', event => releasePointer(event.pointerId));
+    };
+
+    look.addEventListener('pointerdown', event => {
+      if (event.pointerType === 'mouse' || !activePointer(event)) return;
+      this.touchLookPositions.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    });
+    look.addEventListener('pointermove', event => {
+      const previous = this.touchLookPositions.get(event.pointerId);
+      if (!previous) return;
+      player.mouseDX += (event.clientX - previous.x) * 2.25;
+      player.mouseDY += (event.clientY - previous.y) * 2.25;
+      this.touchLookPositions.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    });
+    releaseEvents(look);
+
+    const updateJoystick = event => {
+      const rect = joystick.getBoundingClientRect();
+      const radius = Math.max(24, Math.min(rect.width || 96, rect.height || 96) * 0.42);
+      const dx = event.clientX - (rect.left + (rect.width || 96) / 2);
+      const dy = event.clientY - (rect.top + (rect.height || 96) / 2);
+      const length = Math.hypot(dx, dy) || 1;
+      const scale = Math.min(1, radius / length);
+      const nx = dx / radius, ny = dy / radius;
+      knob.style.transform = `translate(${dx * scale}px, ${dy * scale}px)`;
+      const desired = new Set();
+      if (ny < -0.28) desired.add(player.bindings.forward);
+      if (ny > 0.28) desired.add(player.bindings.back);
+      if (nx < -0.28) desired.add(player.bindings.left);
+      if (nx > 0.28) desired.add(player.bindings.right);
+      for (const code of this.joystickKeys) {
+        if (!desired.has(code) && ![...this.touchPointerActions.values()].includes(`key:${code}`)) player.setTouchKey(code, false);
+      }
+      for (const code of desired) player.setTouchKey(code, true);
+      this.joystickKeys = desired;
+    };
+    joystick.addEventListener('pointerdown', event => {
+      if (event.pointerType === 'mouse' || !activePointer(event)) return;
+      this.joystickPointerId = event.pointerId;
+      updateJoystick(event);
+    });
+    joystick.addEventListener('pointermove', event => { if (event.pointerId === this.joystickPointerId) updateJoystick(event); });
+    releaseEvents(joystick);
+
+    const bindHold = (id, action, buttonNumber = 0) => {
+      const button = controls.querySelector(`#${id}`);
+      button.addEventListener('pointerdown', event => {
+        if (event.pointerType === 'mouse' || !activePointer(event)) return;
+        this.touchPointerActions.set(event.pointerId, action);
+        if (action === 'attack') player.leftDown = true;
+        else if (action === 'use') player.rightDown = true;
+        else if (action.startsWith('key:')) player.setTouchKey(action.slice(4), true);
+        else return;
+        if (action === 'attack' || action === 'use') {
+          const binding = action === 'attack' ? player.bindings.attack : player.bindings.use;
+          const boundButton = /^Mouse([0-2])$/.exec(binding || '');
+          const mouseButton = boundButton ? Number(boundButton[1]) : buttonNumber;
+          document.dispatchEvent(new window.MouseEvent('mousedown', { button: mouseButton, bubbles: true, cancelable: true }));
+        }
+      });
+      releaseEvents(button);
+    };
+    bindHold('touch-mine', 'attack', 0);
+    bindHold('touch-use', 'use', 2);
+    bindHold('touch-jump', `key:${player.bindings.jump}`);
+    bindHold('touch-sneak', `key:${player.bindings.sneak}`);
+    controls.querySelector('#touch-inventory').addEventListener('click', () => {
+      if (this.mode === 'game') this.setMode('inventory');
+      else if (['inventory', 'crafting', 'furnace', 'chest'].includes(this.mode)) this.setMode('game');
+    });
+    controls.querySelector('#touch-pause').addEventListener('click', () => {
+      if (this.mode === 'game') this.setMode('pause');
+    });
+    controls.querySelector('#touch-slot-prev').addEventListener('click', () => {
+      player.hotbarIndex = (player.hotbarIndex + 8) % 9; this.refresh();
+    });
+    controls.querySelector('#touch-slot-next').addEventListener('click', () => {
+      player.hotbarIndex = (player.hotbarIndex + 1) % 9; this.refresh();
+    });
+    controls.querySelector('#touch-chat').addEventListener('click', () => this.openNetworkChat());
+  }
+
+  releaseTouchInputs() {
+    const player = this.game.player;
+    if (!player?.clearTouchInput) return;
+    player.clearTouchInput();
+    this.touchPointerActions.clear();
+    this.touchLookPositions.clear();
+    this.joystickPointerId = null;
+    this.joystickKeys.clear();
+    const knob = this.touchControlsEl?.querySelector('#touch-joystick-knob');
+    if (knob) knob.style.transform = 'translate(0, 0)';
   }
 
   openNetworkChat() {
@@ -846,12 +1055,84 @@ export class UI {
     const room = this.game.networkRoom;
     if (this.networkPanel) {
       this.networkPanel.style.display = room ? 'block' : 'none';
-      if (room) this.networkPanel.querySelector('#network-room-label').textContent = `${room.name} · ${room.gameMode} · ${(this.game.remotePlayers?.size || 0) + 1}/5 · ${room.code}`;
+      if (room) {
+        const count = room.players?.length || (this.game.remotePlayers?.size || 0) + 1;
+        this.networkPanel.querySelector('#network-room-label').textContent = `${room.name} · ${room.gameMode} · ${count}/${room.maxPlayers || 5} · ${room.code}`;
+      }
     }
     const saveNow = document.getElementById('btn-save-now');
     if (saveNow) saveNow.hidden = !!room;
     const saveQuit = document.getElementById('btn-save-quit');
     if (saveQuit) saveQuit.textContent = room ? 'Leave Multiplayer & Quit to Title' : 'Save & Quit to Title';
+    if (this.hintEl && room) this.hintEl.textContent = 'Click to play · WASD move · Space jump · Shift sneak · Q drop · E inventory · Tab players · T chat · Esc pause';
+    else if (this.hintEl) this.hintEl.textContent = 'Click to play · WASD move · Space jump · Shift sneak · Q drop · E inventory · F3 debug · Esc pause';
+    this.updateNetworkPlayerList();
+  }
+
+  updateNetworkPlayerList() {
+    const room = this.game.networkRoom;
+    const list = document.getElementById('network-player-list');
+    if (!list) return;
+    if (!room) { this.playerListHeld = false; this.playerListPinned = false; }
+    const touchChat = document.getElementById('touch-chat');
+    if (touchChat) touchChat.hidden = !room;
+    const open = Boolean(room && this.mode === 'game' && (this.playerListHeld || this.playerListPinned));
+    list.style.display = open ? 'block' : 'none';
+    const button = this.networkPanel?.querySelector('#network-players');
+    button?.setAttribute('aria-expanded', String(open));
+    const rows = list.querySelector('#network-player-rows');
+    const players = [...(room?.players || [])];
+    if (room && !players.some(player => player.id === room.id)) {
+      players.push({ id: room.id, name: room.playerName || this.game.multiplayerClient?.playerName || 'You', role: room.role });
+    }
+    players.sort((a, b) => Number(b.role === 'host') - Number(a.role === 'host') || String(a.name).localeCompare(String(b.name)));
+    list.querySelector('#network-player-count').textContent = `${players.length} / ${room?.maxPlayers || 5}`;
+    rows.replaceChildren();
+    if (!players.length) {
+      const empty = document.createElement('div'); empty.className = 'network-player-empty'; empty.textContent = 'No players connected'; rows.appendChild(empty);
+    }
+    for (const player of players) {
+      const row = document.createElement('div'); row.className = 'network-player-row';
+      if (player.id === room?.id) row.classList.add('is-you');
+      const name = document.createElement('span'); name.className = 'network-player-name'; name.textContent = String(player.name || 'Player').slice(0, 20);
+      const badge = document.createElement('span'); badge.className = 'network-player-badge';
+      if (player.role === 'host' || (player.id === room?.id && room.role === 'host')) badge.classList.add('is-host');
+      badge.textContent = player.id === room?.id ? (room.role === 'host' ? 'HOST · YOU' : 'YOU') : player.role === 'host' ? 'HOST' : 'ONLINE';
+      row.append(name, badge); rows.appendChild(row);
+    }
+    const ping = list.querySelector('#network-ping');
+    if (open) {
+      if (this.playerPingTimer === null) {
+        this.checkPlayerConnection();
+        this.playerPingTimer = setInterval(() => this.checkPlayerConnection(), 5000);
+      }
+    } else {
+      if (this.playerPingTimer !== null) clearInterval(this.playerPingTimer);
+      this.playerPingTimer = null;
+      this.playerPingInFlight = false;
+      ping.textContent = 'Connection check: ready';
+    }
+  }
+
+  async checkPlayerConnection() {
+    const ping = document.getElementById('network-ping');
+    const client = this.game.multiplayerClient;
+    if (!ping || this.playerPingInFlight || !this.game.networkRoom) return;
+    if (typeof client?.ping !== 'function') { ping.textContent = 'Connection check: unavailable'; return; }
+    this.playerPingInFlight = true;
+    ping.textContent = 'Checking connection…';
+    try {
+      const latency = await client.ping();
+      if (this.playerListHeld || this.playerListPinned) ping.textContent = `Connection: ${latency} ms round trip`;
+    } catch {
+      if (this.playerListHeld || this.playerListPinned) ping.textContent = 'Connection: reconnect required';
+    } finally { this.playerPingInFlight = false; }
+  }
+
+  onKeyUp(e) {
+    if (e.code !== 'Tab') return;
+    this.playerListHeld = false;
+    this.updateNetworkPlayerList();
   }
 
   notify(message, duration = 2400) {
@@ -1019,6 +1300,7 @@ export class UI {
       <div class="pause-inner">
         <h2>Game menu</h2>
         <button class="btn btn-big" id="btn-back">Back to game</button>
+        <button class="btn" id="btn-help-pause">How to Play</button>
         <button class="btn" id="btn-options2">Options...</button>
         <button class="btn" id="btn-respawn">Respawn</button>
         ${this.game.saveGame ? '<button class="btn" id="btn-save-now">Save World Now</button>' : ''}
@@ -1031,6 +1313,7 @@ export class UI {
       this.game.audio.click();
       this.setMode('game');
     });
+    pause.querySelector('#btn-help-pause').addEventListener('click', event => this.showHelp(event.currentTarget));
     pause.querySelector('#btn-options2').addEventListener('click', () => {
       this.game.audio.click();
       this.showOptions();
@@ -1052,6 +1335,52 @@ export class UI {
         this.game.saveAndQuit?.();
       });
     }
+
+    const help = document.createElement('div');
+    help.id = 'help-screen';
+    help.className = 'screen help-screen';
+    help.style.display = 'none';
+    help.setAttribute('role', 'dialog');
+    help.setAttribute('aria-modal', 'true');
+    help.setAttribute('aria-labelledby', 'help-title');
+    help.setAttribute('aria-describedby', 'help-description');
+    help.innerHTML = `
+      <section class="help-card">
+        <header class="help-heading"><div><h2 id="help-title">How to Play</h2><p id="help-description">A quick guide to getting started in AiSlopcraft.</p></div><button class="btn" id="help-close" type="button">Done</button></header>
+        <div class="help-columns">
+          <section><h3>Your first day</h3><ol>
+            <li>Choose <strong>Singleplayer</strong>, then create a Survival world.</li>
+            <li>Look around, break nearby trees, and turn logs into planks in your inventory.</li>
+            <li>Make a crafting table, tools, and a small shelter before night.</li>
+            <li>Explore for food and resources. This Beta-inspired game has <strong>no hunger or sprinting</strong>; food heals when used.</li>
+          </ol></section>
+          <section><h3>Controls</h3><dl class="help-controls">
+            <div><dt>W A S D</dt><dd>Move</dd></div><div><dt>Mouse</dt><dd>Look around · click the game to capture</dd></div>
+            <div><dt>Space / Shift</dt><dd>Jump / sneak</dd></div><div><dt>Left / right click</dt><dd>Mine or attack / place or use</dd></div>
+            <div><dt>E</dt><dd>Inventory · close containers</dd></div><div><dt>1–9 / wheel</dt><dd>Select a hotbar slot</dd></div>
+            <div><dt>Q / Ctrl+Q</dt><dd>Drop one item / drop a stack</dd></div><div><dt>Esc</dt><dd>Pause or close a screen</dd></div>
+            <div><dt>F3 / F1</dt><dd>Debug details / hide HUD</dd></div>
+            <div><dt>Tab / T</dt><dd>Multiplayer player list / chat</dd></div>
+            <div><dt>Touch move/look</dt><dd>Left joystick to move · drag the open center to look</dd></div>
+            <div><dt>Touch actions</dt><dd>Hold Mine to break · tap Use · hold Jump or Sneak</dd></div>
+            <div><dt>Touch menu</dt><dd>Inventory, hotbar, multiplayer chat and Pause buttons</dd></div>
+          </dl></section>
+          <section><h3>Useful tips</h3><ul>
+            <li>Use <strong>Options → Controls</strong> to change key bindings and mouse sensitivity.</li>
+            <li>Use <strong>Options → Video Settings</strong> to lower render distance or render scale if performance is slow.</li>
+            <li>Pause to save your local world. <strong>World Saves...</strong> exports a portable backup.</li>
+            <li>In multiplayer, each player keeps their own inventory. Rooms are temporary and close if the host leaves or the server restarts.</li>
+          </ul></section>
+        </div>
+        <p class="help-footnote">On touchscreens, use the virtual joystick to move and drag the open center to look. Hold Mine until the block breaks or an attack lands; Use acts on press. Landscape orientation leaves more room for play. Local worlds autosave; multiplayer rooms are temporary.</p>
+      </section>`;
+    this.root.appendChild(help);
+    this.helpScreen = help;
+    this.helpCloseButton = help.querySelector('#help-close');
+    this.helpReturnMode = null;
+    this.helpReturnFocus = null;
+    this.helpCloseButton.addEventListener('click', () => this.closeHelp());
+    help.addEventListener('click', event => { if (event.target === help) this.closeHelp(); });
 
     // death
     const death = document.createElement('div');
@@ -1387,15 +1716,60 @@ export class UI {
     if (this.mode === 'chest' || this.mode === 'furnace') this.game.syncSharedState?.();
   }
 
+  showHelp(opener = document.activeElement) {
+    if (!this.helpScreen || this.helpScreen.style.display === 'flex') return;
+    this.helpReturnMode = this.mode;
+    this.helpReturnFocus = opener?.isConnected ? opener : null;
+    this.helpScreen.style.display = 'flex';
+    window.uiPause = true;
+    document.exitPointerLock?.();
+    this.helpCloseButton.focus();
+  }
+
+  closeHelp() {
+    if (!this.helpScreen || this.helpScreen.style.display === 'none') return;
+    this.helpScreen.style.display = 'none';
+    const returnMode = this.helpReturnMode;
+    const returnFocus = this.helpReturnFocus;
+    this.helpReturnMode = null;
+    this.helpReturnFocus = null;
+    window.uiPause = this.mode !== 'game';
+    if (returnMode === 'game') this.setMode('game');
+    else if (returnFocus?.isConnected) returnFocus.focus();
+  }
+
   onKey(e) {
+    if (this.helpScreen?.style.display === 'flex') {
+      if (e.code === 'Escape') {
+        e.preventDefault();
+        this.closeHelp();
+      } else if (e.code === 'Tab') {
+        const focusable = [...this.helpScreen.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), [tabindex]:not([tabindex="-1"])')];
+        if (focusable.length) {
+          const first = focusable[0], last = focusable.at(-1);
+          if (e.shiftKey && (document.activeElement === first || !this.helpScreen.contains(document.activeElement))) {
+            e.preventDefault(); last.focus();
+          } else if (!e.shiftKey && (document.activeElement === last || !this.helpScreen.contains(document.activeElement))) {
+            e.preventDefault(); first.focus();
+          }
+        }
+      }
+      return;
+    }
     if (e.target?.id === 'network-chat-input') {
       if (e.code === 'Escape') {
         e.preventDefault();
         this.networkPanel.querySelector('#network-chat-form').style.display = 'none';
         this.networkPanel.querySelector('#network-chat-open').style.display = 'block';
         e.target.blur();
-        if (this.mode === 'game') document.getElementById('game-canvas')?.requestPointerLock?.();
+        if (this.mode === 'game' && !this.touchEnabled) document.getElementById('game-canvas')?.requestPointerLock?.();
       }
+      return;
+    }
+    if (e.code === 'Tab' && this.mode === 'game' && this.game.networkRoom) {
+      e.preventDefault();
+      this.playerListHeld = true;
+      this.updateNetworkPlayerList();
       return;
     }
     if (e.code === 'KeyT' && this.mode === 'game' && this.game.networkRoom) {
@@ -1461,6 +1835,14 @@ export class UI {
 
   setMode(mode) {
     this.mode = mode;
+    if (this.touchControlsEl) this.touchControlsEl.style.display = this.touchEnabled && mode === 'game' ? 'block' : 'none';
+    if (this.touchPanelReturnEl) this.touchPanelReturnEl.hidden = !this.touchEnabled || !['inventory', 'crafting', 'furnace', 'chest'].includes(mode);
+    if (mode !== 'game') {
+      this.releaseTouchInputs();
+      this.playerListHeld = false;
+      this.playerListPinned = false;
+      this.updateNetworkPlayerList();
+    }
     if (mode === 'inventory') this.craftSize = 2;
     else if (mode === 'crafting') this.craftSize = 3;
 
@@ -1498,7 +1880,7 @@ export class UI {
           this.craftSlots[i] = null;
         }
       }
-      if (!p.pointerLocked && !p.dead) {
+      if (!p.touchSupported && !p.pointerLocked && !p.dead) {
         document.getElementById('game-canvas')?.requestPointerLock?.();
       }
     } else {
@@ -1548,6 +1930,7 @@ export class UI {
     if (this.mode === 'inventory' || this.mode === 'crafting') {
       const craftGrid = document.getElementById('craft-grid');
       const size = this.craftSize;
+      craftGrid.style.setProperty('--craft-size', size);
       craftGrid.style.gridTemplateColumns = `repeat(${size}, 44px)`;
       for (let i = 0; i < 9; i++) {
         const el = craftGrid.children[i];

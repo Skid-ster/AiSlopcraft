@@ -12,6 +12,7 @@ import {
   BED_BLOCK, CAKE_BLOCK, CHEST, CROPS, FARMLAND, WOOL_BASE, LEVER, RAIL, REDSTONE_WIRE, REDSTONE_TORCH, REDSTONE_REPEATER, placeableBlockForItem, FURNACE_LIT
 } from './world/blocks.js';
 import { Player } from './entities/player.js';
+import { createRemoteAvatarModel, disposeRemoteAvatarModel } from './entities/remote-avatar.js';
 import { advanceEating } from './entities/eating.js';
 import { MobManager, findSafeGround, rollMobDrops, mobAttackDamage } from './entities/mobs.js';
 import { UI } from './ui/ui.js';
@@ -434,11 +435,13 @@ const game = {
     const on = (type, handler) => this.networkOffs.push(client.on(type, handler));
     on('player:joined', message => {
       if (!this.networkRoom) return;
+      this.networkRoom.players = [...(this.networkRoom.players || []).filter(peer => peer.id !== message.id), { id: message.id, name: message.name, role: message.role || 'player' }];
       createRemoteAvatar(message.id, message.name);
       ui?.notify?.(`${message.name} joined the world.`);
       ui?.updateNetworkPanel?.();
     });
     on('player:left', message => {
+      if (this.networkRoom) this.networkRoom.players = (this.networkRoom.players || []).filter(peer => peer.id !== message.id);
       removeRemoteAvatar(message.id);
       ui?.notify?.(`${message.name} left the world.`);
       ui?.updateNetworkPanel?.();
@@ -720,49 +723,23 @@ const game = {
 };
 function createRemoteAvatar(id, name) {
   if (remotePlayers.has(id)) return remotePlayers.get(id);
-  const root = new THREE.Group();
-  const hash = [...String(id)].reduce((value, char) => (value * 31 + char.charCodeAt(0)) | 0, 7) >>> 0;
-  const shirt = new THREE.MeshBasicMaterial({ color: new THREE.Color().setHSL((hash % 360) / 360, 0.58, 0.48) });
-  const pants = new THREE.MeshBasicMaterial({ color: 0x394c82 });
-  const skin = new THREE.MeshBasicMaterial({ color: 0xc99a73 });
-  const addPart = (w,h,d,material,y,z=0) => {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), material);
-    mesh.position.set(0,y,z); root.add(mesh); return mesh;
-  };
-  addPart(0.56,0.7,0.3,shirt,1.05);
-  addPart(0.27,0.72,0.28,pants,-0.2,-0.02).position.x = -0.15;
-  addPart(0.27,0.72,0.28,pants,-0.2,-0.02).position.x = 0.15;
-  addPart(0.42,0.42,0.42,skin,1.62);
-  const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0x242424 });
-  const eye1 = new THREE.Mesh(new THREE.BoxGeometry(0.045,0.05,0.025), eyeMaterial);
-  eye1.position.set(-0.09,1.66,-0.22); root.add(eye1);
-  const eye2 = eye1.clone(); eye2.position.x = 0.09; root.add(eye2);
-  const labelCanvas = document.createElement('canvas'); labelCanvas.width = 256; labelCanvas.height = 48;
-  const context = labelCanvas.getContext('2d');
-  if (context) {
-    context.font = 'bold 26px Arial'; context.textAlign = 'center'; context.textBaseline = 'middle';
-    context.lineWidth = 5; context.strokeStyle = '#171717'; context.fillStyle = '#fff';
-    context.strokeText(String(name).slice(0,20),128,24); context.fillText(String(name).slice(0,20),128,24);
-  }
-  const labelTexture = new THREE.CanvasTexture(labelCanvas);
-  labelTexture.colorSpace = THREE.SRGBColorSpace;
-  const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture, transparent: true, depthTest: false }));
-  label.position.y = 2.25; label.scale.set(1.9,0.36,1); root.add(label);
-  lighting.prepare(root);
-  lighting.setObjectLight(root, 15, 0);
-  scene.add(root);
-  root.visible = false;
-  const record = { root, target: new THREE.Vector3(), yaw: 0, pitch: 0, name, labelTexture };
-  remotePlayers.set(id,record);
-  return record;
+  const avatar = createRemoteAvatarModel(id, name, lighting);
+  scene.add(avatar.root);
+  avatar.root.visible = false;
+  remotePlayers.set(id, avatar);
+  return avatar;
 }
 
 function updateRemoteAvatar(message) {
-  const avatar = createRemoteAvatar(message.id,message.name);
-  if (![message.x,message.y,message.z,message.yaw,message.pitch].every(Number.isFinite)) return;
-  avatar.target.set(message.x,message.y,message.z);
+  const avatar = createRemoteAvatar(message.id, message.name);
+  if (![message.x, message.y, message.z, message.yaw, message.pitch].every(Number.isFinite)) return;
+  avatar.target.set(message.x, message.y, message.z);
+  if (!avatar.initialized) {
+    avatar.root.position.copy(avatar.target);
+    avatar.initialized = true;
+  }
   avatar.yaw = message.yaw;
-  avatar.pitch = message.pitch;
+  avatar.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, message.pitch));
   avatar.dead = !!message.dead;
   avatar.root.visible = true;
 }
@@ -778,10 +755,7 @@ function removeRemoteAvatar(id) {
   const avatar = remotePlayers.get(id);
   if (!avatar) return;
   scene.remove(avatar.root);
-  lighting.forget(avatar.root);
-  avatar.root.traverse(object => object.geometry?.dispose());
-  avatar.labelTexture.dispose();
-  for (const material of avatar.root.children.flatMap(object => Array.isArray(object.material) ? object.material : [object.material])) material?.dispose?.();
+  disposeRemoteAvatarModel(avatar, lighting);
   remotePlayers.delete(id);
 }
 
@@ -1615,7 +1589,7 @@ function updateCrops(dt) {
 let placeCooldown = 0;
 const tntFuses = []; // {x, y, z, timer}
 document.addEventListener('mousedown', (e) => {
-  if (ui.mode !== 'game' || !player.pointerLocked) return;
+  if (ui.mode !== 'game' || !player.controlsActive) return;
   if (`Mouse${e.button}` === player.bindings.attack) {
     const target = vehicles.target(player);
     if (target && vehicles.remove(target)) {
@@ -1776,7 +1750,7 @@ function frame() {
           if (networkVehicleTimer <= 0) { game.publishVehicleState(vehicles.mounted, true); networkVehicleTimer = 0.15; }
         }
       }
-      if (player.leftDown && player.pointerLocked) {
+      if (player.leftDown && player.controlsActive) {
         if (mobs.raycastTarget(player, 3.5)) {
           mobs.attack(player, player.heldStack?.id ?? null, audio, 3.5, game.networkRoom?.role === 'guest'
             ? (uid, heldId) => game.multiplayerClient?.send('mob:attack', { uid, heldId })
@@ -1790,7 +1764,7 @@ function frame() {
       }
 
       // D. Continuous block placement with repeat cooldown
-      if (player.rightDown && player.pointerLocked) {
+      if (player.rightDown && player.controlsActive) {
         placeCooldown -= dt;
         if (placeCooldown <= 0) {
           tryPlaceBlock();
@@ -1855,7 +1829,7 @@ function frame() {
 
     // A. Target selection wireframe
     const hit = player.raycast(world, 5);
-    if (hit && player.pointerLocked && ui.mode === 'game') {
+    if (hit && player.controlsActive && ui.mode === 'game') {
       selectionWireframe.position.set(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5);
       selectionWireframe.visible = true;
     } else {
@@ -1863,7 +1837,7 @@ function frame() {
     }
 
     // B. Block break cracking stages (0-9)
-    if (player.mining.active && player.mining.total > 0 && player.pointerLocked && ui.mode === 'game') {
+    if (player.mining.active && player.mining.total > 0 && player.controlsActive && ui.mode === 'game') {
       const stage = Math.min(9, Math.floor((player.mining.progress / player.mining.total) * 10));
       updateCrackOverlayUV(stage);
       crackOverlayMesh.position.set(player.mining.x + 0.5, player.mining.y + 0.5, player.mining.z + 0.5);
@@ -1877,7 +1851,7 @@ function frame() {
       firstPersonArm.root.visible = true;
       firstPersonArm.setHeldItem(player.heldStack);
       const isMoving = player.onGround && Math.hypot(player.vel.x, player.vel.z) > 0.5;
-      firstPersonArm.update(dt, isMoving, player.leftDown && player.pointerLocked, 0);
+      firstPersonArm.update(dt, isMoving, player.leftDown && player.controlsActive, 0);
       lighting.refreshObject(firstPersonArm.root, world, player.pos, 1.62);
     } else {
       firstPersonArm.root.visible = false;
@@ -1926,7 +1900,7 @@ function frame() {
     }
 
     ui.update();
-    if (ui.hintEl) ui.hintEl.style.display = ui.mode === 'game' && !player.pointerLocked ? 'block' : 'none';
+    if (ui.hintEl) ui.hintEl.style.display = ui.mode === 'game' && !player.pointerLocked && !player.touchSupported ? 'block' : 'none';
     if (player.dead && ui.mode !== 'death') {
       vehicles.dismount(player, true);
       if (!game.keepInventory) {
@@ -1952,10 +1926,19 @@ function frame() {
   }
 
   for (const avatar of remotePlayers.values()) {
+    const previousX = avatar.root.position.x, previousZ = avatar.root.position.z;
     avatar.root.position.lerp(avatar.target, 1 - Math.exp(-dt * 14));
+    const speed = Math.hypot(avatar.root.position.x - previousX, avatar.root.position.z - previousZ) / Math.max(dt, 0.001);
+    const walking = Math.min(1, speed / 1.8);
+    avatar.walkBlend += (walking - avatar.walkBlend) * (1 - Math.exp(-dt * 12));
+    avatar.walkPhase += dt * (8 + speed * 1.8);
+    const swing = Math.sin(avatar.walkPhase) * 0.62 * avatar.walkBlend;
+    avatar.leftLeg.rotation.x = swing;
+    avatar.rightLeg.rotation.x = -swing;
+    avatar.leftArm.rotation.x = -swing;
+    avatar.rightArm.rotation.x = swing;
     avatar.root.rotation.y = avatar.yaw;
-    const head = avatar.root.children[3];
-    if (head) head.rotation.x = avatar.pitch;
+    avatar.head.rotation.x = avatar.pitch;
     lighting.refreshObject(avatar.root, world, avatar.root.position, 1.2);
   }
   ui.updateNetworkPanel();

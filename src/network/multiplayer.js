@@ -19,7 +19,7 @@ export class MultiplayerClient {
     this.earlyMessages = new Map();
     this.requestSequence = 0;
     this.room = null;
-    this.account = null;
+    this.playerName = null;
   }
 
   on(type, listener) {
@@ -73,7 +73,7 @@ export class MultiplayerClient {
     socket.addEventListener('close', () => {
       if (this.socket !== socket) return;
       this.socket = null;
-      this.account = null;
+      this.playerName = null;
       for (const [id, pending] of this.pending) {
         clearTimeout(pending.timeout);
         pending.reject(new Error('Multiplayer server disconnected.'));
@@ -104,6 +104,27 @@ export class MultiplayerClient {
   }
 
   listRooms() { return this.request('rooms:list'); }
+  listOnlinePlayers() { return this.request('players:list'); }
+  claimPlayerName(name) {
+    return this.request('player:claim', { name }).then(message => {
+      this.playerName = message.name;
+      return message;
+    });
+  }
+  releasePlayerName() {
+    if (!this.playerName) return Promise.resolve();
+    return this.request('player:release').then(message => {
+      this.playerName = null;
+      this.room = null;
+      return message;
+    });
+  }
+  async ping() {
+    const now = () => globalThis.performance?.now?.() ?? Date.now();
+    const startedAt = now();
+    await this.request('ping');
+    return Math.max(0, Math.round(now() - startedAt));
+  }
   createRoom(options) { return this.request('room:create', options).then(message => { this.room = message; return message; }); }
   joinRoom(options) { return this.request('room:join', options).then(message => { this.room = message; return message; }); }
   leave() {
@@ -123,7 +144,7 @@ export class MultiplayerClient {
     this.pending.clear();
     const socket = this.socket;
     this.socket = null;
-    this.account = null;
+    this.playerName = null;
     if (socket && socket.readyState < WebSocket.CLOSING) socket.close(1000, 'Client disconnected');
   }
 }

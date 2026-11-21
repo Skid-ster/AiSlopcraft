@@ -1,14 +1,20 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { readFileSync } from 'node:fs';
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { deflateSync } from 'node:zlib';
-import { createMultiplayerServer } from '../server/multiplayer.js';
-import { AccountStore } from '../server/accounts.js';
+import { createMultiplayerServer, resolveClientAddress } from '../server/multiplayer.js';
 import { normalizeRelayUrl } from '../src/network/multiplayer.js';
+
+const directRequest = { headers: { 'x-forwarded-for': '203.0.113.66' }, socket: { remoteAddress: '198.51.100.7' } };
+assert.equal(resolveClientAddress(directRequest), '198.51.100.7', 'untrusted forwarded headers are ignored by default');
+assert.equal(resolveClientAddress(directRequest, 1), '203.0.113.66', 'one configured trusted proxy hop uses its appended client address');
+assert.equal(resolveClientAddress({ ...directRequest, headers: { 'x-forwarded-for': '192.0.2.9, 203.0.113.66' } }, 1), '203.0.113.66', 'spoofed values before a trusted proxy appended address are not selected');
+assert.equal(resolveClientAddress({ ...directRequest, headers: { 'x-forwarded-for': '192.0.2.9, 203.0.113.66, 198.51.100.44' } }, 2), '203.0.113.66', 'multiple trusted proxy hops are counted from the right');
+assert.equal(resolveClientAddress({ ...directRequest, headers: { 'x-forwarded-for': 'not-an-ip' } }, 1), '198.51.100.7', 'invalid forwarded chains fall back to the socket peer');
+assert.equal(resolveClientAddress({ ...directRequest, headers: { 'x-forwarded-for': '2001:db8::7' } }, 1), '2001:db8::7', 'IPv6 client addresses are accepted');
 
 const tempDir = await mkdtemp(join(tmpdir(), 'aislopcraft-online-'));
 const staticDir = join(tempDir, 'site');
@@ -18,8 +24,7 @@ await writeFile(join(staticDir, 'assets', 'app.js'), 'window.gameReady = true;')
 await writeFile(join(staticDir, 'assets', 'main-AbCd1234.js'), 'window.versioned = true;');
 await writeFile(join(tempDir, 'secret.json'), '{"private":true}');
 await symlink(join(tempDir, 'secret.json'), join(staticDir, 'assets', 'escape.json'));
-const accountFile = join(tempDir, 'accounts.json');
-const service = createMultiplayerServer({ logger: { warn() {} }, staticDir, accountFile });
+const service = createMultiplayerServer({ logger: { warn() {} }, staticDir });
 service.http.listen(0, '127.0.0.1');
 await once(service.http, 'listening');
 const { port } = service.http.address();
@@ -37,6 +42,10 @@ assert.equal(siteResponse.status, 200, 'combined service serves the built game a
 assert.match(await siteResponse.text(), /AiSlopcraft/);
 assert.match(siteResponse.headers.get('content-type'), /text\/html/);
 assert.equal(siteResponse.headers.get('cache-control'), 'no-cache', 'the app entry point is revalidated after deploys');
+assert.match(siteResponse.headers.get('content-security-policy'), /default-src 'self'.*object-src 'none'/, 'the app is served with a restrictive content security policy');
+assert.equal(siteResponse.headers.get('referrer-policy'), 'strict-origin-when-cross-origin', 'the app limits cross-site referrer disclosure');
+assert.equal(siteResponse.headers.get('x-frame-options'), 'SAMEORIGIN', 'the app cannot be framed by unrelated sites');
+assert.equal(siteResponse.headers.get('x-content-type-options'), 'nosniff', 'the app prevents MIME-type sniffing');
 const assetResponse = await fetch(`${base}/assets/app.js`);
 assert.equal(await assetResponse.text(), 'window.gameReady = true;', 'combined service serves static game assets beside the WebSocket relay');
 assert.equal((await fetch(`${base}/assets/main-AbCd1234.js`)).headers.get('cache-control'), 'public, max-age=31536000, immutable', 'content-hashed assets are safely cached for a year');
@@ -61,11 +70,11 @@ async function connectRaw() {
   sockets.push(socket);
   return socket;
 }
-let testAccountSequence = 0;
-async function connect(username = `TestUser${++testAccountSequence}`) {
+let testNameSequence = 0;
+async function connect(name = `TestUser${++testNameSequence}`) {
   const socket = await connectRaw();
-  const result = await request(socket, 'auth:signup', { username, password: 'testpass123' });
-  assert.equal(result.type, 'auth:success', `test account ${username} signs up`);
+  const result = await request(socket, 'player:claim', { name });
+  assert.equal(result.type, 'player:claimed', `player claims available name ${name}`);
   return socket;
 }
 function waitFor(socket, predicate, timeout = 3000) {
@@ -111,31 +120,49 @@ function testAtlasDataUrl() {
 try {
   const anonymous = await connectRaw();
   const anonymousBrowse = await request(anonymous, 'rooms:list');
-  assert.equal(anonymousBrowse.type, 'error', 'public room browsing requires a player account');
-  assert.match(anonymousBrowse.message, /sign up or log in/i);
-  const accountCreated = await request(anonymous, 'auth:signup', { username: 'play565', password: '55543234' });
-  assert.equal(accountCreated.type, 'auth:success', 'players can sign up with a username and an eight-character password');
-  assert.equal(accountCreated.account.username, 'play565');
-  assert.ok(accountCreated.token.length >= 40, 'signup returns an unguessable persistent login token');
-  assert.equal(readFileSync(accountFile, 'utf8').includes('55543234'), false, 'account database never stores the raw password');
-  const reloadedAccounts = new AccountStore(accountFile);
-  assert.equal(reloadedAccounts.resume(accountCreated.token).account.username, 'play565', 'accounts and login sessions survive account-store reloads');
+  assert.equal(anonymousBrowse.type, 'rooms:list', 'anyone can browse public rooms without an account');
+  assert.deepEqual(anonymousBrowse.rooms, []);
+  const unclaimedCreate = await request(anonymous, 'room:create', { name: 'No name yet' });
+  assert.equal(unclaimedCreate.type, 'error', 'a player must claim a name before creating or joining a room');
+  assert.match(unclaimedCreate.message, /choose an available player name/i);
+  assert.deepEqual((await request(anonymous, 'players:list')).players, [], 'the public online list starts empty');
+  const claimedListEvent = waitFor(anonymous, message => message.type === 'players:list' && !message.requestId);
+  const claimed = await request(anonymous, 'player:claim', { name: 'play565' });
+  assert.equal(claimed.type, 'player:claimed', 'players choose a temporary name without creating an account');
+  assert.deepEqual((await claimedListEvent).players, ['play565'], 'the public live list updates immediately when someone connects');
   const duplicate = await connectRaw();
-  const duplicateSignup = await request(duplicate, 'auth:signup', { username: 'PLAY565', password: 'differentpass' });
-  assert.equal(duplicateSignup.type, 'error', 'usernames are unique regardless of capitalization');
-  const loginSocket = await connectRaw();
-  const loggedIn = await request(loginSocket, 'auth:login', { username: 'play565', password: '55543234' });
-  assert.equal(loggedIn.type, 'auth:success', 'players can log back in with their password');
-  const badLogin = await connectRaw();
-  const badCredentials = await request(badLogin, 'auth:login', { username: 'play565', password: 'not-the-password' });
-  assert.equal(badCredentials.type, 'error');
-  assert.equal(badCredentials.message, 'Username or password is incorrect.', 'login errors do not reveal whether a user exists');
-  const resumed = await connectRaw();
-  const resumedSession = await request(resumed, 'auth:resume', { token: accountCreated.token });
-  assert.equal(resumedSession.type, 'auth:success', 'saved sessions restore login without storing a password');
-  const loggedOut = await request(anonymous, 'auth:logout');
-  assert.equal(loggedOut.type, 'auth:logged-out');
-  assert.equal((await request(anonymous, 'rooms:list')).type, 'error', 'logout revokes room access');
+  const duplicateClaim = await request(duplicate, 'player:claim', { name: 'PLAY565' });
+  assert.equal(duplicateClaim.type, 'error', 'names are unique while online, regardless of capitalization');
+  assert.match(duplicateClaim.message, /already taken/i);
+  assert.deepEqual((await request(duplicate, 'players:list')).players, ['play565'], 'any connected visitor can view the global online leaderboard');
+  const releasedListEvent = waitFor(anonymous, message => message.type === 'players:list' && !message.requestId);
+  const released = await request(anonymous, 'player:release');
+  assert.equal(released.type, 'player:released', 'logging out explicitly releases the name');
+  assert.deepEqual((await releasedListEvent).players, [], 'the public live list updates immediately after logout');
+  const reused = await request(duplicate, 'player:claim', { name: 'PLAY565' });
+  assert.equal(reused.type, 'player:claimed', 'a released name becomes immediately available');
+  duplicate.close();
+  await once(duplicate, 'close');
+  const reclaimed = await request(anonymous, 'player:claim', { name: 'play565' });
+  assert.equal(reclaimed.type, 'player:claimed', 'a disconnect also releases a temporary name');
+  await request(anonymous, 'player:release');
+
+  const throttled = await connectRaw();
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const invalidClaim = await request(throttled, 'player:claim', { name: 'x' });
+    assert.equal(invalidClaim.type, 'error', 'invalid name attempts are rejected without reserving a name');
+  }
+  const throttledClaim = await request(throttled, 'player:claim', { name: 'PatientPlayer' });
+  assert.match(throttledClaim.message, /too many name checks/i, 'name claims are throttled per connection');
+  throttled.close();
+
+  const fastLister = await connectRaw();
+  for (let requestIndex = 0; requestIndex < 30; requestIndex++) {
+    assert.equal((await request(fastLister, 'players:list')).type, 'players:list', 'normal live-list polling remains available');
+  }
+  const blockedList = await request(fastLister, 'players:list');
+  assert.match(blockedList.message, /refreshing too quickly/i, 'excessive public-list polling is rate-limited');
+  fastLister.close();
 
   const host = await connect('Host');
   const created = await request(host, 'room:create', {
@@ -146,6 +173,9 @@ try {
   });
   assert.equal(created.type, 'room:joined');
   assert.equal(created.role, 'host');
+  assert.equal(created.players[0].role, 'host', 'room roster identifies its host');
+  const pingResponse = await request(host, 'ping');
+  assert.equal(pingResponse.type, 'pong', 'authenticated players can measure relay round-trip latency');
   assert.equal(created.gameMode, 'creative');
   assert.equal(created.visuals.mode, 'forced');
   assert.equal(created.visuals.shaderStyle, 'shader');
@@ -174,9 +204,12 @@ try {
   const joinedEvent = waitFor(host, message => message.type === 'player:joined');
   const joined = await request(guest, 'room:join', { code: created.code, playerName: 'Builder', password: 'blockparty' });
   assert.equal(joined.type, 'room:joined');
+  assert.equal(joined.players.find(player => player.id === joined.id).role, 'player', 'roster distinguishes guests from the host');
   assert.equal(joined.gameMode, 'creative');
   assert.deepEqual(joined.visuals, created.visuals, 'joining clients receive the host shader and texture atlas');
-  assert.equal((await joinedEvent).name, 'Builder');
+  const joinedNotice = await joinedEvent;
+  assert.equal(joinedNotice.name, 'Builder');
+  assert.equal(joinedNotice.role, 'player', 'existing clients receive player-list role updates');
   const guestSnapshotRejected = await request(guest, 'world:snapshot', { entries: [['1,70,1', [1, 0]]] });
   assert.equal(guestSnapshotRejected.type, 'error', 'only the host can publish the initial world snapshot');
 
@@ -239,9 +272,16 @@ try {
   assert.equal((await lateMobs).mobs[0].uid, 'mob-1', 'late joiners receive current mobs');
   assert.equal((await lateVehicles).vehicles[0].vehicle.uid, 'boat-1', 'late joiners receive current vehicles');
   assert.equal((await lateProjectiles).projectiles[0].uid, 'arrow-1', 'late joiners receive active projectile state');
-  const projectileRemoved = waitFor(guest, message => message.type === 'projectile:remove' && message.uid === 'arrow-1');
+  newcomer.send(JSON.stringify({ type: 'projectile:update', projectile: { uid: 'arrow-1', owner: 'player', pos: [99, 70, 99], vel: [0, 0, 0], age: 0 } }));
   newcomer.send(JSON.stringify({ type: 'projectile:remove', uid: 'arrow-1' }));
+  await request(newcomer, 'ping'); // Confirms the relay processed both preceding messages.
+  assert.equal(service.rooms.get(created.code).projectiles.get('arrow-1').sourceId, created.id, 'a guest cannot take ownership of another player’s projectile');
+  assert.deepEqual(service.rooms.get(created.code).projectiles.get('arrow-1').pos, [6, 71, 6], 'a guest cannot overwrite another player’s projectile state');
+  assert.equal(service.rooms.get(created.code).projectiles.has('arrow-1'), true, 'a guest cannot remove another player’s projectile');
+  const projectileRemoved = waitFor(guest, message => message.type === 'projectile:remove' && message.uid === 'arrow-1');
+  host.send(JSON.stringify({ type: 'projectile:remove', uid: 'arrow-1' }));
   await projectileRemoved;
+  assert.equal(service.rooms.get(created.code).projectiles.has('arrow-1'), false, 'projectile owners can remove their own projectiles');
   newcomer.send(JSON.stringify({ type: 'item:pickup', uid: 'drop-1' }));
   const pickupStateOnHost = waitFor(host, message => message.type === 'player:state' && message.id === newcomerJoined.id);
   newcomer.send(JSON.stringify({ type: 'player:state', state: { x: 50, y: 70, z: 50, yaw: 0, pitch: 0, dead: false } }));

@@ -13,16 +13,16 @@ It aims for the feel of that era: no hunger bar or sprinting, food heals directl
 - **Craft and smelt:** 2×2 inventory recipes, 3×3 crafting-table recipes, and furnaces with input, fuel, progress, and output slots.
 - **Farm and build:** till and irrigate farmland, grow and harvest crops, plant saplings, use doors, ladders, beds, cake, buckets, TNT, and more.
 - **Meet the mobs:** farm animals and hostile night creatures, including zombie and skeleton sunlight damage, creeper fuses, spider movement, mob drops, melee combat, and skeleton arrows. Peaceful, Easy, Normal, and Hard difficulty settings adjust hostile encounters and damage.
-- **Play together:** sign up or log in, then join or host one of up to five co-op rooms (five players each). Rooms share block edits, chat, player positions, host-simulated mobs and combat, time, containers, dropped items, vehicles, and active projectile visuals. See [Multiplayer](#multiplayer) for hosting and account-storage limitations.
+- **Play together:** choose a temporary unique player name—no account or password—and browse the public live online-player list before joining or hosting one of up to five co-op rooms (five players each). Names are reserved server-wide only while connected, then released with the lobby's **Release player name** control or on disconnect. Rooms share block edits, chat, player positions, host-simulated mobs and combat, time, containers, dropped items, vehicles, and active projectile visuals. See [Multiplayer](#multiplayer) for hosting and room-state limitations.
 - **Tune the look:** a native Three.js/WebGL renderer with five live presets—Classic, Vibrant, Cinematic, Shader Lite, and **PSX (1.7.10)**. Cinematic and Shader Lite use stabilized directional sun shadows; Shader Lite adds animated water, reflections, and specular highlights. PSX is a real multi-pass WebGL preset adapted from the PS1-style affine mapping, depth-scaled vertex snapping, 25% render resolution, 24-step color grading, and ordered dithering in [ckosmic/Minecraft-PSX](https://github.com/ckosmic/minecraft-psx), whose README documents testing on Minecraft 1.7.10 and whose repository declares MIT terms (the checked-in license still has unfilled copyright placeholders). The shader logic is adapted to AiSlopcraft's Three.js render pipeline; it does not make arbitrary OptiFine shaderpack ZIPs executable. Fog, day/night lighting, brightness, and local light on entities are supported.
 - **Use the classic-style interface:** title and texture-pack screens, options, inventory and crafting, hotbar, health/armor/air indicators, pause and death screens, item tooltips, and an F3 debug overlay.
 
 ## Play locally
 
-Install [Node.js](https://nodejs.org/) and run:
+Install [Node.js 22 LTS](https://nodejs.org/) and run:
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
@@ -34,7 +34,13 @@ To make a production build:
 npm run build
 ```
 
-The generated site is written to `dist/`.
+The generated site is written to `dist/`. For a local production smoke test, build first and then run the combined static-site/WebSocket service:
+
+```bash
+npm start
+```
+
+Open `http://localhost:8787/` and check `http://localhost:8787/health`. This production server expects the build to exist; the Render Blueprint and Azure deployment instructions build it before starting.
 
 ## Multiplayer
 
@@ -45,18 +51,24 @@ Online multiplayer needs a reachable Node process to coordinate rooms and relay 
 1. In Azure Portal, create an **App Service / Web App** (not Static Web Apps or a VM): Subscription **Azure for Students**, Publish **Code**, Runtime **Node.js 22 LTS**, OS **Linux**, and a UK region such as **UK South**.
 2. Select a **Basic B1** App Service plan so you can enable Always On and WebSockets. Review the displayed cost first; B1 spends your student credit. Keep the scale-out worker count at **1** because room data lives in that single server process.
 3. In **Deployment Center**, choose GitHub, authorize the repository, and select `Skid-ster/AiSlopcraft` on branch `main`. Let Azure create its deployment workflow.
-4. In **Configuration → General settings**, set the startup command to `npm start`, turn **WebSockets** on, and turn **Always On** on. In **Configuration → Application settings**, add `SCM_DO_BUILD_DURING_DEPLOYMENT=true` and `AISLOPCRAFT_DATA_DIR=/home/aislopcraft-data`, then save and restart. The deployment builds the frontend (`npm run build`) and the start command serves it with the room service.
+4. In **Configuration → General settings**, set the startup command to `npm start`, turn **WebSockets** on, and turn **Always On** on. In **Configuration → Application settings**, add `SCM_DO_BUILD_DURING_DEPLOYMENT=true`, then save and restart. The deployment builds the frontend (`npm run build`) and the start command serves it with the room service.
 5. Wait for the deployment to finish, open `https://<your-app-name>.azurewebsites.net/health`, and confirm it returns `"status":"ok"`. Share the root app URL with players. The Multiplayer screen uses its same-origin WebSocket automatically; players do not configure Azure or a relay.
 
 Azure keeps the **service process** available only while the App Service and subscription remain active; check your student-credit balance and expiry. Rooms and world edits are still temporary in-memory sessions: they end if the host leaves or the app restarts/deploys. Keeping world saves across restarts would require a database/storage feature not included here. GitHub Pages remains the singleplayer/static option and cannot itself host rooms.
 
-Players on different networks connect to the same Azure URL. The host and guests need the same world seed; invite links include the host's seed and service URL.
+### Lower-setup option: Render Blueprint
 
-### Player accounts
+A `render.yaml` Blueprint is included for a single combined web service. In Render, choose **New → Blueprint**, connect this repository and the branch you want to publish, then review and create the `aislopcraft-online` service. The Blueprint builds the frontend and starts the WebSocket room relay on the same origin; players use the site URL without entering a relay address. It requests Render's `free` plan where available and pins the service to one instance because room/name state is process-local—check current plan terms before creating the service. Free services may sleep when idle, so rooms and names disappear on restarts or deploys. After deployment, run `BASE_URL=https://<your-service>.onrender.com npm run smoke:deploy` to check the site, health endpoint, limits, secure WebSocket, public list, and temporary-name claim/release. **No hosted service is provisioned by this repository change.**
 
-Multiplayer requires an account. Usernames are case-insensitive and use 3–20 letters, numbers, or underscores; passwords must be 8–128 characters. Passwords are stored as salted scrypt hashes, never as plaintext. Sign-in sessions are saved as hashed 30-day tokens. No email is collected and there is currently no password-reset flow, so players should choose a password they can remember.
+Players on different networks connect to the same service URL. The host and guests need the same world seed; invite links include the host's seed and service URL.
 
-Accounts are stored in `AISLOPCRAFT_DATA_DIR` (or `~/.aislopcraft` if unset). On Azure App Service, set it to `/home/aislopcraft-data`; Azure's `/home` storage persists across app restarts and deployments. Keep one app instance so its file-backed account store remains consistent. **Render's free service has ephemeral storage**, so accounts can be lost when that service is recreated or redeployed; durable accounts there require persistent storage or an external database.
+### Player names and live leaderboard
+
+Online play does not create accounts and never asks for a password or email. Choose a 3–20 character name using letters, numbers, or underscores. Names are case-insensitively unique across one room service while their player is connected. If a name is taken, the lobby says so and lets the player choose another. **Release the name in the lobby or disconnect** to make it available; it is not permanently yours and someone else can claim it when you are offline. The browser may remember your last choice locally for convenience, but that does not reserve it.
+
+The **Online leaderboard** is a public live list of everyone connected to that room service, whether in a room or the lobby. It is an online roster, not a persistent score/rank table; no permanent profile or player history is stored. It resets when the service restarts. Keep one service instance: names and rooms live in that process, and running multiple instances without shared coordination could allow duplicate names and split room lists.
+
+Room-password throttling ignores `X-Forwarded-For` by default because arbitrary clients can forge that header. If deployment traffic is guaranteed to pass through a known reverse-proxy chain, set `AISLOPCRAFT_TRUST_PROXY_HOPS` to the verified number of proxies that append client addresses to that header (1–10). Do not enable this setting until the provider's header behavior and ingress restrictions are verified; otherwise clients may spoof addresses and bypass throttling. With the default setting, requests are grouped by the direct socket peer, which may be a shared proxy address on hosted deployments.
 
 When creating a room, the host can choose **Let each player choose** or **Force the host's shader and texture pack**. Individual mode is the default and leaves every player's visuals untouched. In forced mode the host selects a built-in shader style and an installed texture pack (or default textures); the supported 256×256 block atlas is relayed to room members, and each client restores its personal shader and textures after leaving. Shared atlas payloads are capped at 512 KB and held only in relay memory while the room is open.
 
@@ -81,8 +93,9 @@ For local development, run `npm run multiplayer` in one terminal and `npm run de
 | F3 | Toggle debug overlay |
 | F1 | Toggle HUD |
 | T | Multiplayer chat when connected |
+| Hold Tab | Show the multiplayer player list and live relay ping |
 
-Change difficulty, video, controls, sound, and gameplay options from the title or pause menu. Shader presets can be switched live in Video Settings. From the title screen, **Texture Packs...** opens the local pack importer.
+Change difficulty, video, controls, sound, and gameplay options from the title or pause menu. Shader presets can be switched live in Video Settings. The **How to Play** guide is available from the title and pause menus. Touch devices have an on-screen movement joystick, drag-to-look area, held/tap action buttons, hotbar selectors, inventory/container panels with a visible return control, multiplayer chat, and pause; landscape orientation is recommended. From the title screen, **Texture Packs...** opens the local pack importer.
 
 ## Managing Java 1.7.x texture packs
 

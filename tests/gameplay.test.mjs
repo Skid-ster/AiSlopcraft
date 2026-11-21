@@ -110,6 +110,14 @@ player.keys[player.bindings.sneak] = true;
 const descentStart = player.pos.y;
 player.update(0.1, world, null);
 assert.ok(player.pos.y < descentStart, 'creative sneak key provides downward flight');
+player.keys[player.bindings.sneak] = false;
+player.setTouchPointer(23, true);
+player.setTouchKey(player.bindings.jump, true);
+const touchFlightStart = player.pos.y;
+player.update(0.1, world, null);
+assert.ok(player.controlsActive && player.pos.y > touchFlightStart, 'virtual touch jump moves the player without pointer lock');
+player.clearTouchInput();
+assert.equal(player.controlsActive, false, 'releasing touch controls returns the player to an idle input state');
 player.gameMode = 'survival';
 
 const saved = [...world.edits].map(([key, id]) => [key, id, world.metaEdits.get(key) || 0]);
