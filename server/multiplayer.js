@@ -3,6 +3,7 @@ import { createReadStream, existsSync, realpathSync, statSync } from 'node:fs';
 import { extname, join, resolve, sep } from 'node:path';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { isIP } from 'node:net';
 import { WebSocketServer, WebSocket } from 'ws';
 import { AccountStore } from './accounts.js';
 
@@ -97,7 +98,31 @@ function passwordMatches(record, password) {
   return timingSafeEqual(record.hash, candidate);
 }
 
-export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_DIST_DIR, accountFile = DEFAULT_ACCOUNT_FILE } = {}) {
+function normalizeIp(value) {
+  const candidate = String(value ?? '').trim();
+  if (isIP(candidate)) return candidate.toLowerCase();
+  const bracketed = /^\[([0-9a-f:.]+)\](?::\d+)?$/i.exec(candidate);
+  if (bracketed && isIP(bracketed[1]) === 6) return bracketed[1].toLowerCase();
+  const ipv4WithPort = /^([0-9.]+):\d+$/.exec(candidate);
+  if (ipv4WithPort && isIP(ipv4WithPort[1]) === 4) return ipv4WithPort[1];
+  return null;
+}
+
+// Forwarded headers are attacker-controlled unless a known reverse-proxy
+// chain is explicitly configured. The count is the number of trusted proxies
+// that append their observed client address to X-Forwarded-For.
+export function resolveClientAddress(request, trustedProxyHops = 0) {
+  const remoteAddress = normalizeIp(request?.socket?.remoteAddress) || 'unknown';
+  if (!Number.isInteger(trustedProxyHops) || trustedProxyHops < 1 || trustedProxyHops > 10) return remoteAddress;
+  const header = request?.headers?.['x-forwarded-for'];
+  if (typeof header !== 'string' || header.length > 4096) return remoteAddress;
+  const chain = header.split(',').map(normalizeIp);
+  if (chain.some(address => !address) || chain.length < trustedProxyHops) return remoteAddress;
+  return chain[chain.length - trustedProxyHops];
+}
+
+export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_DIST_DIR, accountFile = DEFAULT_ACCOUNT_FILE,
+  trustedProxyHops = Number(process.env.AISLOPCRAFT_TRUST_PROXY_HOPS) || 0 } = {}) {
   const rooms = new Map();
   const accounts = new AccountStore(accountFile);
   const authAttempts = new Map();
@@ -272,8 +297,7 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
   }
 
   wss.on('connection', (socket, request) => {
-    const forwardedFor = request.headers['x-forwarded-for'];
-    socket.authAddress = (typeof forwardedFor === 'string' ? forwardedFor.split(',')[0].trim() : '') || request.socket.remoteAddress || 'unknown';
+    socket.authAddress = resolveClientAddress(request, trustedProxyHops);
     socket.account = null;
     socket.sessionDigest = null;
     socket.isAlive = true;
@@ -459,17 +483,24 @@ export function createMultiplayerServer({ logger = console, staticDir = DEFAULT_
         const now = Date.now();
         const shot = message.projectile;
         if (!shot || typeof shot.uid !== 'string' || shot.uid.length > 100 || !['player','mob'].includes(shot.owner) || !Array.isArray(shot.pos) || shot.pos.length !== 3 || !shot.pos.every(Number.isFinite) || shot.pos.some(value => Math.abs(value) > 30_000_000) || !Array.isArray(shot.vel) || shot.vel.length !== 3 || !shot.vel.every(Number.isFinite) || shot.vel.some(value => Math.abs(value) > 80)) return;
+        const existing = socket.room.projectiles.get(shot.uid);
+        // A room member may update only their own projectile. Without this
+        // check, a peer who learns a UID from a snapshot can replace or erase
+        // another player's projectile and desynchronize the shared simulation.
+        if (existing && existing.sourceId !== socket.clientId && socket !== socket.room.host) return;
         if (now - (socket.projectileTimes.get(shot.uid) || 0) < 80) return;
         if (!socket.projectileTimes.has(shot.uid) && socket.projectileTimes.size >= 512) return;
         socket.projectileTimes.set(shot.uid, now);
-        if (socket.room.projectiles.size >= 256 && !socket.room.projectiles.has(shot.uid)) return;
-        const projectile = { uid: shot.uid, owner: shot.owner, pos: shot.pos, vel: shot.vel, age: Number.isFinite(shot.age) ? Math.max(0, Math.min(6, shot.age)) : 0, targetId: typeof shot.targetId === 'string' ? shot.targetId.slice(0, 80) : null, damage: Number.isFinite(shot.damage) ? Math.max(0, Math.min(40, shot.damage)) : 2, sourceId: socket.clientId };
+        if (socket.room.projectiles.size >= 256 && !existing) return;
+        const projectile = { uid: shot.uid, owner: shot.owner, pos: shot.pos, vel: shot.vel, age: Number.isFinite(shot.age) ? Math.max(0, Math.min(6, shot.age)) : 0, targetId: typeof shot.targetId === 'string' ? shot.targetId.slice(0, 80) : null, damage: Number.isFinite(shot.damage) ? Math.max(0, Math.min(40, shot.damage)) : 2, sourceId: existing?.sourceId ?? socket.clientId };
         socket.room.projectiles.set(projectile.uid, projectile);
         const { sourceId, ...publicProjectile } = projectile;
         for (const peer of socket.room.clients) if (peer !== socket) send(peer, { type: 'projectile:update', projectile: publicProjectile });
       } else if (message.type === 'projectile:remove') {
         const uid = typeof message.uid === 'string' ? message.uid.slice(0, 100) : '';
-        if (uid && socket.room.projectiles.delete(uid)) {
+        const projectile = socket.room.projectiles.get(uid);
+        if (projectile && (projectile.sourceId === socket.clientId || socket === socket.room.host)) {
+          socket.room.projectiles.delete(uid);
           for (const peer of socket.room.clients) peer.projectileTimes.delete(uid);
           broadcast(socket.room.clients, { type: 'projectile:remove', uid }, socket);
         }

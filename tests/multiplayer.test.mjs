@@ -6,9 +6,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { deflateSync } from 'node:zlib';
-import { createMultiplayerServer } from '../server/multiplayer.js';
+import { createMultiplayerServer, resolveClientAddress } from '../server/multiplayer.js';
 import { AccountStore } from '../server/accounts.js';
 import { normalizeRelayUrl } from '../src/network/multiplayer.js';
+
+const directRequest = { headers: { 'x-forwarded-for': '203.0.113.66' }, socket: { remoteAddress: '198.51.100.7' } };
+assert.equal(resolveClientAddress(directRequest), '198.51.100.7', 'untrusted forwarded headers are ignored by default');
+assert.equal(resolveClientAddress(directRequest, 1), '203.0.113.66', 'one configured trusted proxy hop uses its appended client address');
+assert.equal(resolveClientAddress({ ...directRequest, headers: { 'x-forwarded-for': '192.0.2.9, 203.0.113.66' } }, 1), '203.0.113.66', 'spoofed values before a trusted proxy appended address are not selected');
+assert.equal(resolveClientAddress({ ...directRequest, headers: { 'x-forwarded-for': '192.0.2.9, 203.0.113.66, 198.51.100.44' } }, 2), '203.0.113.66', 'multiple trusted proxy hops are counted from the right');
+assert.equal(resolveClientAddress({ ...directRequest, headers: { 'x-forwarded-for': 'not-an-ip' } }, 1), '198.51.100.7', 'invalid forwarded chains fall back to the socket peer');
+assert.equal(resolveClientAddress({ ...directRequest, headers: { 'x-forwarded-for': '2001:db8::7' } }, 1), '2001:db8::7', 'IPv6 client addresses are accepted');
 
 const tempDir = await mkdtemp(join(tmpdir(), 'aislopcraft-online-'));
 const staticDir = join(tempDir, 'site');
@@ -245,9 +253,16 @@ try {
   assert.equal((await lateMobs).mobs[0].uid, 'mob-1', 'late joiners receive current mobs');
   assert.equal((await lateVehicles).vehicles[0].vehicle.uid, 'boat-1', 'late joiners receive current vehicles');
   assert.equal((await lateProjectiles).projectiles[0].uid, 'arrow-1', 'late joiners receive active projectile state');
-  const projectileRemoved = waitFor(guest, message => message.type === 'projectile:remove' && message.uid === 'arrow-1');
+  newcomer.send(JSON.stringify({ type: 'projectile:update', projectile: { uid: 'arrow-1', owner: 'player', pos: [99, 70, 99], vel: [0, 0, 0], age: 0 } }));
   newcomer.send(JSON.stringify({ type: 'projectile:remove', uid: 'arrow-1' }));
+  await request(newcomer, 'ping'); // Confirms the relay processed both preceding messages.
+  assert.equal(service.rooms.get(created.code).projectiles.get('arrow-1').sourceId, created.id, 'a guest cannot take ownership of another player’s projectile');
+  assert.deepEqual(service.rooms.get(created.code).projectiles.get('arrow-1').pos, [6, 71, 6], 'a guest cannot overwrite another player’s projectile state');
+  assert.equal(service.rooms.get(created.code).projectiles.has('arrow-1'), true, 'a guest cannot remove another player’s projectile');
+  const projectileRemoved = waitFor(guest, message => message.type === 'projectile:remove' && message.uid === 'arrow-1');
+  host.send(JSON.stringify({ type: 'projectile:remove', uid: 'arrow-1' }));
   await projectileRemoved;
+  assert.equal(service.rooms.get(created.code).projectiles.has('arrow-1'), false, 'projectile owners can remove their own projectiles');
   newcomer.send(JSON.stringify({ type: 'item:pickup', uid: 'drop-1' }));
   const pickupStateOnHost = waitFor(host, message => message.type === 'player:state' && message.id === newcomerJoined.id);
   newcomer.send(JSON.stringify({ type: 'player:state', state: { x: 50, y: 70, z: 50, yaw: 0, pitch: 0, dead: false } }));
