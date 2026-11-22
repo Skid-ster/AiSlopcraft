@@ -17,6 +17,7 @@ import { createRemoteAvatarModel, disposeRemoteAvatarModel } from './entities/re
 import { advanceEating } from './entities/eating.js';
 import { MobManager, findSafeGround, rollMobDrops, mobAttackDamage } from './entities/mobs.js';
 import { UI } from './ui/ui.js';
+import { showGraphicsStartupError } from './ui/startup-error.js';
 import { Audio } from './audio.js';
 import { Sky } from './sky.js';
 import { createFurnaceState, tickFurnace, interactWithFurnaceSlot } from './ui/furnace.js';
@@ -32,7 +33,14 @@ import { VehicleManager } from './entities/vehicles.js';
 import { DIRECTIONS as STRUCTURE_DIRECTIONS, structurePartner, setDoorOpen } from './world/structures.js';
 
 const canvas = document.getElementById('game-canvas');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+} catch (error) {
+  console.error('Could not initialize WebGL graphics:', error);
+  showGraphicsStartupError(document, () => window.location.reload());
+  throw error;
+}
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;

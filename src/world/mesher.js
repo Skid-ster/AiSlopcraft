@@ -282,9 +282,10 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
             const x0 = x + 0.0625 + eaten * 0.125;
             pushBox(buf, x0, y, z + 0.0625, x + 0.9375, y + 0.5, z + 0.9375, bd.tiles, skyL, blkL);
           } else {
-            // The head carries the pillow; the foot is a red blanket.
+            // Beds and slabs use their registered local-space bounds.
             const tiles = id === 26 && !(meta & 8) ? [TILES.bed_foot, ...bd.tiles.slice(1)] : bd.tiles;
-            pushBox(buf, x, y, z, x + 1, y + 0.5625, z + 1, tiles, skyL, blkL);
+            const [minX, minY, minZ, maxX, maxY, maxZ] = bd.bounds || [0, 0, 0, 1, 0, 0.5625, 1];
+            pushBox(buf, x + minX, y + minY, z + minZ, x + maxX, y + maxY, z + maxZ, tiles, skyL, blkL);
           }
           continue;
         }

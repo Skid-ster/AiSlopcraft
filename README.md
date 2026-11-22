@@ -8,7 +8,7 @@ It aims for the feel of that era: no hunger bar or sprinting, food heals directl
 
 ## Features
 
-- **Classic singleplayer and multiplayer:** create persistent Classic creative worlds with rolling grassland and trees, bedrock floor, 32-block palette, unlimited instant break/place, block picking, and flight. Save locally or host/join an account-free shared Classic world. No hunger, damage, crafting grind, ores, or hostile mobs.
+- **Classic singleplayer and multiplayer:** create persistent Classic creative worlds with rolling grassland, trees, caves and ore veins, bedrock floor, the 49-block Classic palette, unlimited instant break/place, block picking, and double-tap flight. Save locally or host/join an account-free shared Classic world. No hunger, health loss, crafting requirement, or hostile mobs.
 - **Beta singleplayer:** keep the existing Beta 1.7.3-inspired survival/creative experience, with separate named worlds, optional seeds, autosaves, rename/delete/re-create, and portable save import/export. Beta edition has no multiplayer entry point.
 - **Explore Beta:** seeded rolling terrain, caves, ores, beaches, deserts, snowy areas, forests, trees, and plants across a 128-block world.
 - **Mine, build, and survive:** block breaking and placement, voxel movement and collision, jumping, sneaking, swimming, fall/drowning/lava damage, tools and weapon durability, item drops and pickup, hearts, armor, and inventory.
@@ -36,13 +36,13 @@ To make a production build:
 npm run build
 ```
 
-The generated site is written to `dist/`. For a local production smoke test, build first and then run the combined static-site/WebSocket service:
+The generated site is written to `dist/`. To automatically start the built production server on an ephemeral local port and exercise its HTTP, health, security-header, and WebSocket room flows, run:
 
 ```bash
-npm start
+npm run smoke:production
 ```
 
-Open `http://localhost:8787/` and check `http://localhost:8787/health`. This production server expects the build to exist; the Render Blueprint and Azure deployment instructions build it before starting.
+For the complete local release gate—full tests, clean production build, built-server HTTP/WebSocket smoke, and dependency audit—run `npm run verify`. CI runs the same gate on pull requests and pushes to `main`. To run the combined static-site/WebSocket service interactively instead, use `npm start`, then open `http://localhost:8787/` and check `http://localhost:8787/health`. The production server expects the build to exist; the Render Blueprint and Azure deployment instructions build it before starting. Use `BASE_URL=https://<your-service> npm run smoke:deploy` after an actual deployment; the local production smoke does not replace hosted-service verification.
 
 ## Classic multiplayer
 

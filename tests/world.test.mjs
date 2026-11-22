@@ -8,7 +8,7 @@ import { WorldGen } from '../src/world/worldgen.js';
 import { ClassicWorldGen } from '../src/world/classic-worldgen.js';
 import { CLASSIC_BLOCKS } from '../src/classic.js';
 import { matchRecipe, smeltResult } from '../src/ui/recipes.js';
-import { breakTime, canHarvest, STONE, DIAMOND_ORE, AIR, TORCH } from '../src/world/blocks.js';
+import { breakTime, canHarvest, getBlock, itemName, STONE, STONE_SLAB, DIAMOND_ORE, COAL_ORE, IRON_ORE, GOLD_ORE, LAVA, AIR, TORCH } from '../src/world/blocks.js';
 
 let failures = 0;
 function check(name, cond) {
@@ -52,19 +52,46 @@ check('torch light 14 at source', c0.blockLight[idx(5, y, 5)] === 14);
 check('torch light 13 adjacent', c0.blockLight[idx(5, y + 1, 5)] === 13);
 check('torch light 12 two away', c0.blockLight[idx(7, y, 5)] === 12);
 
-// Classic edition uses its own lighter, no-ore terrain and exact 32-entry block palette.
+// Classic edition uses its own terrain and the original 49-block Classic palette.
 const classicWorld = new World('Classic test', new THREE.Scene(), 'classic');
 classicWorld.generateChunk(0, 0);
 const classicChunk = classicWorld.getChunk(0, 0);
 const classicHeight = classicWorld.gen.columnInfo(8, 8).height;
 check('Classic world selects its dedicated generator', classicWorld.gen instanceof ClassicWorldGen && classicWorld.edition === 'classic');
 check('Classic terrain has a bedrock floor and natural surface', classicWorld.getBlock(8, 0, 8) === 7 && [2, 12].includes(classicWorld.getBlock(8, classicHeight, 8)));
-check('Classic terrain omits Beta ore veins and underground lava', !classicChunk.blocks.some(id => [10, 14, 15, 16, 56].includes(id)));
+let classicCaveAir = false;
+for (let z = 0; z < CH && !classicCaveAir; z++) for (let x = 0; x < CH && !classicCaveAir; x++) {
+  const surface = classicWorld.gen.columnInfo(x, z).height;
+  for (let y = 3; y < Math.min(surface - 3, 28); y++) if (classicWorld.getBlock(x, y, z) === AIR) { classicCaveAir = true; break; }
+}
+check('Classic underground has seeded caves and coal, iron, and gold veins', classicCaveAir
+  && [COAL_ORE, IRON_ORE, GOLD_ORE].every(id => classicChunk.blocks.includes(id)) && !classicChunk.blocks.includes(LAVA));
 check('Classic maps are finite 256 by 256 worlds with a 64-block build height', classicWorld.maxWorldCoord - classicWorld.minWorldCoord + 1 === 256 && classicWorld.maxWorldY === 63 && classicWorld.generateChunk(8, 0) === null && !classicWorld.setBlock(128, 40, 0, STONE));
-check('Classic palette has 32 unique selectable blocks', CLASSIC_BLOCKS.length === 32 && new Set(CLASSIC_BLOCKS).size === 32);
+check('Classic palette has all 49 original-era selectable blocks', CLASSIC_BLOCKS.length === 49 && new Set(CLASSIC_BLOCKS).size === 49
+  && ['Sponge', 'Sapling', 'Stone Slab', 'Double Stone Slab', 'Brown Mushroom', 'Red Mushroom'].every(name => CLASSIC_BLOCKS.some(id => itemName(id) === name))
+  && CLASSIC_BLOCKS.every(id => getBlock(id).tiles?.length === 6));
+
+// Classic half-slabs need real half-height geometry rather than full cubes.
+world.setBlock(1, 120, 1, STONE_SLAB);
+const fakeTex = new THREE.Texture();
+const slabMesh = buildChunkMesh(world, c0, fakeTex, fakeTex, 6);
+let slabTopY = -Infinity;
+for (let i = 0; i < slabMesh.cutout.pos.length; i += 3) {
+  const [x, y, z] = slabMesh.cutout.pos.slice(i, i + 3);
+  if (x >= 1 && x <= 2 && z >= 1 && z <= 2) slabTopY = Math.max(slabTopY, y);
+}
+check('Classic stone slab meshes to half a block tall', slabTopY === 120.5);
+const loadClassicPair = order => {
+  const pair = new World('Classic seam test', new THREE.Scene(), 'classic');
+  for (const cx of order) pair.generateChunk(cx, 0);
+  return pair;
+};
+const classicOrderA = loadClassicPair([0, 1]), classicOrderB = loadClassicPair([1, 0]);
+check('Classic caves, ore veins and decoration are stable across chunk load order', [0, 1].every(cx =>
+  classicOrderA.getChunk(cx, 0).blocks.every((block, index) => block === classicOrderB.getChunk(cx, 0).blocks[index])));
 
 // meshing
-const fakeTex = new THREE.Texture();
+
 const built = buildChunkMesh(world, c0, fakeTex, fakeTex, 6);
 check('mesh has geometry', built.solid.pos.length > 0);
 check('mesh carries per-vertex sky/block light attributes', built.solid.light.length === (built.solid.pos.length / 3) * 2);

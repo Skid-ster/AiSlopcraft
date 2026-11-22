@@ -5,7 +5,7 @@ import { TILES } from './blocks.js';
 
 export const BLOCK_SPRITES = {
   grass_top:'grass_top', grass_side:'grass_side', dirt:'dirt', stone:'stone', cobblestone:'cobble',
-  bedrock:'bedrock', sand:'sand', gravel:'gravel', log_oak:'log_side', log_oak_top:'log_top',
+  bedrock:'bedrock', sponge:'sponge', sand:'sand', gravel:'gravel', log_oak:'log_side', log_oak_top:'log_top',
   leaves_oak:'leaves', planks_oak:'planks', glass:'glass', lava_still:'lava',
   sandstone_top:'sandstone_top', sandstone_normal:'sandstone_side', sandstone_bottom:'sandstone_bottom',
   brick:'brick', tnt_top:'tnt_top', tnt_side:'tnt_side', tnt_bottom:'tnt_bottom',

@@ -120,85 +120,34 @@ export class UI {
     div.className = 'screen title-screen';
     div.id = 'title-screen';
     div.innerHTML = `
-      <div class="classic-site-shell" id="classic-home">
-        <header class="classic-site-header">
-          <div class="classic-masthead">
-            <div class="title-logo">
-              <div class="title-main"><img src="${logo}" alt="AiSlopcraft"></div>
-              <div class="title-sub">${classicEdition ? 'CLASSIC CREATIVE' : 'Java Edition Beta 1.7.3'}</div>
-              <div class="splash">${this.splash}</div>
-            </div>
-            <div class="classic-edition-mark"><span class="classic-status-light"></span><span>THE BLOCK-BUILDING SANDBOX</span><strong>PLAY IN YOUR BROWSER</strong></div>
+      <div class="classic-main-menu edition-${classicEdition ? 'classic' : 'beta'}">
+        <main class="classic-main-menu-panel" aria-labelledby="menu-heading">
+          <div class="title-logo">
+            <div class="title-main"><img src="${logo}" alt="AiSlopcraft"></div>
+            <div class="title-sub">${classicEdition ? 'CLASSIC CREATIVE' : 'JAVA EDITION BETA 1.7.3'}</div>
+            <div class="splash">${this.splash}</div>
           </div>
-          <nav class="classic-site-nav" aria-label="Main navigation">
-            <a class="is-current" href="#classic-home" aria-current="page">HOME</a>
-            <a href="#classic-world">THE GAME</a>
-            ${classicEdition ? '<a href="#classic-community">MULTIPLAYER</a>' : '<a href="#classic-features">SINGLEPLAYER</a>'}
-            <a href="#classic-links">HELP &amp; EXTRAS</a>
-          </nav>
-        </header>
-        <main class="classic-site-content">
-          <section class="classic-hero" id="classic-world" aria-labelledby="classic-hero-title">
-            <div class="classic-hero-art" aria-hidden="true">
-              <span class="classic-pixel-sun"></span>
-              <span class="classic-cloud classic-cloud-one"></span>
-              <span class="classic-cloud classic-cloud-two"></span>
-              <span class="classic-hill classic-hill-back"></span>
-              <span class="classic-hill classic-hill-front"></span>
-              <span class="classic-tree classic-tree-one"></span>
-              <span class="classic-tree classic-tree-two"></span>
-              <span class="classic-art-caption">A WORLD OF YOUR OWN</span>
+          <h1 class="classic-menu-heading" id="menu-heading">MAIN MENU</h1>
+          <p class="classic-menu-copy">${classicEdition ? 'Creative building · singleplayer and multiplayer' : 'Classic survival · singleplayer only'}</p>
+          <div class="title-buttons classic-menu-actions">
+            <div class="title-primary-stack">
+              ${classicEdition
+                ? '<button class="btn" id="btn-singleplayer">SINGLEPLAYER</button><button class="btn" id="btn-multiplayer">MULTIPLAYER</button><button class="btn" id="btn-beta">BETA 1.7.3</button><small class="title-multiplayer-hint">Classic worlds save locally · multiplayer is account-free</small>'
+                : '<button class="btn" id="btn-singleplayer">SINGLEPLAYER</button><button class="btn" id="btn-classic">PLAY CLASSIC</button>'}
             </div>
-            <div class="classic-hero-copy">
-              <div class="classic-kicker">${classicEdition ? 'A CREATIVE SANDBOX TO SHARE' : 'AN OPEN WORLD, BUILT ONE BLOCK AT A TIME'}</div>
-              <h1 id="classic-hero-title">${classicEdition ? 'Build freely.<br>Build together.' : 'Dig in.<br>Make something.'}</h1>
-              <p>${classicEdition ? 'Choose a saved creative world or meet friends in a shared Classic sandbox.' : 'Explore a living Beta world, gather what you need, and build whatever you can imagine.'}</p>
-              <div class="title-buttons">
-                <div class="title-primary-stack">
-                  ${classicEdition
-                    ? '<button class="btn" id="btn-singleplayer">CLASSIC SINGLEPLAYER</button><button class="btn" id="btn-multiplayer">CLASSIC MULTIPLAYER</button><button class="btn" id="btn-beta">BACK TO BETA</button><small class="title-multiplayer-hint">Worlds save locally · online names are temporary · no account needed</small>'
-                    : '<button class="btn" id="btn-singleplayer">BETA SINGLEPLAYER</button><button class="btn" id="btn-classic">PLAY CLASSIC</button>'}
-                </div>
-                <div class="title-status" id="title-status" role="status" aria-live="polite"></div>
-              </div>
+            <div class="title-button-row title-secondary-row title-controls-row">
+              <button class="btn" id="btn-options">OPTIONS</button>
+              <button class="btn" id="btn-quit">QUIT GAME</button>
             </div>
-            <div class="classic-build-stamp"><strong>${classicEdition ? '0.30' : '1.7.3'}</strong><span>${classicEdition ? 'CLASSIC<br>CREATIVE' : 'BETA-ERA<br>EDITION'}</span></div>
-          </section>
-          <div class="classic-site-columns">
-            <article class="classic-story" id="classic-features">
-              <div class="classic-section-heading"><span>${classicEdition ? 'NO GRIND. NO LIMITS. JUST BUILD.' : 'WELCOME TO A DIFFERENT KIND OF WORLD'}</span><h2>${classicEdition ? 'Create without limits.' : 'Make it yours.'}</h2></div>
-              <p class="classic-intro">${classicEdition ? 'Start a saved local world or create a shared Classic session. Choose from the block palette, build instantly, and fly through a compact old-school landscape.' : 'There are no quests to follow and no right way to play. The land is yours to explore: dig beneath the hills, build above the clouds, or settle in before night falls.'}</p>
-              <div class="classic-feature-grid">
-                ${classicEdition
-                  ? '<section class="classic-feature"><span class="classic-feature-icon">01</span><div><h3>CHOOSE</h3><p>Every Classic block is ready in the creative picker.</p></div></section><section class="classic-feature"><span class="classic-feature-icon">02</span><div><h3>BUILD</h3><p>Break and place instantly with unlimited blocks.</p></div></section><section class="classic-feature"><span class="classic-feature-icon">03</span><div><h3>SHARE</h3><p>Host or join account-free multiplayer worlds.</p></div></section>'
-                  : '<section class="classic-feature"><span class="classic-feature-icon">01</span><div><h3>EXPLORE</h3><p>Find forests, caves, beaches, and hidden ore in a world shaped by your seed.</p></div></section><section class="classic-feature"><span class="classic-feature-icon">02</span><div><h3>BUILD</h3><p>Gather blocks and turn a hillside, a shoreline, or a blank patch of land into home.</p></div></section><section class="classic-feature"><span class="classic-feature-icon">03</span><div><h3>MAKE IT THROUGH THE NIGHT</h3><p>Craft tools, light a shelter, and keep an eye out when the sun goes down.</p></div></section>'}
-              </div>
-              <div class="classic-notice"><span class="classic-notice-mark">i</span><p><strong>A familiar kind of adventure.</strong> AiSlopcraft is an independent browser game inspired by the look and feel of early block-building sandboxes.</p></div>
-            </article>
-            <aside class="classic-sidebar">
-              <section class="classic-sidebar-card classic-community-card" id="classic-community">
-                <div class="classic-sidebar-heading"><span>${classicEdition ? 'CLASSIC MULTIPLAYER' : 'BETA SINGLEPLAYER'}</span><span class="classic-online-dot"></span></div>
-                <h2>${classicEdition ? 'Build together.' : 'Your world awaits.'}</h2>
-                <p>${classicEdition ? 'Host or join a shared Classic world. Temporary player names only—no account, email, or password required.' : 'Explore, build and save a Beta world at your own pace. Your local worlds stay in your browser.'}</p>
-                <div class="title-button-row title-secondary-row title-controls-row">
-                  <button class="btn" id="btn-options">OPTIONS</button>
-                  <button class="btn" id="btn-quit">QUIT</button>
-                </div>
-                <div class="classic-sidebar-meta">${classicEdition ? 'UP TO 5 WORLDS · 5 PLAYERS PER WORLD' : 'SINGLEPLAYER · LOCAL WORLD SAVES'}</div>
-              </section>
-              <section class="classic-sidebar-card classic-extras-card" id="classic-links">
-                <div class="classic-sidebar-heading"><span>FIELD GUIDE</span><span>↗</span></div>
-                <p>Need a hand, or want to make the world your own?</p>
-                <div class="title-utility-row">
-                  <button class="title-link" id="btn-help">HOW TO PLAY</button>
-                  <button class="title-link" id="btn-pack">RESOURCE PACKS</button>
-                  <button class="title-link" id="btn-saves">WORLD SAVES</button>
-                </div>
-              </section>
-            </aside>
+            <div class="title-utility-row">
+              <button class="title-link" id="btn-help">HOW TO PLAY</button>
+              <button class="title-link" id="btn-pack">RESOURCE PACKS</button>
+              <button class="title-link" id="btn-saves">WORLD SAVES</button>
+            </div>
+            <div class="title-status" id="title-status" role="status" aria-live="polite"></div>
           </div>
         </main>
-        <footer class="classic-site-footer"><span class="title-foot">AiSlopcraft · ${classicEdition ? 'Classic creative' : 'Beta 1.7.3-inspired'}</span><span class="title-disclaimer">Independent browser game · not affiliated with Mojang</span><a href="#classic-home">BACK TO TOP ↑</a></footer>
+        <div class="classic-menu-version">${classicEdition ? 'CLASSIC MODE · SINGLEPLAYER + MULTIPLAYER' : 'BETA MODE · SINGLEPLAYER ONLY'}<span>ESCAPE TO PAUSE IN GAME</span></div>
       </div>
     `;
     this.root.appendChild(div);
@@ -2391,7 +2340,7 @@ export class UI {
     screen.innerHTML = `<section class="classic-block-panel" role="dialog" aria-modal="true" aria-labelledby="classic-block-title">
       <header><div><h2 id="classic-block-title">Choose a block</h2><p>Unlimited blocks · choose one for the selected hotbar slot</p></div><button type="button" class="classic-block-close" id="classic-block-close" aria-label="Return to world">×</button></header>
       <div class="classic-block-grid" role="listbox" aria-label="Classic blocks"></div>
-      <footer><span>Click a block to select · B or Esc to return</span><strong>32 BLOCKS</strong></footer>
+      <footer><span>Click a block to select · B or Esc to return</span><strong>${CLASSIC_BLOCKS.length} BLOCKS</strong></footer>
     </section>`;
     this.root.appendChild(screen);
     this.classicBlockScreen = screen;

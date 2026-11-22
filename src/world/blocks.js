@@ -19,6 +19,7 @@ export const IRON_ORE = 15;
 export const COAL_ORE = 16;
 export const LOG = 17;
 export const LEAVES = 18;
+export const SPONGE = 19;
 export const GLASS = 20;
 export const LAPIS_ORE = 21;
 export const SANDSTONE = 24;
@@ -31,6 +32,8 @@ export const MUSHROOM_BROWN = 39;
 export const MUSHROOM_RED = 40;
 export const GOLD_BLOCK = 41;
 export const IRON_BLOCK = 42;
+export const DOUBLE_STONE_SLAB = 43;
+export const STONE_SLAB = 44;
 export const BRICK = 45;
 export const TNT = 46;
 export const BOOKSHELF = 47;
@@ -98,7 +101,7 @@ export const TILES = {
   crops4: 103, crops5: 104, crops6: 105, crops7: 106,
   bed_top: 107, bed_side: 108, bed_end: 109,
   farmland_wet: 110, jack_o_lantern: 111,
-  cake_top: 112, cake_side: 113, cake_bottom: 114, redstone_wire: 115, lever: 116, repeater: 117, bed_foot: 118, redstone_torch_off: 119, door_wood_bottom: 120, door_iron_bottom: 121,
+  cake_top: 112, cake_side: 113, cake_bottom: 114, redstone_wire: 115, lever: 116, repeater: 117, bed_foot: 118, redstone_torch_off: 119, door_wood_bottom: 120, door_iron_bottom: 121, sponge: 122,
 };
 
 // Face order: +Y, -Y, +Z, -Z, +X, -X
@@ -142,6 +145,7 @@ def(IRON_ORE, 'Iron Ore', { tiles: faces(TILES.iron_ore, TILES.iron_ore, TILES.i
 def(COAL_ORE, 'Coal Ore', { tiles: faces(TILES.coal_ore, TILES.coal_ore, TILES.coal_ore), hardness: 3.0, tool: 'pickaxe', drops: 263 });
 def(LOG, 'Wood', { tiles: faces(TILES.log_top, TILES.log_top, TILES.log_side), hardness: 2.0, tool: 'axe' });
 def(LEAVES, 'Leaves', { opaque: false, tiles: faces(TILES.leaves, TILES.leaves, TILES.leaves), hardness: 0.2, tint: 'foliage', drops: 0, render: 'cutout' });
+def(SPONGE, 'Sponge', { tiles: faces(TILES.sponge, TILES.sponge, TILES.sponge), hardness: 0.6 });
 def(GLASS, 'Glass', { opaque: false, tiles: faces(TILES.glass, TILES.glass, TILES.glass), hardness: 0.3, drops: 0, render: 'cutout' });
 def(LAPIS_ORE, 'Lapis Ore', { tiles: faces(TILES.lapis_ore, TILES.lapis_ore, TILES.lapis_ore), hardness: 3.0, tool: 'pickaxe', minTier: 1, drops: 351, dropCount: 5 });
 def(SANDSTONE, 'Sandstone', { tiles: faces(TILES.sandstone_top, TILES.sandstone_bottom, TILES.sandstone_side), hardness: 0.8, tool: 'pickaxe' });
@@ -182,6 +186,8 @@ def(MUSHROOM_RED, 'Red Mushroom', {
 });
 def(GOLD_BLOCK, 'Gold Block', { tiles: faces(TILES.gold_block, TILES.gold_block, TILES.gold_block), hardness: 3, tool: 'pickaxe', minTier: 2 });
 def(IRON_BLOCK, 'Iron Block', { tiles: faces(TILES.iron_block, TILES.iron_block, TILES.iron_block), hardness: 5, tool: 'pickaxe', minTier: 1 });
+def(DOUBLE_STONE_SLAB, 'Double Stone Slab', { tiles: faces(TILES.stone, TILES.stone, TILES.stone), hardness: 2, tool: 'pickaxe' });
+def(STONE_SLAB, 'Stone Slab', { tiles: faces(TILES.stone, TILES.stone, TILES.stone), hardness: 2, tool: 'pickaxe', render: 'slab', bounds: [0, 0, 0, 1, 0.5, 1] });
 def(BRICK, 'Bricks', { tiles: faces(TILES.brick, TILES.brick, TILES.brick), hardness: 2, tool: 'pickaxe' });
 def(TNT, 'TNT', { tiles: faces(TILES.tnt_top, TILES.tnt_bottom, TILES.tnt_side), hardness: 0 });
 def(BOOKSHELF, 'Bookshelf', { tiles: faces(TILES.planks, TILES.planks, TILES.bookshelf), hardness: 1.5, tool: 'axe', drops: 340, dropCount: 3 });
