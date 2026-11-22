@@ -116,6 +116,10 @@ check('mesh normals are finite unit vectors',
 check('mesh shader light data matches the calculated per-vertex lighting',
   mesh?.geometry.getAttribute('aLight')?.array.length === built.solid.light.length &&
   mesh?.geometry.getAttribute('aLight')?.array[0] === built.solid.light[0]);
+const topVertexIndexes = [];
+for (let i = 0; i < built.solid.normal.length; i += 3) if (built.solid.normal[i + 1] > 0.99) topVertexIndexes.push(i / 3);
+check('exposed block tops retain full skylight instead of being baked black', topVertexIndexes.some(i => built.solid.light[i * 2] >= 14)
+  && topVertexIndexes.some(i => built.solid.col[i * 4] > 0.5));
 
 // mining rules (beta values)
 check('stone by hand ≈ 7.9s', Math.abs(breakTime(STONE, null) - 7.9) < 1.2);

@@ -46,7 +46,7 @@ assert.equal(lighting.shared.uTime.value, 4);
 assert.equal(lighting.shared.uFogFar.value, 90);
 sky.dayFactor = 0;
 lighting.update({ sky, time: 5, style: 'shader', fog });
-assert.ok(lighting.shared.uSky.value < 0.05, 'night sky light is genuinely dark');
+assert.equal(lighting.shared.uSky.value, 0.12, 'night retains the classic exposed-sky light floor instead of crushing block tops to black');
 assert.equal(lighting.shared.uSunIntensity.value, 0, 'the sun does not illuminate at night');
 
 // Legacy entity conversion keeps vertex hues and material tints intact.
@@ -80,7 +80,11 @@ assert.match(fragment, /uShadowMap/);
 assert.match(fragment, /fresnel/);
 assert.match(fragment, /uEmissionMap/);
 assert.match(fragment, /#include <colorspace_fragment>/);
-assert.match(fragment, /uTime \* 0\.006/, 'water UV animation is consumed by the shader');
+assert.match(fragment, /uTime \* 0\.006/, 'cinematic water UV animation is consumed by the shader');
+assert.match(fragment, /uWater > 0\.5 && uShaderStyle > 0\.5/, 'Classic water stays still and pixelated');
+assert.match(vertex, /uWater > 0\.5 && uShaderStyle > 0\.5/, 'Classic water geometry is not artificially wavy');
+assert.match(fragment, /float daylight = max\(uSky, 0\.12\)/, 'night lighting retains a visible classic sky floor');
+assert.match(fragment, /skyLight \+ direct \+ torchLight/, 'warm torch light adds to skylight instead of disappearing in daylight');
 assert.match(vertex, /uPsxSnap/, 'PSX vertex snapping scales with depth');
 assert.match(vertex, /snapGrid/, 'PSX snapping uses the active internal resolution');
 assert.match(fragment, /vAffineUv/, 'PSX preset enables affine texture mapping');

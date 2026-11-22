@@ -67,8 +67,9 @@ const vertexShader = /* glsl */ `
       vInstanceEmission = aInstanceEmission;
     #endif
     vec4 world = modelMatrix * local;
-    // Animate the actual water surface, including the matching side-top vertices.
-    if (uWater > 0.5) {
+    // Classic keeps the original still, pixelated water surface. The optional
+    // cinematic presets animate it without changing collision/selection geometry.
+    if (uWater > 0.5 && uShaderStyle > 0.5) {
       float surface = 1.0 - step(0.02, abs(fract(position.y) - 0.88));
       world.y += surface * (sin(world.x * 1.35 + uTime * 1.4) + cos(world.z * 1.1 - uTime * 1.1)) * 0.018;
     }
@@ -167,7 +168,7 @@ const fragmentShader = /* glsl */ `
   void main() {
     vec2 uv = vUv;
     if (uShaderStyle > 3.5) uv = vAffineUv.xy / max(vAffineUv.z, 0.0001);
-    if (uWater > 0.5) uv += vec2(uTime * 0.006, uTime * 0.014);
+    if (uWater > 0.5 && uShaderStyle > 0.5) uv += vec2(uTime * 0.006, uTime * 0.014);
     vec4 tex = mix(vec4(1.0), texture2D(map, uv), uHasMap);
     float alpha = tex.a * vTint.a * uOpacity;
     if (alpha < uAlphaTest) discard;
@@ -176,14 +177,24 @@ const fragmentShader = /* glsl */ `
     vec3 sunDir = normalize(uSunDirection);
     vec3 base = tex.rgb * vTint.rgb * uTint;
 
-    float skyLevel = pow(clamp(vLight.x / 15.0, 0.0, 1.0), 1.35);
-    float blockLevel = pow(clamp(vLight.y / 15.0, 0.0, 1.0), 1.60);
+    float skyLevel = pow(clamp(vLight.x / 15.0, 0.0, 1.0), 1.20);
+    float blockLevel = pow(clamp(vLight.y / 15.0, 0.0, 1.0), 1.45);
     float shadow = sunShadow(normal, sunDir);
-    vec3 skyLight = uSkyTint * skyLevel * uSky * (0.52 + 0.18 * max(normal.y, 0.0)) * mix(1.0, shadow, 0.55);
-    vec3 direct = uSkyTint * skyLevel * uSunIntensity * max(dot(normal, sunDir), 0.0) * shadow * 0.45;
-    vec3 torchLight = uBlockTint * blockLevel;
-    vec3 light = max(skyLight + direct, torchLight) + min(skyLight + direct, torchLight) * 0.18;
-    light = max(light, vec3(0.010, 0.012, 0.018));
+    // Keep exposed terrain legible through the full day cycle: Minecraft's
+    // classic lightmap has a real night floor, not a hard drop to black.
+    float daylight = max(uSky, 0.12);
+    vec3 skyLight = uSkyTint * skyLevel * daylight * (0.58 + 0.12 * max(normal.y, 0.0));
+    if (uShaderStyle > 1.5 && uShaderStyle < 3.5) {
+      skyLight *= mix(1.0, shadow, 0.55);
+    }
+    vec3 direct = vec3(0.0);
+    if (uShaderStyle > 1.5 && uShaderStyle < 3.5) {
+      direct = uSkyTint * skyLevel * uSunIntensity * max(dot(normal, sunDir), 0.0) * shadow * 0.36;
+    }
+    // Add torch light to skylight instead of choosing only the brighter source;
+    // this keeps torches visibly warm in daylight and avoids black face tops.
+    vec3 torchLight = uBlockTint * blockLevel * 0.90;
+    vec3 light = clamp(skyLight + direct + torchLight, vec3(0.025, 0.027, 0.032), vec3(1.0));
     vec3 rgb = base * light;
 
     // Emissive texels (flame, lava, glowstone, lit furnace/lantern faces) keep
@@ -191,7 +202,7 @@ const fragmentShader = /* glsl */ `
     float emissionMask = clamp(uEmission + vInstanceEmission, 0.0, 1.0) * mix(1.0, texture2D(uEmissionMap, vUv).r, uHasEmissionMap);
     rgb = mix(rgb, base, clamp(emissionMask, 0.0, 1.0));
 
-    if (uWater > 0.5) {
+    if (uWater > 0.5 && uShaderStyle > 0.5) {
       vec2 p = vWorldPosition.xz;
       vec3 ripple = vec3(
         cos(p.x * 1.7 + uTime * 1.3) * 0.055 + sin((p.x + p.y) * 0.8 - uTime) * 0.035
@@ -205,15 +216,15 @@ const fragmentShader = /* glsl */ `
       float fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(waterNormal, viewDir), 0.0), 5.0);
       vec3 reflected = reflect(-viewDir, waterNormal);
       vec3 reflection = mix(uFogColor, uSkyTint, clamp(reflected.y * 0.7 + 0.3, 0.0, 1.0));
-      float strength = uShaderStyle > 2.5 && uShaderStyle < 3.5 ? 0.72 : 0.28;
+      float strength = uShaderStyle > 2.5 ? 0.54 : 0.18;
       rgb = mix(rgb, reflection * (0.35 + 0.65 * uSky), fresnel * strength);
       float specular = pow(max(dot(waterNormal, normalize(sunDir + viewDir)), 0.0), 96.0);
-      rgb += vec3(1.0, 0.90, 0.70) * specular * uSunIntensity * shadow * (uShaderStyle > 2.5 && uShaderStyle < 3.5 ? 0.9 : 0.25);
+      rgb += vec3(1.0, 0.90, 0.70) * specular * uSunIntensity * shadow * (uShaderStyle > 2.5 ? 0.65 : 0.08);
       float causticPattern = sin((p.x + p.y) * 3.2 + uTime * 1.7) * sin((p.x - p.y) * 2.4 - uTime * 1.1);
       float caustic = pow(max(causticPattern * 0.5 + 0.5, 0.0), 10.0)
         * max(dot(waterNormal, viewDir), 0.0) * uSunIntensity * shadow;
-      rgb += vec3(0.10, 0.24, 0.28) * caustic * (uShaderStyle > 2.5 && uShaderStyle < 3.5 ? 0.75 : 0.22);
-      alpha = mix(alpha, min(0.94, alpha + 0.16), fresnel);
+      rgb += vec3(0.10, 0.24, 0.28) * caustic * (uShaderStyle > 2.5 ? 0.50 : 0.10);
+      alpha = mix(alpha, min(0.94, alpha + 0.12), fresnel);
     }
 
     rgb = grade(rgb * uBrightness);
@@ -367,7 +378,9 @@ export class Lighting {
     const id = shaderStyleId(style);
     s.uShaderStyle.value = id;
     s.uTime.value = time;
-    s.uSky.value = 0.035 + 0.965 * sky.dayFactor;
+    // Minecraft keeps an exposed-sky night light level; avoid the near-black
+    // collapse that made block tops disappear at dusk and in shader presets.
+    s.uSky.value = 0.12 + 0.88 * sky.dayFactor;
     s.uSunIntensity.value = sky.dayFactor;
     s.uSunDirection.value.copy(sky.sunDirection);
     const day = sky.dayFactor;
