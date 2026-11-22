@@ -1,9 +1,9 @@
-// Lightweight, uncluttered terrain for Classic mode: rolling grassland, waterline,
-// dirt/stone layers, scattered trees and flowers. No biomes, ores, caves or mobs.
+// Classic-era rolling terrain with a waterline, underground caves and ore veins,
+// plus locally authored block decorations. The biome and hostile-mob systems stay off.
 import { Noise, RNG, hashSeed } from './noise.js';
 import {
   AIR, STONE, GRASS, DIRT, SAND, WATER, BEDROCK, LOG, LEAVES,
-  TALL_GRASS, FLOWER_RED, FLOWER_YELLOW,
+  COAL_ORE, IRON_ORE, GOLD_ORE, TALL_GRASS, FLOWER_RED, FLOWER_YELLOW,
 } from './blocks.js';
 import { CH, WORLD_H } from './chunk.js';
 
@@ -43,8 +43,72 @@ export class ClassicWorldGen {
         if (id !== AIR) blocks[(y * CH + z) * CH + x] = id;
       }
     }
+    this.carveCaves(chunk);
+    this.placeOres(chunk);
     chunk.generated = true;
     chunk.dirty = true;
+  }
+
+  carveCaves(chunk) {
+    const minX = chunk.cx * CH, minZ = chunk.cz * CH;
+    for (let oz = chunk.cz - 2; oz <= chunk.cz + 2; oz++) for (let ox = chunk.cx - 2; ox <= chunk.cx + 2; ox++) {
+      const rng = new RNG(this.seed ^ Math.imul(ox, 3418731287) ^ Math.imul(oz, 132897987) ^ 0x6c8e9cf5);
+      const caveCount = rng.nextInt(3);
+      for (let cave = 0; cave < caveCount; cave++) {
+        let x = ox * CH + rng.range(0, CH), z = oz * CH + rng.range(0, CH);
+        const ceiling = Math.min(25, this.columnInfo(Math.floor(x), Math.floor(z)).height - 5);
+        if (ceiling <= 5) continue;
+        let y = rng.range(5, ceiling), heading = rng.range(0, Math.PI * 2);
+        const length = 12 + rng.nextInt(17), radius = 1.35 + rng.next() * 0.55;
+        for (let step = 0; step < length; step++) {
+          const cx = Math.floor(x), cy = Math.floor(y), cz = Math.floor(z);
+          for (let by = Math.max(2, cy - 2); by <= cy + 2; by++) {
+            for (let bz = cz - 2; bz <= cz + 2; bz++) for (let bx = cx - 2; bx <= cx + 2; bx++) {
+              const dx = bx + 0.5 - x, dy = by + 0.5 - y, dz = bz + 0.5 - z;
+              if (dx * dx + dy * dy + dz * dz > radius * radius) continue;
+              const lx = bx - minX, lz = bz - minZ;
+              if (lx < 0 || lx >= CH || lz < 0 || lz >= CH) continue;
+              const index = (by * CH + lz) * CH + lx;
+              if (chunk.blocks[index] === STONE) chunk.blocks[index] = AIR;
+            }
+          }
+          x += Math.cos(heading) * 0.9;
+          z += Math.sin(heading) * 0.9;
+          y += rng.range(-0.22, 0.22);
+          heading += rng.range(-0.18, 0.18);
+        }
+      }
+    }
+  }
+
+  placeOres(chunk) {
+    const minX = chunk.cx * CH, minZ = chunk.cz * CH;
+    const veins = [
+      { id: COAL_ORE, count: 9, length: 7, minY: 5, maxY: 28 },
+      { id: IRON_ORE, count: 6, length: 6, minY: 4, maxY: 22 },
+      { id: GOLD_ORE, count: 2, length: 5, minY: 3, maxY: 14 },
+    ];
+    for (let oz = chunk.cz - 1; oz <= chunk.cz + 1; oz++) for (let ox = chunk.cx - 1; ox <= chunk.cx + 1; ox++) {
+      for (let type = 0; type < veins.length; type++) {
+        const veinType = veins[type];
+        const rng = new RNG(this.seed ^ Math.imul(ox, 3418731287) ^ Math.imul(oz, 132897987) ^ (0x51ed270b + type * 977));
+        for (let vein = 0; vein < veinType.count; vein++) {
+          let x = ox * CH + rng.nextInt(CH), z = oz * CH + rng.nextInt(CH);
+          let y = veinType.minY + rng.nextInt(veinType.maxY - veinType.minY + 1);
+          const length = Math.max(2, veinType.length + rng.nextInt(5) - 2);
+          for (let step = 0; step < length; step++) {
+            const lx = x - minX, lz = z - minZ;
+            if (lx >= 0 && lx < CH && lz >= 0 && lz < CH && y > 1 && y < WORLD_H - 1) {
+              const index = (y * CH + lz) * CH + lx;
+              if (chunk.blocks[index] === STONE) chunk.blocks[index] = veinType.id;
+            }
+            x += rng.nextInt(3) - 1;
+            z += rng.nextInt(3) - 1;
+            y += rng.nextInt(3) - 1;
+          }
+        }
+      }
+    }
   }
 
   decorate(world, chunk) {

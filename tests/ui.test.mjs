@@ -28,6 +28,7 @@ dom.window.HTMLCanvasElement.prototype.getContext = () => new Proxy({}, {
 });
 
 const { UI, suggestedMultiplayerRelay } = await import('../src/ui/ui.js');
+const { showGraphicsStartupError } = await import('../src/ui/startup-error.js');
 const { sanitizeSettings } = await import('../src/settings.js');
 
 let failures = 0;
@@ -38,6 +39,13 @@ function check(name, cond, extra) {
 check('local multiplayer uses the same-origin Vite WebSocket proxy', suggestedMultiplayerRelay({ hostname: 'localhost', host: 'localhost:5173', protocol: 'http:' }) === 'ws://localhost:5173/ws');
 check('secure deployments automatically use same-origin WSS', suggestedMultiplayerRelay({ hostname: 'game.example', host: 'game.example', protocol: 'https:' }) === 'wss://game.example/ws');
 check('static GitHub Pages does not pretend to provide a room service', suggestedMultiplayerRelay({ hostname: 'skid-ster.github.io', host: 'skid-ster.github.io', protocol: 'https:' }) === '');
+const fallbackDom = new JSDOM('<!doctype html><canvas id="game-canvas"></canvas><div id="ui"></div>', { pretendToBeVisual: true });
+let reloadRequested = false;
+const startupFallback = showGraphicsStartupError(fallbackDom.window.document, () => { reloadRequested = true; });
+startupFallback.querySelector('button').click();
+check('WebGL startup failure shows an accessible recovery screen and reload action', startupFallback.getAttribute('role') === 'alert'
+  && startupFallback.textContent.includes('needs WebGL') && !fallbackDom.window.document.getElementById('game-canvas')
+  && fallbackDom.window.document.activeElement === startupFallback.querySelector('button') && reloadRequested);
 const key = (code) => ({ code, preventDefault() {} });
 const click = (button = 0) => ({ button, preventDefault() {} });
 const visible = (id) => document.getElementById(id)?.style.display !== 'none';
@@ -119,9 +127,9 @@ try {
   ui = new UI(game);
 
   check('resource pack manager is available from the title screen', !!btn('btn-pack'));
-  check('Beta title keeps Singleplayer and Classic entry but removes Multiplayer', !!btn('btn-classic') && !!btn('btn-singleplayer') && !btn('btn-multiplayer') && document.querySelector('#classic-community').textContent.includes('BETA SINGLEPLAYER') && !btn('btn-realms') && !btn('btn-language') && !!btn('btn-pack') && !!btn('btn-saves') && !!btn('btn-quit'));
-  check('landing page has classic site masthead, active navigation and singleplayer sections', !!document.querySelector('.classic-site-shell .classic-site-header') && document.querySelector('.classic-site-nav [aria-current="page"]')?.textContent === 'HOME' && document.querySelector('.classic-site-nav').textContent.includes('SINGLEPLAYER') && !!document.querySelector('#classic-world h1'));
-  check('Beta title presents exactly two play actions without multiplayer copy', document.querySelectorAll('.title-primary-stack .btn').length === 2 && !document.querySelector('.title-multiplayer-hint'));
+  check('Beta menu offers Singleplayer and Classic entry, with no Multiplayer action', !!btn('btn-classic') && !!btn('btn-singleplayer') && !btn('btn-multiplayer') && !!btn('btn-pack') && !!btn('btn-saves') && !!btn('btn-quit'));
+  check('title is a full-screen game menu, not a centered marketing website', !!document.querySelector('.classic-main-menu') && !!document.querySelector('#menu-heading') && !document.querySelector('.classic-site-shell') && !document.querySelector('.classic-feature-grid'));
+  check('Beta menu presents only the two play actions and no multiplayer copy', document.querySelectorAll('.classic-menu-actions .title-primary-stack .btn').length === 2 && !document.querySelector('.title-multiplayer-hint') && document.querySelector('.classic-main-menu').textContent.includes('BETA MODE · SINGLEPLAYER ONLY'));
   let editionHome = null;
   game.openEditionHome = edition => { editionHome = edition; };
   btn('btn-classic').click();
@@ -133,7 +141,8 @@ try {
   ui.renderHearts();
   check('Classic HUD hides survival hearts, armor, and oxygen bars', ui.statusBarsEl.style.display === 'none' && btn('water-bar').style.display === 'none');
   ui.buildClassicBlockPicker();
-  check('Classic block chooser presents the full 32-block palette', document.querySelectorAll('#classic-block-screen .classic-block-choice').length === 32);
+  check('Classic block chooser presents all 49 original-era blocks', document.querySelectorAll('#classic-block-screen .classic-block-choice').length === 49
+    && document.querySelector('#classic-block-screen footer strong')?.textContent === '49 BLOCKS');
   ui.setMode('classic-blocks');
   document.querySelector('#classic-block-screen .classic-block-choice').click();
   check('choosing a Classic block closes the picker and selects that block', selectedClassicBlocks.length === 1 && ui.mode === 'game');
@@ -581,8 +590,9 @@ try {
     && !!classicDom.window.document.getElementById('btn-saves'));
   check('Classic multiplayer is always creative rather than exposing Beta Survival mode', classicUi.multiplayerScreen.querySelector('#mp-mode').value === 'creative'
     && classicUi.multiplayerScreen.querySelector('#mp-mode').closest('label').hidden);
-  check('Classic launcher identifies the edition and keeps Multiplayer copy out of Beta', classicDom.window.document.querySelector('.title-sub')?.textContent === 'CLASSIC CREATIVE'
-    && classicDom.window.document.querySelector('#classic-community')?.textContent.includes('CLASSIC MULTIPLAYER'));
+  check('Classic launcher identifies its edition and clearly advertises multiplayer', classicDom.window.document.querySelector('.title-sub')?.textContent === 'CLASSIC CREATIVE'
+    && classicDom.window.document.querySelector('.classic-menu-version')?.textContent.includes('SINGLEPLAYER + MULTIPLAYER')
+    && classicDom.window.document.querySelector('.title-multiplayer-hint')?.textContent.includes('multiplayer'));
   classicDom.window.document.getElementById('btn-singleplayer').click();
   check('Classic Singleplayer filters the saved-world list to Classic worlds', classicUi.worldSelectScreen.textContent.includes('Classic save')
     && !classicUi.worldSelectScreen.textContent.includes('Beta save'));

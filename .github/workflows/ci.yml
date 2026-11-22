@@ -23,6 +23,4 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --include=dev
-      - run: npm test
-      - run: npm run build
-      - run: npm audit --audit-level=low
+      - run: npm run verify

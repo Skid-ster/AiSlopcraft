@@ -63,6 +63,11 @@ export function applyClassicTextures(ctx) {
   put(TILES.cobble,p=>fill(p,(x,y)=>cobble(x,y)));
   put(TILES.mossy_cobble,p=>fill(p,(x,y)=>cobble(x,y,true)));
   put(TILES.bedrock,p=>fill(p,(x,y)=>shade([74,74,74],grain(x,y,17)+(hash(Math.floor(x/3),Math.floor(y/2),18)-.5)*70)));
+  put(TILES.sponge,p=>fill(p,(x,y)=>{
+    const patch=hash(Math.floor(x/3),Math.floor(y/3),72);
+    const base=patch>.76?[216,202,111]:patch<.18?[166,153,75]:[195,181,91];
+    return shade(base,grain(x,y,73)+(hash(x,y,74)>.88?12:0));
+  }));
   put(TILES.sand,p=>fill(p,(x,y)=>shade([219,207,163],grain(x,y,20))));
   put(TILES.gravel,p=>fill(p,(x,y)=>shade([132,126,122],grain(x,y,22)+(hash(Math.floor(x/2),Math.floor(y/2),21)-.5)*28)));
   put(TILES.log_side,p=>fill(p,(x,y)=>{
