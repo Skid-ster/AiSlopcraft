@@ -8,7 +8,7 @@ import { WorldGen } from '../src/world/worldgen.js';
 import { ClassicWorldGen } from '../src/world/classic-worldgen.js';
 import { CLASSIC_BLOCKS } from '../src/classic.js';
 import { matchRecipe, smeltResult } from '../src/ui/recipes.js';
-import { breakTime, canHarvest, getBlock, itemName, STONE, STONE_SLAB, DIAMOND_ORE, COAL_ORE, IRON_ORE, GOLD_ORE, LAVA, AIR, TORCH } from '../src/world/blocks.js';
+import { breakTime, canHarvest, getBlock, itemName, STONE, STONE_SLAB, DIAMOND_ORE, COAL_ORE, IRON_ORE, GOLD_ORE, GRASS, LEAVES, LAVA, AIR, TORCH } from '../src/world/blocks.js';
 
 let failures = 0;
 function check(name, cond) {
@@ -70,6 +70,11 @@ check('Classic maps are finite 256 by 256 worlds with a 64-block build height', 
 check('Classic palette has all 49 original-era selectable blocks', CLASSIC_BLOCKS.length === 49 && new Set(CLASSIC_BLOCKS).size === 49
   && ['Sponge', 'Sapling', 'Stone Slab', 'Double Stone Slab', 'Brown Mushroom', 'Red Mushroom'].every(name => CLASSIC_BLOCKS.some(id => itemName(id) === name))
   && CLASSIC_BLOCKS.every(id => getBlock(id).tiles?.length === 6));
+classicWorld.setBlock(8, 62, 8, GRASS);
+classicWorld.setBlock(9, 62, 8, LEAVES);
+const classicMesh = buildChunkMesh(classicWorld, classicChunk, null, null, 2);
+check('Classic blocks have finite vertex colors without Beta climate data', [classicMesh.solid, classicMesh.cutout].every(layer =>
+  layer.col.length > 0 && layer.col.every(Number.isFinite)));
 
 // Classic half-slabs need real half-height geometry rather than full cubes.
 world.setBlock(1, 120, 1, STONE_SLAB);

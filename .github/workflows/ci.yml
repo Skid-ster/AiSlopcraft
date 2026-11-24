@@ -23,4 +23,15 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --include=dev
+      - run: npx playwright install --with-deps chromium
       - run: npm run verify
+  windows-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --include=dev
+      - run: npm test

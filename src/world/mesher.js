@@ -228,10 +228,13 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
         if (!bd.tiles) continue;
         const meta = chunk.getMeta(x, y, z);
 
-        const biome = biomeAt(x, z);
         let biomeTint = WHITE_TINT;
-        if (bd.tint === 'grass') biomeTint = grassColor(biome.temp, biome.hum);
-        else if (bd.tint === 'foliage') biomeTint = foliageColor(biome.temp, biome.hum);
+        // Classic has no climate values; use the colors in its procedural atlas.
+        if (world.edition !== 'classic') {
+          const biome = biomeAt(x, z);
+          if (bd.tint === 'grass') biomeTint = grassColor(biome.temp, biome.hum);
+          else if (bd.tint === 'foliage') biomeTint = foliageColor(biome.temp, biome.hum);
+        }
 
         const isLava = id === LAVA || id === LAVA_FLOW;
         const isWaterFamily = id === WATER || id === WATER_FLOW;

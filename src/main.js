@@ -1,6 +1,7 @@
 // AiSlopcraft — Beta-era survival and Classic creative sandbox. Main game loop.
 import * as THREE from 'three';
 import { World } from './world/world.js';
+import { applySavedEdits, selectSpawn } from './world/world-loader.js';
 import { CLASSIC_BLOCKS, isClassicBlock } from './classic.js';
 import { CH, WORLD_H, SEA_LEVEL } from './world/chunk.js';
 import { buildChunkMesh } from './world/mesher.js';
@@ -15,7 +16,7 @@ import {
 import { Player } from './entities/player.js';
 import { createRemoteAvatarModel, disposeRemoteAvatarModel } from './entities/remote-avatar.js';
 import { advanceEating } from './entities/eating.js';
-import { MobManager, findSafeGround, rollMobDrops, mobAttackDamage } from './entities/mobs.js';
+import { MobManager, rollMobDrops, mobAttackDamage } from './entities/mobs.js';
 import { UI } from './ui/ui.js';
 import { showGraphicsStartupError } from './ui/startup-error.js';
 import { Audio } from './audio.js';
@@ -25,7 +26,8 @@ import { ParticleManager } from './particles.js';
 import { FirstPersonArm } from './arm.js';
 import { Lighting, PSXPostProcess, SHADER_STYLES, shaderStyleId } from './rendering.js';
 import { loadSettings, persistSettings, sensitivityToRadians, keyLabel } from './settings.js';
-import { decodeWorldSave, encodeWorldSave, MAX_WORLD_SAVE_BYTES, normalizeWorldSave } from './save.js';
+import { decodeWorldSave, encodeWorldSave, MAX_WORLD_SAVE_BYTES } from './save.js';
+import { createWorldSaveStore } from './save-manager.js';
 import { useOnBlock, useOnMob, growCrop, cropDrops } from './interactions.js';
 import { FluidSimulator } from './world/fluids.js';
 import { RedstoneSimulator } from './world/redstone.js';
@@ -171,12 +173,10 @@ const SEED = WORLD_PARAMS.get('seed') || 'Beta 1.7.3';
 const WORLD_ID = WORLD_PARAMS.get('id') || SEED;
 const WORLD_NAME = WORLD_PARAMS.get('world') || SEED;
 const REQUESTED_EDITION = WORLD_PARAMS.get('edition') === 'classic' ? 'classic' : null;
-const SAVE_KEY = `aislopcraft:world:${WORLD_ID}`;
+const worldSaves = createWorldSaveStore(localStorage);
 function readSave() {
-  try {
-    const save = normalizeWorldSave(JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'));
-    return save?.seed === SEED && save.worldId === WORLD_ID ? save : null;
-  } catch { return null; }
+  const save = worldSaves.read(WORLD_ID);
+  return save?.seed === SEED ? save : null;
 }
 const savedGame = readSave();
 const EDITION = REQUESTED_EDITION || savedGame?.edition || 'beta';
@@ -185,13 +185,7 @@ const legacySettings = { ...savedGame?.settings };
 if (legacySettings.sensitivity > 0 && legacySettings.sensitivity < 1) legacySettings.sensitivity = legacySettings.sensitivity / 0.0044 * 100;
 const settings = loadSettings(localStorage, legacySettings);
 const world = new World(SEED, scene, EDITION);
-if (Array.isArray(savedGame?.edits)) {
-  for (const entry of savedGame.edits) {
-    if (!Array.isArray(entry) || entry.length < 2 || typeof entry[0] !== 'string') continue;
-    const coordinates = entry[0].split(',').map(Number);
-    if (coordinates.length === 3) world.recordEdit(...coordinates, Number(entry[1]), Number(entry[2] || 0));
-  }
-}
+applySavedEdits(world, savedGame?.edits);
 const fluids = new FluidSimulator(world);
 world.onChunkLoad((cx, cz) => fluids.chunkLoaded(cx, cz));
 world.onChunkUnload((cx, cz) => fluids.chunkLoaded(cx, cz));
@@ -216,20 +210,7 @@ const game = {
   atlasCanvas,
   worldName: savedGame?.worldName || WORLD_NAME,
   getResourcePackState() { return resourcePackState(); },
-  listSavedWorlds() {
-    const worlds = [];
-    try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (!key?.startsWith('aislopcraft:world:')) continue;
-        try {
-          const save = normalizeWorldSave(JSON.parse(localStorage.getItem(key) || 'null'));
-          if (save && key === `aislopcraft:world:${save.worldId}`) worlds.push({ id: save.worldId, seed: save.seed, name: save.worldName || save.seed, gameMode: save.gameMode, edition: save.edition });
-        } catch { /* ignore just the one corrupt save and keep listing the rest */ }
-      }
-    } catch { /* storage may be disabled by the browser */ }
-    return worlds;
-  },
+  listSavedWorlds() { return worldSaves.list(); },
 
   selectClassicBlock(id) {
     if (this.edition !== 'classic' || !isClassicBlock(id)) return false;
@@ -274,14 +255,10 @@ const game = {
     location.assign(url.href);
   },
   renameLocalWorld(worldId, name) {
-    const key = `aislopcraft:world:${worldId}`;
-    const save = normalizeWorldSave(JSON.parse(localStorage.getItem(key) || 'null'));
-    if (!save) throw new Error('Could not find that saved world.');
-    save.worldName = String(name || '').trim().slice(0, 48) || save.worldName;
-    localStorage.setItem(key, JSON.stringify(save));
+    worldSaves.rename(worldId, name);
   },
   deleteLocalWorld(worldId) {
-    localStorage.removeItem(`aislopcraft:world:${worldId}`);
+    worldSaves.remove(worldId);
     return true;
   },
   recreateLocalWorld(worldId, seed, name, gameMode = 'survival', edition = 'beta') {
@@ -599,52 +576,9 @@ const game = {
     ui.refresh();
   },
   prepareSpawn() {
-    // Revalidate saved beds so a removed or obstructed bed never traps respawn.
-    if (this.spawnBed && [this.spawnBed.x, this.spawnBed.y, this.spawnBed.z].every(Number.isInteger)) {
-      const bed = this.spawnBed;
-      for (let cz = Math.floor(bed.z / CH) - 1; cz <= Math.floor(bed.z / CH) + 1; cz++)
-        for (let cx = Math.floor(bed.x / CH) - 1; cx <= Math.floor(bed.x / CH) + 1; cx++) world.generateChunk(cx, cz);
-      if (world.getBlock(bed.x, bed.y, bed.z) === BED_BLOCK) {
-        for (const [dx, dz] of [[1,0],[-1,0],[0,1],[0,-1]]) {
-          const x = bed.x + dx, z = bed.z + dz;
-          for (const offset of [0, 1, -1]) {
-            const feet = bed.y + offset;
-            const floor = world.getBlock(x, feet - 1, z);
-            if (!getBlock(floor).solid || floor === LEAVES || floor === LOG) continue;
-            if (!getBlock(world.getBlock(x, feet, z)).solid && !getBlock(world.getBlock(x, feet + 1, z)).solid && world.getBlock(x, feet, z) !== WATER && world.getBlock(x, feet, z) !== LAVA)
-              return { x: x + 0.5, y: feet + 0.001, z: z + 0.5 };
-          }
-        }
-        if (!getBlock(world.getBlock(bed.x, bed.y + 1, bed.z)).solid && !getBlock(world.getBlock(bed.x, bed.y + 2, bed.z)).solid)
-          return { x: bed.x + 0.5, y: bed.y + 0.5635, z: bed.z + 0.5 };
-      }
-      this.spawnBed = null;
-    }
-    // Keep the spawn region generated even after the player has streamed far away.
-    for (let cz = -1; cz <= 1; cz++) {
-      for (let cx = -1; cx <= 1; cx++) world.generateChunk(cx, cz);
-    }
-    // Prefer an open, walkable spawn instead of the top of a tree canopy.
-    const spawnCenter = this.edition === 'classic' ? 0.5 : 8.5;
-    for (let r = 0; r <= 8; r++) {
-      for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
-        if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
-        const x = spawnCenter + dx, z = spawnCenter + dz;
-        const y = findSafeGround(world, x, z, 0.6, 1.8);
-        if (y == null) continue;
-        const bx = Math.floor(x), bz = Math.floor(z);
-        const support = world.getBlock(bx, Math.floor(y - 1), bz);
-        if (support === LEAVES || support === LOG || support === WATER) continue;
-        let open = true;
-        for (let yy = Math.floor(y); yy < Math.floor(y) + 3 && open; yy++) {
-          for (let dz2 = -1; dz2 <= 1 && open; dz2++) for (let dx2 = -1; dx2 <= 1; dx2++) {
-            if (getBlock(world.getBlock(bx + dx2, yy, bz + dz2)).solid) { open = false; break; }
-          }
-        }
-        if (open) return { x, y, z };
-      }
-    }
-    return { x: spawnCenter, y: world.heightAt(Math.floor(spawnCenter), Math.floor(spawnCenter)) + 1.001, z: spawnCenter };
+    const { position, bed } = selectSpawn(world, this.spawnBed);
+    this.spawnBed = bed;
+    return position;
   },
   respawn() {
     vehicles.dismount(player, true);
@@ -660,34 +594,36 @@ const game = {
   },
   async saveAndQuit() {
     if (this.networkRoom) await this.leaveMultiplayer();
-    else this.saveGame();
+    else if (!this.saveGame()) return false;
     const url = new URL(location.href);
     url.searchParams.delete('launch');
     history.replaceState(null, '', url);
     this.started = false;
     clearFishing();
     ui.setMode('title');
+    return true;
   },
-  saveGame() {
-    // Multiplayer rooms are temporary shared sessions. Never overwrite a
-    // player's personal singleplayer save with the host's world state.
-    if (this.networkRoom) return false;
-    const payload = { version: 1, worldId: WORLD_ID, seed: SEED, worldName: this.worldName, edition: this.edition, gameMode: player.gameMode,
+  captureWorldSave() {
+    return { version: 1, worldId: WORLD_ID, seed: SEED, worldName: this.worldName, edition: this.edition, gameMode: player.gameMode,
       edits: [...world.edits].map(([key, id]) => [key, id, world.metaEdits.get(key) || 0]),
       settings: this.settings, spawnBed: this.spawnBed, timeOfDay: sky.timeOfDay, furnaces: [...furnaces], chests: [...chests], vehicles: vehicles.serialize(),
       items: itemEntities.filter(it => !it.dead).map(it => ({ id: it.id, count: it.count, damage: it.damage, pos: it.mesh.position.toArray(), vy: it.vy, age: it.age })),
       player: { pos: player.pos.toArray(), yaw: player.yaw, pitch: player.pitch, health: player.health, inventory: player.inventory, armor: player.armor, hotbarIndex: player.hotbarIndex, stats: player.stats } };
+  },
+  saveGame() {
+    // Multiplayer rooms are temporary; never overwrite a local world with room state.
+    if (this.networkRoom) return false;
     try {
-      const save = normalizeWorldSave(payload);
-      if (!save) throw new Error('The current world state is incomplete.');
-      localStorage.setItem(SAVE_KEY, JSON.stringify(save));
+      worldSaves.write(this.captureWorldSave());
       return true;
     } catch (error) { console.warn('Could not save world', error); ui?.notify('Save failed — browser storage may be full'); return false; }
   },
   exportWorldSave(requestedWorldId = WORLD_ID) {
     if (this.networkRoom && requestedWorldId === WORLD_ID) throw new Error('Leave the multiplayer room before exporting a local world save.');
-    if (this.started && requestedWorldId === WORLD_ID && !this.saveGame()) throw new Error('Could not save this world before exporting.');
-    const save = normalizeWorldSave(JSON.parse(localStorage.getItem(`aislopcraft:world:${requestedWorldId}`) || 'null'));
+    // Download current progress directly, even if the browser will not store it.
+    const save = this.started && requestedWorldId === WORLD_ID
+      ? this.captureWorldSave()
+      : worldSaves.read(requestedWorldId);
     if (!save || save.worldId !== requestedWorldId) throw new Error('There is no saved world for that selection yet.');
     const blob = new Blob([encodeWorldSave(save)], { type: 'application/json' });
     const href = URL.createObjectURL(blob);
@@ -701,11 +637,11 @@ const game = {
   async importWorldSaveFile(file) {
     if (!file || file.size > MAX_WORLD_SAVE_BYTES) throw new Error('Save file is too large (maximum 16 MB).');
     let save = decodeWorldSave(await file.text());
-    if (localStorage.getItem(`aislopcraft:world:${save.worldId}`)) {
+    if (worldSaves.has(save.worldId)) {
       const newId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       save = { ...save, worldId: `import-${newId}`.slice(0, 128) };
     }
-    try { localStorage.setItem(`aislopcraft:world:${save.worldId}`, JSON.stringify(save)); }
+    try { worldSaves.write(save); }
     catch { throw new Error('Browser storage is full. Remove another saved world or clear browser site data, then try again.'); }
     persistSettings(localStorage, save.settings);
     const url = new URL(location.href);
@@ -720,7 +656,7 @@ const game = {
     return true;
   },
   resetWorld() {
-    try { localStorage.removeItem(SAVE_KEY); } catch {}
+    try { worldSaves.remove(WORLD_ID); } catch {}
     location.reload();
   },
   start() {
@@ -831,6 +767,29 @@ world.onBlockChange((x,y,z,previousId,id,previousMeta,meta) => {
 
 const ui = new UI(game);
 game.ui = ui;
+const graphicsStatus = document.createElement('div');
+graphicsStatus.className = 'graphics-status';
+graphicsStatus.setAttribute('role', 'status');
+graphicsStatus.hidden = true;
+document.body.append(graphicsStatus);
+let graphicsLost = false;
+let graphicsStatusTimer;
+// Listen on the canvas: WebGL context events do not bubble.
+canvas.addEventListener('webglcontextlost', event => {
+  event.preventDefault();
+  graphicsLost = true;
+  clearTimeout(graphicsStatusTimer);
+  if (ui.mode === 'game') ui.setMode('pause');
+  graphicsStatus.hidden = false;
+  graphicsStatus.textContent = 'Graphics connection lost. Waiting for WebGL to recover. Local worlds can still be backed up from the game menu.';
+});
+canvas.addEventListener('webglcontextrestored', () => {
+  graphicsLost = false;
+  lighting.lastShadowTime = -Infinity;
+  if (ui.mode === 'game') ui.setMode('pause');
+  graphicsStatus.textContent = 'Graphics restored. You can continue playing.';
+  graphicsStatusTimer = setTimeout(() => { graphicsStatus.hidden = true; }, 5000);
+});
 if (WORLD_PARAMS.get('launch') === '1') {
   ui.setMode('game');
   game.start();
@@ -1790,6 +1749,7 @@ let prioritizeDirty = false;
 function frame() {
   requestAnimationFrame(frame);
   const now = performance.now();
+  if (graphicsLost) { lastT = now; return; }
   if (game.settings.maxFps && now - lastT < 1000 / game.settings.maxFps) return;
   let dt = (now - lastT) / 1000;
   lastT = now;

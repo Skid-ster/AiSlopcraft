@@ -11,6 +11,7 @@ import { matchRecipe, smeltResult } from './recipes.js';
 import { FUEL_TIMES, interactWithFurnaceSlot } from './furnace.js';
 import { OptionsMenu } from './options.js';
 import { CLASSIC_BLOCKS, isClassicBlock } from '../classic.js';
+import { bindTouchPointers, requestGamePointerLock } from '../input.js';
 
 function stackLimit(stack) {
   return itemStackLimit(stack.id);
@@ -57,10 +58,6 @@ export class UI {
     this.playerPingTimer = null;
     this.playerPingInFlight = false;
     this.touchEnabled = Boolean(game.player?.touchSupported || window.matchMedia?.('(pointer: coarse)')?.matches || window.navigator?.maxTouchPoints > 0);
-    this.touchPointerActions = new Map();
-    this.touchLookPositions = new Map();
-    this.joystickPointerId = null;
-    this.joystickKeys = new Set();
     // Remove credentials left by older account-based versions; temporary names
     // never use or persist authentication tokens.
     try {
@@ -1049,7 +1046,7 @@ export class UI {
       div.querySelector('#network-chat-form').style.display = 'none';
       div.querySelector('#network-chat-open').style.display = 'block';
       input.blur();
-      if (this.mode === 'game' && !this.touchEnabled) document.getElementById('game-canvas')?.requestPointerLock?.();
+      if (this.mode === 'game' && !this.touchEnabled) requestGamePointerLock(document.getElementById('game-canvas'));
     });
     this.networkPanel = networkPanel;
     this.touchControlsEl = div.querySelector('#touch-controls');
@@ -1061,108 +1058,7 @@ export class UI {
     const player = this.game.player;
     if (!this.touchEnabled || !player) return;
     const controls = this.touchControlsEl;
-    const look = controls.querySelector('#touch-look-zone');
-    const joystick = controls.querySelector('#touch-joystick');
-    const knob = controls.querySelector('#touch-joystick-knob');
-    const activePointer = event => {
-      event.preventDefault();
-      if (this.mode !== 'game') return false;
-      player.setTouchPointer(event.pointerId, true);
-      try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch {}
-      return true;
-    };
-    const releasePointer = pointerId => {
-      const action = this.touchPointerActions.get(pointerId);
-      this.touchPointerActions.delete(pointerId);
-      if (action === 'attack' && ![...this.touchPointerActions.values()].includes('attack')) {
-        player.leftDown = false; player.mining.active = false; player.mining.progress = 0;
-      }
-      if (action === 'use' && ![...this.touchPointerActions.values()].includes('use')) player.rightDown = false;
-      if (action?.startsWith('key:')) {
-        const code = action.slice(4);
-        const stillHeldByButton = [...this.touchPointerActions.values()].includes(action);
-        if (!stillHeldByButton && !this.joystickKeys.has(code)) player.setTouchKey(code, false);
-      }
-      this.touchLookPositions.delete(pointerId);
-      player.setTouchPointer(pointerId, false);
-      if (this.joystickPointerId === pointerId) {
-        this.joystickPointerId = null;
-        for (const code of this.joystickKeys) {
-          if (![...this.touchPointerActions.values()].includes(`key:${code}`)) player.setTouchKey(code, false);
-        }
-        this.joystickKeys.clear();
-        knob.style.transform = 'translate(0, 0)';
-      }
-    };
-    const releaseEvents = element => {
-      element.addEventListener('pointerup', event => releasePointer(event.pointerId));
-      element.addEventListener('pointercancel', event => releasePointer(event.pointerId));
-      element.addEventListener('lostpointercapture', event => releasePointer(event.pointerId));
-    };
-
-    look.addEventListener('pointerdown', event => {
-      if (event.pointerType === 'mouse' || !activePointer(event)) return;
-      this.touchLookPositions.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    });
-    look.addEventListener('pointermove', event => {
-      const previous = this.touchLookPositions.get(event.pointerId);
-      if (!previous) return;
-      player.mouseDX += (event.clientX - previous.x) * 2.25;
-      player.mouseDY += (event.clientY - previous.y) * 2.25;
-      this.touchLookPositions.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    });
-    releaseEvents(look);
-
-    const updateJoystick = event => {
-      const rect = joystick.getBoundingClientRect();
-      const radius = Math.max(24, Math.min(rect.width || 96, rect.height || 96) * 0.42);
-      const dx = event.clientX - (rect.left + (rect.width || 96) / 2);
-      const dy = event.clientY - (rect.top + (rect.height || 96) / 2);
-      const length = Math.hypot(dx, dy) || 1;
-      const scale = Math.min(1, radius / length);
-      const nx = dx / radius, ny = dy / radius;
-      knob.style.transform = `translate(${dx * scale}px, ${dy * scale}px)`;
-      const desired = new Set();
-      if (ny < -0.28) desired.add(player.bindings.forward);
-      if (ny > 0.28) desired.add(player.bindings.back);
-      if (nx < -0.28) desired.add(player.bindings.left);
-      if (nx > 0.28) desired.add(player.bindings.right);
-      for (const code of this.joystickKeys) {
-        if (!desired.has(code) && ![...this.touchPointerActions.values()].includes(`key:${code}`)) player.setTouchKey(code, false);
-      }
-      for (const code of desired) player.setTouchKey(code, true);
-      this.joystickKeys = desired;
-    };
-    joystick.addEventListener('pointerdown', event => {
-      if (event.pointerType === 'mouse' || !activePointer(event)) return;
-      this.joystickPointerId = event.pointerId;
-      updateJoystick(event);
-    });
-    joystick.addEventListener('pointermove', event => { if (event.pointerId === this.joystickPointerId) updateJoystick(event); });
-    releaseEvents(joystick);
-
-    const bindHold = (id, action, buttonNumber = 0) => {
-      const button = controls.querySelector(`#${id}`);
-      button.addEventListener('pointerdown', event => {
-        if (event.pointerType === 'mouse' || !activePointer(event)) return;
-        this.touchPointerActions.set(event.pointerId, action);
-        if (action === 'attack') player.leftDown = true;
-        else if (action === 'use') player.rightDown = true;
-        else if (action.startsWith('key:')) player.setTouchKey(action.slice(4), true);
-        else return;
-        if (action === 'attack' || action === 'use') {
-          const binding = action === 'attack' ? player.bindings.attack : player.bindings.use;
-          const boundButton = /^Mouse([0-2])$/.exec(binding || '');
-          const mouseButton = boundButton ? Number(boundButton[1]) : buttonNumber;
-          document.dispatchEvent(new window.MouseEvent('mousedown', { button: mouseButton, bubbles: true, cancelable: true }));
-        }
-      });
-      releaseEvents(button);
-    };
-    bindHold('touch-mine', 'attack', 0);
-    bindHold('touch-use', 'use', 2);
-    bindHold('touch-jump', `key:${player.bindings.jump}`);
-    bindHold('touch-sneak', `key:${player.bindings.sneak}`);
+    this.releaseTouchPointers = bindTouchPointers(controls, player, () => this.mode === 'game');
     controls.querySelector('#touch-fly').addEventListener('click', event => {
       player.classicFlying = !player.classicFlying;
       player.vel.set(0, 0, 0);
@@ -1188,15 +1084,8 @@ export class UI {
   }
 
   releaseTouchInputs() {
-    const player = this.game.player;
-    if (!player?.clearTouchInput) return;
-    player.clearTouchInput();
-    this.touchPointerActions.clear();
-    this.touchLookPositions.clear();
-    this.joystickPointerId = null;
-    this.joystickKeys.clear();
-    const knob = this.touchControlsEl?.querySelector('#touch-joystick-knob');
-    if (knob) knob.style.transform = 'translate(0, 0)';
+    if (this.releaseTouchPointers) this.releaseTouchPointers();
+    else this.game.player?.clearTouchInput?.();
   }
 
   openNetworkChat() {
@@ -1233,6 +1122,8 @@ export class UI {
       }
     }
     const saveNow = document.getElementById('btn-save-now');
+    const saveBackup = document.getElementById('btn-save-backup');
+    if (saveBackup) saveBackup.hidden = Boolean(room);
     if (saveNow) saveNow.hidden = !!room;
     const saveQuit = document.getElementById('btn-save-quit');
     if (saveQuit) saveQuit.textContent = room ? 'Leave Multiplayer & Quit to Title' : 'Save & Quit to Title';
@@ -1478,7 +1369,9 @@ export class UI {
         <button class="btn" id="btn-options2">Options...</button>
         <button class="btn" id="btn-respawn">Respawn</button>
         ${this.game.saveGame ? '<button class="btn" id="btn-save-now">Save World Now</button>' : ''}
+        ${this.game.exportWorldSave ? '<button class="btn" id="btn-save-backup">Download World Backup</button>' : ''}
         ${this.game.saveAndQuit ? '<button class="btn" id="btn-save-quit">Save & Quit to Title</button>' : ''}
+        <p id="pause-save-status" role="status"></p>
         <div class="pause-hint">Beta 1.7.3 — no hunger, no sprint. Eat food or cake to heal!</div>
       </div>
     `;
@@ -1497,16 +1390,22 @@ export class UI {
       this.game.respawn();
       this.setMode('game');
     });
+    const pauseSaveStatus = pause.querySelector('#pause-save-status');
+    const saveFailed = 'Save failed — browser storage may be full. Download a backup before leaving.';
     pause.querySelector('#btn-save-now')?.addEventListener('click', () => {
       this.game.audio.click();
       const saved = this.game.saveGame?.();
-      this.notify(saved ? 'World saved in this browser.' : 'World saves are unavailable during multiplayer.');
+      pauseSaveStatus.textContent = saved ? 'World saved in this browser.' : saveFailed;
+    });
+    pause.querySelector('#btn-save-backup')?.addEventListener('click', () => {
+      try { this.game.exportWorldSave(); pauseSaveStatus.textContent = 'World backup downloaded.'; }
+      catch (error) { pauseSaveStatus.textContent = error.message; }
     });
     const saveQuitBtn = pause.querySelector('#btn-save-quit');
     if (saveQuitBtn) {
-      saveQuitBtn.addEventListener('click', () => {
+      saveQuitBtn.addEventListener('click', async () => {
         this.game.audio.click();
-        this.game.saveAndQuit?.();
+        if (await this.game.saveAndQuit() === false) pauseSaveStatus.textContent = saveFailed;
       });
     }
 
@@ -1954,7 +1853,7 @@ export class UI {
         this.networkPanel.querySelector('#network-chat-form').style.display = 'none';
         this.networkPanel.querySelector('#network-chat-open').style.display = 'block';
         e.target.blur();
-        if (this.mode === 'game' && !this.touchEnabled) document.getElementById('game-canvas')?.requestPointerLock?.();
+        if (this.mode === 'game' && !this.touchEnabled) requestGamePointerLock(document.getElementById('game-canvas'));
       }
       return;
     }
@@ -2084,7 +1983,7 @@ export class UI {
         }
       }
       if (!p.touchSupported && !p.pointerLocked && !p.dead) {
-        document.getElementById('game-canvas')?.requestPointerLock?.();
+        requestGamePointerLock(document.getElementById('game-canvas'));
       }
     } else {
       document.exitPointerLock?.();

@@ -1407,3 +1407,19 @@ html, body {
   cursor: pointer;
 }
 .startup-error-card button:hover, .startup-error-card button:focus-visible { background: linear-gradient(#899bbd, #637699); outline: 2px solid #f6e894; outline-offset: 2px; }
+
+.graphics-status {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  width: min(34rem, 92vw);
+  padding: 0.75rem;
+  color: #fff;
+  background: #221d14;
+  border: 1px solid #e7d173;
+  text-align: center;
+  pointer-events: none;
+}
+#pause-save-status:empty { display: none; }

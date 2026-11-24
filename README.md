@@ -1,6 +1,6 @@
 # AiSlopcraft
 
-**[▶ Play AiSlopcraft](https://skid-ster.github.io/AiSlopcraft/)** · [Set up the Azure multiplayer server](#deploy-to-azure) · [Source code](https://github.com/Skid-ster/AiSlopcraft)
+**[▶ Play on Render — singleplayer + Classic multiplayer](https://aislopcraft-online.onrender.com/)** · [GitHub Pages — singleplayer only](https://skid-ster.github.io/AiSlopcraft/) · [Hosting setup](#deploy-to-render)
 
 AiSlopcraft is a browser-based voxel sandbox with two ways to play: the original **Beta 1.7.3-inspired survival game** and a dedicated **Classic creative mode**. Explore a seeded world, mine and build, craft and smelt, grow crops, fight familiar mobs, or switch to unlimited block-building and flight in Classic mode.
 
@@ -21,14 +21,16 @@ It aims for the feel of that era: no hunger bar or sprinting, food heals directl
 
 ## Play locally
 
-Install [Node.js 22 LTS](https://nodejs.org/) and run:
+Install [Node.js 22 LTS](https://nodejs.org/) (`>=22 <23`; Node 20 is unsupported) and run:
 
 ```bash
 npm ci
 npm run dev
 ```
 
-Open the local URL printed by Vite (normally `http://localhost:5173`). **Beta Singleplayer** browses Beta saves or creates a survival/creative world with an optional seed. **Play Classic** opens the separate Classic menu, where you can create/load saved creative worlds or host/join Classic multiplayer. Worlds autosave in this browser every 15 seconds, on tab hide, and on save-and-quit; the **World Saves** menu imports and exports portable JSON saves. Online rooms are temporary and never overwrite singleplayer saves.
+Open the local URL printed by Vite (normally `http://localhost:5173`). **Beta Singleplayer** browses Beta saves or creates a survival/creative world with an optional seed. **Play Classic** opens the separate Classic menu, where you can create/load saved creative worlds or host/join Classic multiplayer. Local worlds autosave every 15 seconds and when the tab is hidden during play. You can also save from the pause menu. **World Saves** imports and exports portable JSON saves. Online rooms are temporary and never overwrite singleplayer saves.
+
+On Windows, `npm test` prints a skip for the file-symlink assertion if the OS denies symlink creation. Enable Developer Mode or run with symlink privileges to exercise that assertion locally. All other tests still run; the server's symlink protection is unchanged.
 
 To make a production build:
 
@@ -42,11 +44,15 @@ The generated site is written to `dist/`. To automatically start the built produ
 npm run smoke:production
 ```
 
-For the complete local release gate—full tests, clean production build, built-server HTTP/WebSocket smoke, and dependency audit—run `npm run verify`. CI runs the same gate on pull requests and pushes to `main`. To run the combined static-site/WebSocket service interactively instead, use `npm start`, then open `http://localhost:8787/` and check `http://localhost:8787/health`. The production server expects the build to exist; the Render Blueprint and Azure deployment instructions build it before starting. Use `BASE_URL=https://<your-service> npm run smoke:deploy` after an actual deployment; the local production smoke does not replace hosted-service verification.
+For the complete local release gate, install the Chromium test browser once with `npx playwright install chromium`, then run `npm run verify`. It runs the Node/jsdom suite, production build, built-server HTTP/WebSocket smoke, [performance smoke](docs/performance.md), Chromium tests and dependency audit. GitHub Actions is configured to run that gate on Linux and `npm test` on Windows. The browser tests use an isolated local server; on a machine with a working GPU you can set `AISLOPCRAFT_HARDWARE_GL=1` to use native rendering instead of the software test renderer.
+
+To play from the combined static-site/WebSocket build, run `npm start`, then open [http://localhost:8787/](http://localhost:8787/) and check [the health endpoint](http://localhost:8787/health). The production server requires `dist/` from `npm run build`. This local smoke does not replace verification against the hosted service.
+
+In an active singleplayer world, **Pause → Download World Backup** exports current progress even if browser storage is full. If Save & Quit cannot write the save, it leaves the world open. A lost WebGL context pauses active play while the browser restores graphics; local backup remains available from the game menu.
 
 ## Classic multiplayer
 
-Online multiplayer is available in the Classic edition; Beta remains singleplayer-only. It needs a reachable Node process to coordinate rooms and relay game state; static hosting alone cannot do that. The Azure setup below runs the built game and room service from the **same origin**. One Azure app instance can host at most **5 multiplayer rooms** (game servers), each with at most **5 players including the host** (25 players total). This is one Azure App Service instance—not five separate virtual machines—and the limits are enforced by the relay.
+Online multiplayer is available in the Classic edition; Beta remains singleplayer-only. It needs a reachable Node process to coordinate rooms and relay game state; static GitHub Pages cannot do that. Render and Azure run the built game and relay on the **same origin**. A single instance hosts at most **5 rooms**, each with at most **5 players including the host**. See the [relay authority matrix](docs/relay-authority.md) for protocol rules.
 
 ### Deploy to Azure
 
@@ -58,9 +64,11 @@ Online multiplayer is available in the Classic edition; Beta remains singleplaye
 
 Azure keeps the **service process** available only while the App Service and subscription remain active; check your student-credit balance and expiry. Rooms and world edits are still temporary in-memory sessions: they end if the host leaves or the app restarts/deploys. Keeping world saves across restarts would require a database/storage feature not included here. GitHub Pages remains the singleplayer/static option and cannot itself host rooms.
 
-### Lower-setup option: Render Blueprint
+### Deploy to Render
 
-A `render.yaml` Blueprint is included for a single combined web service. In Render, choose **New → Blueprint**, connect this repository and the branch you want to publish, then review and create the `aislopcraft-online` service. The Blueprint builds the frontend and starts the WebSocket room relay on the same origin; players use the site URL without entering a relay address. It requests Render's `free` plan where available and pins the service to one instance because room/name state is process-local—check current plan terms before creating the service. Free services may sleep when idle, so rooms and names disappear on restarts or deploys. After deployment, run `BASE_URL=https://<your-service>.onrender.com npm run smoke:deploy` to check the site, health endpoint, limits, secure WebSocket, temporary-name claim/release, and an end-to-end public world create → snapshot → list → leave flow. **No hosted service is provisioned by this repository change.**
+The public service is [aislopcraft-online.onrender.com](https://aislopcraft-online.onrender.com/). A free service can take a moment to wake up. Each origin keeps its own local saves; use **World Saves** to transfer a save between GitHub Pages and Render.
+
+A `render.yaml` Blueprint is included for a single combined web service. In Render, choose **New → Blueprint**, connect this repository and the branch you want to publish, then review and create the `aislopcraft-online` service. The Blueprint builds the frontend and runs `npm start`; the Node engine range selects [Node 22 on Render](https://render.com/docs/node-version). The relay binds to Render's `PORT` (8787 by default locally) and `/health` checks the built app is ready. Players use the same site URL without entering a relay address. The Blueprint requests the `free` plan where available; keep one instance because room/name state is process-local. Free services may sleep, and rooms and names do not survive restarts or deploys. After deployment, run `BASE_URL=https://<your-service>.onrender.com npm run smoke:deploy` (PowerShell: set `$env:BASE_URL` first). Share the service URL only after it passes. **The Blueprint does not provision a live service by itself.**
 
 Players on different networks connect to the same service URL. The host and guests need the same world seed; invite links include the host's seed and service URL.
 
@@ -106,6 +114,10 @@ Change difficulty, video, controls, sound, and gameplay options from the title o
 In **Texture Packs...**, choose **Open Pack File...** to import a Java Edition 1.7.x resource-pack ZIP (including 1.7.10) or client JAR containing `assets/minecraft/textures/blocks/`. The manager lists installed packs so you can switch between one pack and the built-in textures, or delete a pack. Supported block sprites are processed in the browser and are not uploaded. Pack atlases are saved in browser storage where available. Use only assets you have the right to use.
 
 This is a partial resource-pack importer: missing sprites fall back to the bundled art. It does not import item, entity, GUI, sky, colormap, or sound assets. Animated textures, including water and lava, use their first frame, and biome coloring is approximated. Chest faces and redstone wire retain their bundled art because their Minecraft layouts require special handling. Other project block-atlas tiles are mapped or explicitly aliased. Importing a pack changes textures only; it does not change the game's mechanics into Java Edition 1.7.3. Java Forge mods and OptiFine shaderpack ZIPs are not executable in this browser game. Its built-in WebGL shader styles implement selected Minecraft-like effects, but arbitrary multi-pass Minecraft shaderpacks are not compatible with the Three.js rendering pipeline.
+
+## Licensing
+
+First-party material is [All Rights Reserved](LICENSE). [Third-party notices](THIRD_PARTY_NOTICES.md) document the PSX attribution and upstream terms.
 
 ## Development
 

@@ -6,7 +6,7 @@ services:
     numInstances: 1 # Rooms and claimed names are process-local; keep one instance.
     autoDeploy: true
     buildCommand: npm ci --include=dev && npm run build
-    startCommand: npm run multiplayer
+    startCommand: npm start
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV

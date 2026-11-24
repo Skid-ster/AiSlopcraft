@@ -8,7 +8,7 @@
 - AiSlopcraft's PSX preset independently adapts the shaderpack's PS1-style techniques to this game's Three.js/WebGL renderer; it is not a drop-in OptiFine shaderpack loader. The project-specific rendering integration is in `src/rendering.js`.
 - No upstream texture assets or complete shaderpack files are bundled.
 
-The upstream repository's `LICENSE` text is reproduced below as supplied (including its `[year]` and `[fullname]` placeholders):
+The [upstream `LICENSE`](https://github.com/ckosmic/minecraft-psx/blob/master/LICENSE) still contains literal `[year]` and `[fullname]` placeholders (checked 2026-11-24). The notice below preserves upstream's wording; these placeholders are not verified attribution and have not been replaced with guesses. The first-party rights statement in [`LICENSE`](LICENSE) does not change upstream terms.
 
 ```text
 MIT License
