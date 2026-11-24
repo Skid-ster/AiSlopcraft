@@ -128,6 +128,10 @@ function testAtlasDataUrl() {
 
 try {
   const anonymous = await connectRaw();
+  anonymous.send('{');
+  assert.equal((await request(anonymous, 'ping')).type, 'pong', 'malformed JSON does not break the next request');
+  const oversizedLobby = await request(anonymous, 'rooms:list', { padding: ' '.repeat(65_536) });
+  assert.match(oversizedLobby.message, /too large/i, 'the byte cap applies to public lobby requests too');
   const anonymousBrowse = await request(anonymous, 'rooms:list');
   assert.equal(anonymousBrowse.type, 'rooms:list', 'anyone can browse public rooms without an account');
   assert.deepEqual(anonymousBrowse.rooms, []);
@@ -284,6 +288,9 @@ try {
   assert.equal((await lateState).state.timeOfDay, 0.4, 'late joiners receive shared state');
   assert.equal((await lateMobs).mobs[0].uid, 'mob-1', 'late joiners receive current mobs');
   assert.equal((await lateVehicles).vehicles[0].vehicle.uid, 'boat-1', 'late joiners receive current vehicles');
+  const boatRemoved = waitFor(guest, message => message.type === 'vehicle:remove' && message.uid === 'boat-1');
+  host.send(JSON.stringify({ type: 'vehicle:remove', uid: 'boat-1' }));
+  await boatRemoved;
   assert.equal((await lateProjectiles).projectiles[0].uid, 'arrow-1', 'late joiners receive active projectile state');
   newcomer.send(JSON.stringify({ type: 'projectile:update', projectile: { uid: 'arrow-1', owner: 'player', pos: [99, 70, 99], vel: [0, 0, 0], age: 0 } }));
   newcomer.send(JSON.stringify({ type: 'projectile:remove', uid: 'arrow-1' }));

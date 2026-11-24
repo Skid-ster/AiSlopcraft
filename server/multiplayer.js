@@ -23,6 +23,7 @@ import { brotliCompress, gzip, constants as zlibConstants } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { isIP } from 'node:net';
 import { WebSocketServer, WebSocket } from 'ws';
+import { MAX_MESSAGE, canControl, canReachDrop, canInsertId, validEntityId, parseRelayMessage, relaySizeAllowed } from './relay-policy.js';
 
 const scryptAsync = promisify(scrypt);
 const brotliAsync = promisify(brotliCompress);
@@ -59,10 +60,6 @@ const MAX_COMPRESS_CACHE_BYTES = 32 * 1024 * 1024;
 const MAX_ROOMS = 5;
 const MAX_PLAYERS = 5;
 const MAX_EDITS = 50_000;
-const MAX_MESSAGE = 1024 * 1024;
-const MAX_SMALL_MESSAGE = 64 * 1024;
-// Only these message types legitimately carry large payloads.
-const LARGE_MESSAGE_TYPES = new Set(['room:create', 'world:snapshot', 'game:state', 'item:snapshot']);
 const MAX_SOCKET_BUFFER_BYTES = 4 * 1024 * 1024;
 const MESSAGE_RATE_LIMIT = 600; // messages per second per socket before the socket is dropped
 // Memory guard only. Set above MESSAGE_RATE_LIMIT because ws delivers every frame of a TCP chunk
@@ -102,7 +99,6 @@ const isVec3 = (value, limit = COORD_LIMIT) => Array.isArray(value) && value.len
 const validRoom = value => /^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/.test(String(value ?? ''));
 const safeDirection = value => Array.isArray(value) && value.length === 2
   && DIRECTIONS.some(([x, z]) => x === value[0] && z === value[1]);
-const distance3 = (pos, state) => Math.hypot(pos[0] - state.x, pos[1] - state.y, pos[2] - state.z);
 
 const validBlockEdit = (x, y, z, id, meta) => [x, y, z, id, meta].every(Number.isInteger)
   && y >= 0 && y < WORLD_HEIGHT && id >= 0 && id <= 255 && meta >= 0 && meta <= 255
@@ -152,8 +148,8 @@ function sanitizeVisualSettings(value) {
   return visuals;
 }
 
-function sanitizeItem(source, uid = source?.uid) {
-  if (!source || typeof source.uid !== 'string' || source.uid.length > 80) return null;
+function sanitizeItem(source, uid = source?.uid, sourceIdLimit = 120) {
+  if (!validEntityId(source?.uid, sourceIdLimit)) return null;
   if (!isInt(source.id, 0, 4095) || !isInt(source.count, 1, 999) || !isVec3(source.pos)) return null;
   return {
     uid, id: source.id, count: source.count,
@@ -163,7 +159,7 @@ function sanitizeItem(source, uid = source?.uid) {
 }
 
 function sanitizeProjectile(shot, isHost) {
-  if (!shot || typeof shot.uid !== 'string' || shot.uid.length > 100 || !['player', 'mob'].includes(shot.owner)) return null;
+  if (!validEntityId(shot?.uid, 100) || !['player', 'mob'].includes(shot.owner)) return null;
   if (!isVec3(shot.pos) || !isVec3(shot.vel, 80)) return null;
   if (shot.owner === 'mob' && !isHost) return null; // mobs are host-simulated
   return {
@@ -175,7 +171,7 @@ function sanitizeProjectile(shot, isHost) {
 const publicProjectile = ({ sourceId, lastUpdate, ...shot }) => shot;
 
 function sanitizeVehicle(vehicle) {
-  if (!vehicle || typeof vehicle.uid !== 'string' || vehicle.uid.length > 100 || !VEHICLE_TYPES.has(vehicle.type)
+  if (!validEntityId(vehicle?.uid, 100) || !VEHICLE_TYPES.has(vehicle.type)
     || !isVec3(vehicle.pos) || !Number.isFinite(vehicle.rotation)) return null;
   const pos = [...vehicle.pos];
   const hasSlots = vehicle.type === 'storage' && Array.isArray(vehicle.slots) && vehicle.slots.length === 27
@@ -198,7 +194,7 @@ function sanitizeVehicle(vehicle) {
 
 function sanitizeMobs(mobs) {
   return mobs
-    .filter(mob => mob && typeof mob.uid === 'string' && mob.uid.length <= 80 && typeof mob.type === 'string' && mob.type.length <= 32
+    .filter(mob => validEntityId(mob?.uid, 80) && typeof mob.type === 'string' && mob.type.length <= 32
       && isVec3Loose(mob.pos) && [mob.yaw, mob.hp].every(Number.isFinite))
     .map(mob => ({
       uid: mob.uid, type: mob.type, pos: mob.pos.map(value => clamp(value, -COORD_LIMIT, COORD_LIMIT)),
@@ -608,9 +604,9 @@ export function createMultiplayerServer({
     room.clients.delete(socket);
     resetRoomState(socket);
     if (!wasHost && clientId) {
-      // Hand any vehicle the leaver was riding back to the host and drop their projectiles.
+      // Hand the leaver's vehicles to the host and drop their projectiles.
       for (const record of room.vehicles.values()) {
-        if (record.owner !== clientId || !record.riding) continue;
+        if (record.owner !== clientId) continue;
         record.riding = false;
         record.owner = room.host.clientId;
         broadcast(room.clients, { type: 'vehicle:update', ...record });
@@ -802,18 +798,17 @@ export function createMultiplayerServer({
   }
 
   function handleWorldEdit(socket, message, requestId, room) {
-    const edit = message.edit;
+    const { x, y, z, id, meta = 0 } = message.edit ?? {};
     if (!allowRate(socket, 'world:edit', 80, 1000)) return;
-    if (!edit || !validRoomBlockEdit(room, edit.x, edit.y, edit.z, edit.id, edit.meta ?? 0)) return;
-    // Edits are relayed as received, so bound their size to stop padded payloads from being amplified to every peer.
-    if (JSON.stringify(edit).length > 256) return;
-    const key = `${edit.x},${edit.y},${edit.z}`;
+    if (!validRoomBlockEdit(room, x, y, z, id, meta)) return;
+    const key = `${x},${y},${z}`;
     if (!room.edits.has(key) && room.edits.size >= MAX_EDITS) return fail(socket, requestId, 'The shared world edit limit has been reached.');
-    room.edits.set(key, [edit.id, edit.meta || 0]);
-    broadcast(room.clients, { type: 'world:edit', edit }, socket);
+    room.edits.set(key, [id, meta]);
+    broadcast(room.clients, { type: 'world:edit', edit: { x, y, z, id, meta } }, socket);
   }
 
   function handleGameState(socket, message, requestId, room) {
+    if (room.host !== socket) return fail(socket, requestId, 'Only the host can publish shared world state.');
     if (!allowRate(socket, 'game:state', 8, 1000)) return;
     if (!message.state || typeof message.state !== 'object' || Array.isArray(message.state) || JSON.stringify(message.state).length > 96_000) return fail(socket, requestId, 'Invalid shared world state.');
     room.gameState = message.state;
@@ -829,7 +824,7 @@ export function createMultiplayerServer({
     const times = new Map();
     for (const source of message.items) {
       const item = sanitizeItem(source);
-      if (!item) continue;
+      if (!item || items.has(item.uid)) return fail(socket, requestId, 'Invalid or duplicate item in snapshot.');
       items.set(item.uid, item);
       times.set(item.uid, room.itemTimes.get(item.uid) ?? now);
     }
@@ -840,11 +835,11 @@ export function createMultiplayerServer({
 
   function handleItemSpawn(socket, message, requestId, room) {
     if (!allowRate(socket, 'item:spawn', 24, 1000)) return;
-    const item = sanitizeItem(message.item, `${socket.clientId}:${message.item?.uid}`);
+    const item = sanitizeItem(message.item, `${socket.clientId}:${message.item?.uid}`, 80);
     if (!item) return;
     // Guests may only drop items near themselves (the host also spawns mob and explosion drops).
-    if (socket !== room.host && socket.lastState && distance3(item.pos, socket.lastState) > ITEM_SPAWN_RANGE) return;
-    if (room.items.size >= 4096) return fail(socket, requestId, 'The shared item limit has been reached.');
+    if (socket !== room.host && !canReachDrop(socket.lastState, item, ITEM_SPAWN_RANGE)) return;
+    if (!canInsertId(room.items, item.uid, 4096)) return fail(socket, requestId, 'Duplicate drop or shared item limit reached.');
     room.items.set(item.uid, item);
     room.itemTimes.set(item.uid, Date.now());
     broadcast(room.clients, { type: 'item:spawn', item });
@@ -852,9 +847,10 @@ export function createMultiplayerServer({
 
   function handleItemPickup(socket, message, requestId, room) {
     if (!allowRate(socket, 'item:pickup', 12, 1000)) return;
-    const uid = String(message.uid ?? '').slice(0, 120);
+    const { uid } = message;
+    if (!validEntityId(uid, 120)) return;
     const item = room.items.get(uid);
-    if (!item || !socket.lastState || distance3(item.pos, socket.lastState) > PICKUP_RANGE) return;
+    if (!canReachDrop(socket.lastState, item, PICKUP_RANGE)) return;
     room.items.delete(uid);
     room.itemTimes.delete(uid);
     send(socket, { type: 'item:pickup', item });
@@ -869,7 +865,7 @@ export function createMultiplayerServer({
     const existing = room.projectiles.get(sanitized.uid);
     // A room member may update only their own projectile. Without this check, a peer
     // who learns a UID from a snapshot could replace or erase another player's projectile.
-    if (existing && existing.sourceId !== socket.clientId && socket !== room.host) return;
+    if (existing && (!canControl(socket, room.host, existing.sourceId, true) || existing.owner !== sanitized.owner)) return;
     if (now - (socket.projectileTimes.get(sanitized.uid) || 0) < 80) return;
     if (!socket.projectileTimes.has(sanitized.uid) && socket.projectileTimes.size >= 512) {
       pruneTimes(socket.projectileTimes, now, 10_000);
@@ -883,9 +879,10 @@ export function createMultiplayerServer({
   }
 
   function handleProjectileRemove(socket, message, requestId, room) {
-    const uid = typeof message.uid === 'string' ? message.uid.slice(0, 100) : '';
+    const { uid } = message;
+    if (!validEntityId(uid, 100)) return;
     const projectile = room.projectiles.get(uid);
-    if (!projectile || (projectile.sourceId !== socket.clientId && socket !== room.host)) return;
+    if (!canControl(socket, room.host, projectile?.sourceId, true)) return;
     room.projectiles.delete(uid);
     for (const peer of room.clients) peer.projectileTimes.delete(uid);
     broadcast(room.clients, { type: 'projectile:remove', uid }, socket);
@@ -896,12 +893,14 @@ export function createMultiplayerServer({
     const now = Date.now();
     const safe = sanitizeVehicle(message.vehicle);
     if (!safe) return;
+    const existing = room.vehicles.get(safe.uid);
+    if (existing && (!canControl(socket, room.host, existing.owner) || existing.vehicle.type !== safe.type)) return;
     if (now - (socket.vehicleTimes.get(safe.uid) || 0) < 75) return;
     if (!socket.vehicleTimes.has(safe.uid) && socket.vehicleTimes.size >= 2048) {
       pruneTimes(socket.vehicleTimes, now, 10_000);
       if (socket.vehicleTimes.size >= 2048) return;
     }
-    if (room.vehicles.size >= 1024 && !room.vehicles.has(safe.uid)) return;
+    if (room.vehicles.size >= 1024 && !existing) return;
     socket.vehicleTimes.set(safe.uid, now);
     const record = { vehicle: safe, riding: !!message.riding, owner: socket.clientId };
     room.vehicles.set(safe.uid, record);
@@ -909,8 +908,9 @@ export function createMultiplayerServer({
   }
 
   function handleVehicleRemove(socket, message, requestId, room) {
-    const uid = typeof message.uid === 'string' ? message.uid.slice(0, 100) : '';
-    if (!uid || !room.vehicles.delete(uid)) return;
+    const { uid } = message;
+    if (!validEntityId(uid, 100) || !canControl(socket, room.host, room.vehicles.get(uid)?.owner, true)) return;
+    room.vehicles.delete(uid);
     for (const peer of room.clients) peer.vehicleTimes.delete(uid);
     broadcast(room.clients, { type: 'vehicle:remove', uid }, socket);
   }
@@ -933,7 +933,7 @@ export function createMultiplayerServer({
 
   function handleMobAttack(socket, message, requestId, room) {
     const now = Date.now();
-    if (socket === room.host || now - socket.lastAttackAt < 350 || !socket.lastState || typeof message.uid !== 'string' || message.uid.length > 80) return;
+    if (socket === room.host || now - socket.lastAttackAt < 350 || !socket.lastState || !validEntityId(message.uid, 80)) return;
     socket.lastAttackAt = now;
     send(room.host, {
       type: 'mob:attack', attacker: { id: socket.clientId, name: socket.playerName, ...socket.lastState },
@@ -945,7 +945,9 @@ export function createMultiplayerServer({
     if (room.host !== socket) return fail(socket, requestId, 'Only the host can publish shared mob state.');
     if (!allowRate(socket, 'mob:snapshot', 40, 1000)) return;
     if (!Array.isArray(message.mobs) || message.mobs.length > 18) return fail(socket, requestId, 'Invalid shared mob snapshot.');
-    room.mobs = sanitizeMobs(message.mobs);
+    const mobs = sanitizeMobs(message.mobs);
+    if (mobs.length !== message.mobs.length || new Set(mobs.map(mob => mob.uid)).size !== mobs.length) return fail(socket, requestId, 'Invalid or duplicate mob in snapshot.');
+    room.mobs = mobs;
     broadcast(room.clients, { type: 'mob:snapshot', mobs: room.mobs }, socket);
   }
 
@@ -978,19 +980,18 @@ export function createMultiplayerServer({
 
   async function handleMessage(socket, text, size) {
     if (socket.readyState !== WebSocket.OPEN) return;
-    let message;
-    try { message = JSON.parse(text); } catch { return; }
-    if (!message || typeof message.type !== 'string') return;
+    const message = parseRelayMessage(text);
+    if (!message) return;
     const { type } = message;
     const requestId = typeof message.requestId === 'string' ? message.requestId.slice(0, 80) : undefined;
     socket.lastActivity = Date.now();
     try {
       const lobby = lobbyHandlers.get(type);
-      if (lobby) return lobby(socket, message, requestId);
       const lifecycle = lifecycleHandlers.get(type);
       const inRoom = roomHandlers.get(type);
-      if (!lifecycle && !inRoom) return; // unknown message type
-      if (size > (LARGE_MESSAGE_TYPES.has(type) ? MAX_MESSAGE : MAX_SMALL_MESSAGE)) return fail(socket, requestId, 'That message is too large.');
+      if (!lobby && !lifecycle && !inRoom) return; // unknown message type
+      if (!relaySizeAllowed(type, size)) return fail(socket, requestId, 'That message is too large.');
+      if (lobby) return lobby(socket, message, requestId);
       if (!socket.playerName) return fail(socket, requestId, 'Choose an available player name before joining a room.');
       if (lifecycle) return await lifecycle(socket, message, requestId);
       if (!socket.room) return fail(socket, requestId, 'Join a room first.');
