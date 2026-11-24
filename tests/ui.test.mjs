@@ -582,7 +582,7 @@ try {
   ];
   let classicLaunch = null;
   let betaHomeRequested = false;
-  const classicGame = { ...game, edition: 'classic', listSavedWorlds: () => classicWorlds,
+  const classicGame = { ...game, edition: 'classic', player: { ...player, touchSupported: false }, listSavedWorlds: () => classicWorlds,
     openLocalWorld: (...args) => { classicLaunch = args; }, openEditionHome: edition => { betaHomeRequested = edition === 'beta'; } };
   const classicUi = new UI(classicGame);
   check('Classic title offers its own Singleplayer and Multiplayer actions plus saves', !!classicDom.window.document.getElementById('btn-singleplayer')
@@ -604,6 +604,10 @@ try {
   check('Classic Singleplayer creates and saves with the Classic edition', classicLaunch?.[2] === 'classic' && classicLaunch?.[4] === 'classic');
   classicDom.window.document.getElementById('btn-beta').click();
   check('Classic edition can return to Beta Singleplayer', betaHomeRequested);
+  classicUi.setMode('game');
+  classicGame.player.leftDown = classicGame.player.rightDown = true;
+  classicUi.setMode('pause');
+  check('pausing clears held input even without touch controls', !classicUi.touchEnabled && !classicGame.player.leftDown && !classicGame.player.rightDown);
 } catch (e) {
   threw = e;
   check('no uncaught exception in full UI walkthrough', false, (e && (e.stack || e.message)) || String(e));

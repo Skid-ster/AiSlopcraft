@@ -1084,7 +1084,8 @@ export class UI {
   }
 
   releaseTouchInputs() {
-    this.releaseTouchPointers?.();
+    if (this.releaseTouchPointers) this.releaseTouchPointers();
+    else this.game.player?.clearTouchInput?.();
   }
 
   openNetworkChat() {
