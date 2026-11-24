@@ -25,7 +25,8 @@ import { ParticleManager } from './particles.js';
 import { FirstPersonArm } from './arm.js';
 import { Lighting, PSXPostProcess, SHADER_STYLES, shaderStyleId } from './rendering.js';
 import { loadSettings, persistSettings, sensitivityToRadians, keyLabel } from './settings.js';
-import { decodeWorldSave, encodeWorldSave, MAX_WORLD_SAVE_BYTES, normalizeWorldSave } from './save.js';
+import { decodeWorldSave, encodeWorldSave, MAX_WORLD_SAVE_BYTES } from './save.js';
+import { createWorldSaveStore } from './save-manager.js';
 import { useOnBlock, useOnMob, growCrop, cropDrops } from './interactions.js';
 import { FluidSimulator } from './world/fluids.js';
 import { RedstoneSimulator } from './world/redstone.js';
@@ -171,12 +172,10 @@ const SEED = WORLD_PARAMS.get('seed') || 'Beta 1.7.3';
 const WORLD_ID = WORLD_PARAMS.get('id') || SEED;
 const WORLD_NAME = WORLD_PARAMS.get('world') || SEED;
 const REQUESTED_EDITION = WORLD_PARAMS.get('edition') === 'classic' ? 'classic' : null;
-const SAVE_KEY = `aislopcraft:world:${WORLD_ID}`;
+const worldSaves = createWorldSaveStore(localStorage);
 function readSave() {
-  try {
-    const save = normalizeWorldSave(JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'));
-    return save?.seed === SEED && save.worldId === WORLD_ID ? save : null;
-  } catch { return null; }
+  const save = worldSaves.read(WORLD_ID);
+  return save?.seed === SEED ? save : null;
 }
 const savedGame = readSave();
 const EDITION = REQUESTED_EDITION || savedGame?.edition || 'beta';
@@ -216,20 +215,7 @@ const game = {
   atlasCanvas,
   worldName: savedGame?.worldName || WORLD_NAME,
   getResourcePackState() { return resourcePackState(); },
-  listSavedWorlds() {
-    const worlds = [];
-    try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (!key?.startsWith('aislopcraft:world:')) continue;
-        try {
-          const save = normalizeWorldSave(JSON.parse(localStorage.getItem(key) || 'null'));
-          if (save && key === `aislopcraft:world:${save.worldId}`) worlds.push({ id: save.worldId, seed: save.seed, name: save.worldName || save.seed, gameMode: save.gameMode, edition: save.edition });
-        } catch { /* ignore just the one corrupt save and keep listing the rest */ }
-      }
-    } catch { /* storage may be disabled by the browser */ }
-    return worlds;
-  },
+  listSavedWorlds() { return worldSaves.list(); },
 
   selectClassicBlock(id) {
     if (this.edition !== 'classic' || !isClassicBlock(id)) return false;
@@ -274,14 +260,10 @@ const game = {
     location.assign(url.href);
   },
   renameLocalWorld(worldId, name) {
-    const key = `aislopcraft:world:${worldId}`;
-    const save = normalizeWorldSave(JSON.parse(localStorage.getItem(key) || 'null'));
-    if (!save) throw new Error('Could not find that saved world.');
-    save.worldName = String(name || '').trim().slice(0, 48) || save.worldName;
-    localStorage.setItem(key, JSON.stringify(save));
+    worldSaves.rename(worldId, name);
   },
   deleteLocalWorld(worldId) {
-    localStorage.removeItem(`aislopcraft:world:${worldId}`);
+    worldSaves.remove(worldId);
     return true;
   },
   recreateLocalWorld(worldId, seed, name, gameMode = 'survival', edition = 'beta') {
@@ -680,18 +662,16 @@ const game = {
     // Multiplayer rooms are temporary; never overwrite a local world with room state.
     if (this.networkRoom) return false;
     try {
-      const save = normalizeWorldSave(this.captureWorldSave());
-      if (!save) throw new Error('The current world state is incomplete.');
-      localStorage.setItem(SAVE_KEY, JSON.stringify(save));
+      worldSaves.write(this.captureWorldSave());
       return true;
     } catch (error) { console.warn('Could not save world', error); ui?.notify('Save failed — browser storage may be full'); return false; }
   },
   exportWorldSave(requestedWorldId = WORLD_ID) {
     if (this.networkRoom && requestedWorldId === WORLD_ID) throw new Error('Leave the multiplayer room before exporting a local world save.');
     // Download current progress directly, even if the browser will not store it.
-    const save = normalizeWorldSave(this.started && requestedWorldId === WORLD_ID
+    const save = this.started && requestedWorldId === WORLD_ID
       ? this.captureWorldSave()
-      : JSON.parse(localStorage.getItem(`aislopcraft:world:${requestedWorldId}`) || 'null'));
+      : worldSaves.read(requestedWorldId);
     if (!save || save.worldId !== requestedWorldId) throw new Error('There is no saved world for that selection yet.');
     const blob = new Blob([encodeWorldSave(save)], { type: 'application/json' });
     const href = URL.createObjectURL(blob);
@@ -705,11 +685,11 @@ const game = {
   async importWorldSaveFile(file) {
     if (!file || file.size > MAX_WORLD_SAVE_BYTES) throw new Error('Save file is too large (maximum 16 MB).');
     let save = decodeWorldSave(await file.text());
-    if (localStorage.getItem(`aislopcraft:world:${save.worldId}`)) {
+    if (worldSaves.has(save.worldId)) {
       const newId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       save = { ...save, worldId: `import-${newId}`.slice(0, 128) };
     }
-    try { localStorage.setItem(`aislopcraft:world:${save.worldId}`, JSON.stringify(save)); }
+    try { worldSaves.write(save); }
     catch { throw new Error('Browser storage is full. Remove another saved world or clear browser site data, then try again.'); }
     persistSettings(localStorage, save.settings);
     const url = new URL(location.href);
@@ -724,7 +704,7 @@ const game = {
     return true;
   },
   resetWorld() {
-    try { localStorage.removeItem(SAVE_KEY); } catch {}
+    try { worldSaves.remove(WORLD_ID); } catch {}
     location.reload();
   },
   start() {
