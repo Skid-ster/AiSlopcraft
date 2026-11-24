@@ -1,6 +1,6 @@
 # AiSlopcraft audit and roadmap
 
-**Release-pass snapshot:** 2026-11-24 · proposed v1.0.2 · `production-readiness`
+**Release-pass snapshot:** 2026-11-24 · v1.0.2 · [PR #30](https://github.com/Skid-ster/AiSlopcraft/pull/30)
 
 AiSlopcraft remains a procedural browser game: Beta survival/creative is local, Classic creative can also use the no-account room relay. There are at most five rooms and five players per room per process. GitHub Pages serves static singleplayer; Render (primary) and Azure can serve the built app plus same-origin `/ws` from one instance. `dist/` is generated, not committed. Node 22 is the only supported major.
 
@@ -9,7 +9,7 @@ AiSlopcraft remains a procedural browser game: Beta survival/creative is local, 
 - [x] Keep the file-symlink assertion when supported and skip only that assertion on Windows `EPERM`. Synchronize the name-disconnect regression with the server's roster event instead of client socket close. HTTP headers and traversal/symlink defenses remain in place.
 - [x] Record the [complete relay authority matrix](docs/relay-authority.md). Harden vehicle/projectile ownership, shared game state, unique snapshot and live drop IDs, and pickup grants. Cover permissions and message size/shape boundaries with isolated policy tests and keep the local WS suite.
 - [x] Record the first-party All Rights Reserved decision and document the verified, unresolved upstream PSX license placeholders. No permission change for third-party terms.
-- [ ] Apply GitHub description, homepage and topics and open the PR from an account with write access. See [the prepared PR notes](docs/release-pr.md).
+- [x] Apply GitHub description, homepage and topics and open [PR #30](https://github.com/Skid-ster/AiSlopcraft/pull/30) with the verified Render URL.
 
 ## Phase 1 — browser reliability
 

@@ -1,6 +1,6 @@
 # AiSlopcraft v1.0.2 — Render readiness and browser reliability
 
-**Base:** `main` · **Head:** `production-readiness`
+**Base:** `main` · **Head:** `production-readiness` · [PR #30](https://github.com/Skid-ster/AiSlopcraft/pull/30)
 
 ## Summary
 
@@ -16,6 +16,6 @@ Node 22 on Windows passed the clean install, unit/jsdom suite, production build 
 
 ## External steps
 
-Push the branch and open the PR from an authenticated repository account. Update the repository description to **Browser voxel sandbox with Beta survival, Classic creative, and account-free multiplayer**, homepage to **https://aislopcraft-online.onrender.com/**, and topics to `voxel`, `browser-game`, `sandbox`, `threejs`, `webgl`, and `multiplayer`.
+The repository About section now points to **https://aislopcraft-online.onrender.com/** and lists the voxel, browser-game, sandbox, Three.js, WebGL, and multiplayer topics.
 
 After CI passes and the PR is merged, deploy the merged commit to the existing one-instance Render service and rerun `BASE_URL=https://aislopcraft-online.onrender.com npm run smoke:deploy`. Publish a GitHub release at `v1.0.2` on the merged commit without moving `v1.0.1`. Do not infer a trusted proxy hop count from a successful smoke. Full authority, durable rooms, and live-host proxy/restart checks are not provided by this PR.
