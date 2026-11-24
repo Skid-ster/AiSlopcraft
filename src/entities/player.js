@@ -1,7 +1,7 @@
 import { DEFAULT_KEYS } from '../settings.js';
 import { requestGamePointerLock } from '../input.js';
 import { itemStackLimit } from '../world/blocks.js';
-// Player physics + controls. Beta 1.7.3 feel: no sprint, 4.317 b/s walk,
+// Player physics + controls: sprinting, 4.317 b/s walk,
 // 1.25-block jump, fall damage, sneak edge-guard, ladders, cobwebs, ice, swimming, armor.
 import * as THREE from 'three';
 import {
@@ -69,7 +69,7 @@ export function blockSelectionBounds(world, x, y, z, id) {
     return [1 - t, 0, 0, 1, 1, 1];
   }
   if (id === CAKE_BLOCK) {
-    const eaten = Math.min(5, (world.getMeta ? world.getMeta(x, y, z) : 0) & 7);
+    const eaten = Math.min(6, (world.getMeta ? world.getMeta(x, y, z) : 0) & 7);
     return [0.0625 + eaten * 0.125, 0, 0.0625, 0.9375, 0.5, 0.9375];
   }
   if (id === LADDER) {
@@ -95,16 +95,21 @@ export class Player {
     this.onLadder = false;
     this.inCobweb = false;
     this.sneaking = false;
+    this.sprinting = false;
     this.health = 20;
     this.maxHealth = 20;
+    this.hunger = 20;
+    this.saturation = 5;
+    this.exhaustion = 0;
+    this.foodTimer = 0;
     this.dead = false;
     this.fallStart = null;
     this.hurtTime = 0;
     this.breath = 0;
     this.air = 300;
     this.gameMode = 'survival';
-    this.classicFlying = false;
-    this._lastClassicJumpAt = -Infinity;
+    this.flying = false;
+    this.lastFlightJumpAt = -Infinity;
     this.viewBobbing = true;
     this._bobPhase = 0;
     this._bobStrength = 0;
@@ -162,14 +167,12 @@ export class Player {
     });
     document.addEventListener('contextmenu', e => e.preventDefault());
     document.addEventListener('keydown', (e) => {
+      if (e.target?.matches?.('input, select, textarea, [contenteditable]')) return;
       this.keys[e.code] = true;
-      if (this.gameMode === 'classic' && e.code === this.bindings.jump && !e.repeat) {
+      if (this.canFly && !window.uiPause && e.code === this.bindings.jump && !e.repeat) {
         const now = globalThis.performance?.now?.() ?? Date.now();
-        if (now - this._lastClassicJumpAt < 320) {
-          this.classicFlying = !this.classicFlying;
-          this.vel.set(0, 0, 0);
-        }
-        this._lastClassicJumpAt = now;
+        if (now - this.lastFlightJumpAt < 320) this.toggleFlight();
+        else this.lastFlightJumpAt = now;
       }
       for (let i = 1; i <= 9; i++) if (e.code === this.bindings[`hotbar${i}`]) this.hotbarIndex = i - 1;
       if (e.code === this.bindings.attack) this.leftDown = true;
@@ -184,6 +187,16 @@ export class Player {
 
   get heldStack() { return this.inventory[this.hotbarIndex]; }
   get controlsActive() { return this.pointerLocked || this.touchActive; }
+  get canFly() { return this.gameMode === 'creative' || this.gameMode === 'classic'; }
+
+  toggleFlight() {
+    if (!this.canFly || this.dead) return false;
+    this.flying = !this.flying;
+    this.lastFlightJumpAt = -Infinity;
+    this.fallStart = null;
+    this.vel.set(0, 0, 0);
+    return this.flying;
+  }
 
   isKeyDown(code) { return !!this.keys[code] || this.touchKeys.has(code); }
 
@@ -229,9 +242,14 @@ export class Player {
     this.yaw = 0;
     this.pitch = 0;
     this.health = this.maxHealth;
+    this.hunger = 20;
+    this.saturation = 5;
+    this.exhaustion = 0;
+    this.foodTimer = 0;
+    this.sprinting = false;
     this.dead = false;
-    this.classicFlying = false;
-    this._lastClassicJumpAt = -Infinity;
+    this.flying = false;
+    this.lastFlightJumpAt = -Infinity;
     this.fallStart = null;
     this.air = 300;
     this.breath = 0;
@@ -304,9 +322,11 @@ export class Player {
 
     this.onLadder = feet === LADDER || mid === LADDER;
     this.inCobweb = feet === COBWEB || mid === COBWEB;
+    this.sprinting = this.gameMode === 'survival' && forward > 0 && !this.sneaking && !this.inWater && this.hunger > 6 && this.isKeyDown(this.bindings.sprint);
 
     // acceleration
     let speed = 4.317;
+    if (this.sprinting) speed *= 1.3;
     if (this.sneaking) speed = 1.35;
     if (groundBlock === SLOW_SAND && this.onGround) speed *= 0.55;
     if (this.inWater) speed *= 0.44;
@@ -319,33 +339,13 @@ export class Player {
     const len = Math.hypot(ax, az);
     if (len > 0) { ax /= len; az /= len; }
 
-    // Classic's double-tap flight keeps ordinary walking/collision until enabled.
-    // While flying it still collides with blocks, unlike the game's unrestricted
-    // creative noclip mode; jump rises and sneak descends.
-    if (this.gameMode === 'classic' && this.classicFlying) {
+    if (this.canFly && this.flying) {
       const vertical = Number(!!this.isKeyDown(this.bindings.jump)) - Number(!!this.isKeyDown(this.bindings.sneak));
       this.vel.set(ax * 8.5, vertical * 8.5, az * 8.5);
       this.moveAxis(1, this.vel.y * dt, world);
+      if (vertical > 0 && Number.isFinite(world.height)) this.pos.y = Math.min(this.pos.y, world.height + 32);
       this.moveAxis(0, this.vel.x * dt, world);
       this.moveAxis(2, this.vel.z * dt, world);
-      this.onGround = false;
-      this.fallStart = null;
-      this.camera.position.set(this.pos.x, this.pos.y + EYE, this.pos.z);
-      const direction = new THREE.Vector3(
-        -Math.sin(this.yaw) * Math.cos(this.pitch),
-        Math.sin(this.pitch),
-        -Math.cos(this.yaw) * Math.cos(this.pitch)
-      );
-      this.camera.lookAt(this.camera.position.clone().add(direction));
-      this._lastX = this.pos.x; this._lastZ = this.pos.z;
-      return;
-    }
-
-    // Beta creative players fly freely and skip block collision and survival physics.
-    if (this.gameMode === 'creative') {
-      const vertical = Number(!!this.isKeyDown(this.bindings.jump)) - Number(!!this.isKeyDown(this.bindings.sneak));
-      this.vel.set(ax * 8.5, vertical * 8.5, az * 8.5);
-      this.pos.addScaledVector(this.vel, dt);
       this.onGround = false;
       this.fallStart = null;
       this.camera.position.set(this.pos.x, this.pos.y + EYE, this.pos.z);
@@ -393,6 +393,7 @@ export class Player {
       this.vel.y = 8.45;
       this.onGround = false;
       this.stats.jumps++;
+      this.addExhaustion(this.sprinting ? 0.8 : 0.2);
       if (audio) audio.jump();
     }
 
@@ -458,6 +459,7 @@ export class Player {
     // walk sound & view bobbing
     const moved = Math.hypot(this.pos.x - (this._lastX ?? this.pos.x), this.pos.z - (this._lastZ ?? this.pos.z));
     this.stats.distance += moved;
+    if (this.gameMode === 'survival') this.addExhaustion(moved * (this.sprinting ? 0.1 : this.inWater ? 0.015 : 0.01));
     if (this.onGround && moved > 0.001) {
       this._walkAcc = (this._walkAcc || 0) + moved;
       if (this._walkAcc > 2.05) {
@@ -637,6 +639,31 @@ export class Player {
     }
   }
 
+  addExhaustion(amount) {
+    if (this.gameMode === 'survival' && !this.dead) this.exhaustion = Math.min(40, this.exhaustion + Math.max(0, amount));
+  }
+
+  updateHunger(dt, difficulty, audio) {
+    if (this.gameMode !== 'survival' || this.dead) return;
+    while (this.exhaustion >= 4) {
+      this.exhaustion -= 4;
+      if (this.saturation > 0) this.saturation = Math.max(0, this.saturation - 1);
+      else if (difficulty > 0) this.hunger = Math.max(0, this.hunger - 1);
+    }
+    const healing = this.hunger >= 18 && this.health < this.maxHealth;
+    const starving = this.hunger === 0 && difficulty > 0;
+    if (!healing && !starving) { this.foodTimer = 0; return; }
+    this.foodTimer += dt;
+    if (this.foodTimer < 4) return;
+    this.foodTimer %= 4;
+    if (healing) {
+      this.health = Math.min(this.maxHealth, this.health + 1);
+      this.addExhaustion(3);
+    } else if (this.health > (difficulty === 1 ? 10 : difficulty === 2 ? 1 : 0)) {
+      this.damage(1, audio, true);
+    }
+  }
+
   // Raycast through blocks (DDA), returns {x,y,z, face:[dx,dy,dz], dist, block, bounds} or null
   raycast(world, maxDist = 5, opts = {}) {
     const dir = new THREE.Vector3(
@@ -771,8 +798,9 @@ export class Player {
     const stack = this.heldStack;
     const def = stack && ITEMS[stack.id];
     const food = def?.food;
-    if (!food || this.dead) return false;
-    this.health = Math.min(this.maxHealth, this.health + food);
+    if (!food || this.dead || (this.hunger >= 20 && !def.alwaysEdible)) return false;
+    this.hunger = Math.min(20, this.hunger + food);
+    this.saturation = Math.min(this.hunger, this.saturation + (def.saturation || 0));
     const returnItem = def.returns || null;
     this.consumeHeld();
     if (returnItem) this.insertItem(returnItem, 1, 0);

@@ -31,7 +31,149 @@ async function pause(page) {
   await expect(page.locator('#pause-screen')).toBeVisible();
 }
 
-test('Beta survival: mine, place, craft, die, respawn, and round-trip a portable save', async ({ page }) => {
+test('one main menu offers singleplayer and multiplayer with Survival and Creative', async ({ page }) => {
+  await title(page);
+  await expect(page.locator('#btn-multiplayer')).toBeVisible();
+  await expect(page.locator('#btn-classic, #btn-beta')).toHaveCount(0);
+  await page.locator('#btn-multiplayer').click();
+  await expect(page.locator('#mp-mode')).toBeVisible();
+  await expect(page.locator('#mp-mode option')).toHaveText(['Survival', 'Creative']);
+  const warning = page.getByText(/Inventory is not fully synchronized/);
+  const box = await warning.boundingBox();
+  expect(box.y + box.height).toBeLessThanOrEqual(600);
+});
+
+test('title splash does not obscure the edition subtitle on desktop or phone', async ({ page }) => {
+  await title(page);
+  await page.evaluate(() => { document.querySelector('.splash').textContent = 'Built one block at a time!'; });
+  for (const viewport of [{ width: 800, height: 600 }, { width: 390, height: 700 }]) {
+    await page.setViewportSize(viewport);
+    const overlap = await page.evaluate(() => {
+      const a = document.querySelector('.splash').getBoundingClientRect();
+      const b = document.querySelector('.title-sub').getBoundingClientRect();
+      return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    });
+    expect(overlap, JSON.stringify(viewport)).toBe(false);
+  }
+});
+
+test('Survival food is held to eat and hunger survives a world reload', async ({ page }) => {
+  await title(page);
+  await newWorld(page, 'Food and save');
+  await page.locator('#game-canvas').click({ position: { x: 400, y: 300 } });
+  await expect.poll(() => page.evaluate(() => window.game.player.pointerLocked)).toBe(true);
+  await page.evaluate(() => {
+    const player = window.game.player;
+    player.bindings = { ...player.bindings, use: 'KeyK' };
+    player.hunger = 10; player.saturation = 0; player.health = 15;
+    player.inventory[0] = { id: 297, count: 1, damage: 0 }; player.hotbarIndex = 0;
+  });
+  await page.keyboard.down('k');
+  try { await expect.poll(() => page.evaluate(() => window.game.player.hunger)).toBe(15); }
+  finally { await page.keyboard.up('k'); }
+  await expect.poll(() => page.evaluate(() => window.game.player.heldStack)).toBeNull();
+  await expect(page.locator('#hunger-bar')).toBeVisible();
+  await pause(page);
+  await page.locator('#btn-save-now').click();
+  await page.reload();
+  await playing(page);
+  await expect.poll(() => page.evaluate(() => window.game.player.hunger)).toBe(15);
+});
+
+test('Creative catalog, flight, high-altitude edits and inventory survive the expected save lifecycle', async ({ page }) => {
+  await title(page);
+  await page.locator('#btn-singleplayer').click();
+  await page.locator('#world-create').click();
+  await page.locator('#new-world-name').fill('Creative starter');
+  await page.locator('#new-world-mode').click();
+  await page.locator('#world-create-confirm').click();
+  await playing(page);
+  expect(await page.evaluate(() => window.game.player.gameMode)).toBe('creative');
+  await expect.poll(() => page.evaluate(() => window.game.player.inventory[0]?.id)).toBe(1);
+  await page.keyboard.press('Space');
+  await page.keyboard.press('Space');
+  await expect.poll(() => page.evaluate(() => window.game.player.flying)).toBe(true);
+  await page.keyboard.press('e');
+  await page.getByRole('searchbox', { name: 'Search Creative items' }).fill('Diamond Pickaxe');
+  await expect(page.locator('#creative-items button')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Diamond Pickaxe' }).click();
+  expect(await page.evaluate(() => window.game.player.heldStack)).toEqual({ id: 278, count: 1, damage: 0 });
+  await page.getByRole('button', { name: 'Back to game', exact: true }).click();
+  await page.evaluate(() => { window.game.player.pos.y = -40; });
+  await expect.poll(() => page.evaluate(() => window.game.player.pos.y)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => window.game.world.setBlock(8, 255, 8, 5, 2))).toBe(true);
+  await page.evaluate(() => { window.game.player.inventory[0] = null; });
+  await pause(page);
+  await page.locator('#btn-save-now').click();
+  await page.reload();
+  await playing(page);
+  expect(await page.evaluate(() => window.game.player.inventory[0])).toBeNull();
+  expect(await page.evaluate(() => window.game.player.inventory[1]?.id)).toBe(3);
+  expect(await page.evaluate(() => [window.game.world.getBlock(8, 255, 8), window.game.world.getMeta(8, 255, 8), window.game.player.flying])).toEqual([5, 2, false]);
+});
+
+test('a saved Beta generator takes precedence over a new-world URL', async ({ page }) => {
+  await title(page);
+  await page.evaluate(() => localStorage.setItem('aislopcraft:world:legacy-fixture', JSON.stringify({
+    version: 1, worldId: 'legacy-fixture', seed: 'compat-fixture', edition: 'beta', gameMode: 'survival',
+    edits: [['1,127,1', 5, 2]], player: { pos: [8.5, 80, 8.5], inventory: Array(36).fill(null), armor: Array(4).fill(null) },
+  })));
+  await page.goto('/?seed=compat-fixture&id=legacy-fixture&terrain=overworld-v1&launch=1');
+  await playing(page);
+  expect(await page.evaluate(() => {
+    const { world } = window.game;
+    return [world.height, world.getBlock(1, 127, 1), world.getMeta(1, 127, 1), world.setBlock(1, 128, 1, 1)];
+  })).toEqual([128, 5, 2, false]);
+  await pause(page);
+  await page.locator('#btn-save-now').click();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('aislopcraft:world:legacy-fixture')).version)).toBe(1);
+});
+
+test('the selector opens either version when an old build creates a same-ID save', async ({ page }) => {
+  await title(page);
+  await page.evaluate(() => {
+    const save = { worldId: 'same-id', seed: 'release-smoke', edition: 'beta', gameMode: 'survival',
+      player: { pos: [8.5, 80, 8.5], inventory: Array(36).fill(null), armor: Array(4).fill(null) } };
+    localStorage.setItem('aislopcraft:world:same-id', JSON.stringify({ ...save, version: 1, worldName: 'Collision Beta', edits: [['1,127,1', 1, 0]] }));
+    localStorage.setItem('aislopcraft:world-v2:same-id', JSON.stringify({ ...save, version: 2, terrain: 'overworld-v1', worldName: 'Collision Overworld', edits: [['1,255,1', 5, 2]] }));
+  });
+  expect(await page.evaluate(async () => {
+    const keys = ['aislopcraft:world:same-id', 'aislopcraft:world-v2:same-id'];
+    const before = keys.map(key => localStorage.getItem(key));
+    const backup = new File([JSON.stringify({ format: 'aislopcraft-world-save', version: 2, world: JSON.parse(before[1]) })], 'copy.json');
+    const setItem = Storage.prototype.setItem;
+    let attemptedKey, message;
+    Storage.prototype.setItem = function (key, value) {
+      if (key.startsWith('aislopcraft:world-v2:')) {
+        attemptedKey = key;
+        throw new DOMException('Full', 'QuotaExceededError');
+      }
+      return setItem.call(this, key, value);
+    };
+    try { await window.game.importWorldSaveFile(backup); }
+    catch (error) { message = error.message; }
+    finally { Storage.prototype.setItem = setItem; }
+    return { failedForCopy: attemptedKey?.startsWith('aislopcraft:world-v2:import-'), keptBoth: keys.every((key, i) => localStorage.getItem(key) === before[i]), message };
+  })).toEqual({ failedForCopy: true, keptBoth: true, message: expect.stringContaining('Browser storage is full') });
+  await page.locator('#btn-singleplayer').click();
+  const legacy = page.getByRole('option', { name: /Collision Beta/ });
+  const modern = page.getByRole('option', { name: /Collision Overworld/ });
+  await modern.click();
+  await expect(modern).toHaveAttribute('aria-selected', 'true');
+  await expect(legacy).toHaveAttribute('aria-selected', 'false');
+  await page.locator('#world-play').click();
+  await playing(page);
+  expect(await page.evaluate(() => window.game.world.getMeta(1, 255, 1))).toBe(2);
+  await pause(page);
+  await page.locator('#btn-save-quit').click();
+  await page.locator('#btn-singleplayer').click();
+  await legacy.click();
+  await page.locator('#world-play').click();
+  await playing(page);
+  expect(await page.evaluate(() => [window.game.world.height, window.game.world.getBlock(1, 127, 1)])).toEqual([128, 1]);
+});
+
+test('Survival: mine, place, craft, die, respawn, and round-trip a portable save', async ({ page }) => {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await title(page);
@@ -118,6 +260,7 @@ test.describe('small portrait touchscreen', () => {
   test('opens inventory, returns to play and pauses using touch', async ({ page }) => {
     await title(page);
     await newWorld(page, 'Pocket world');
+    await expect(page.locator('#touch-fly')).toBeHidden();
     await page.getByRole('button', { name: 'Open or close inventory' }).tap();
     await expect(page.locator('#craft-out')).toBeVisible();
     await page.locator('#touch-panel-return').tap();
@@ -127,14 +270,58 @@ test.describe('small portrait touchscreen', () => {
     await playing(page);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   });
+  test('toggles Creative flight and chooses a catalog block using touch', async ({ page }) => {
+    await title(page);
+    await page.goto('/?seed=release-smoke&id=touch-creative&mode=creative&launch=1');
+    await playing(page);
+    const fly = page.getByRole('button', { name: 'Toggle flight' });
+    await fly.tap();
+    await expect(fly).toHaveAttribute('aria-pressed', 'true');
+    await page.getByRole('button', { name: 'Open or close inventory' }).tap();
+    await page.getByRole('searchbox', { name: 'Search Creative items' }).fill('Glass');
+    await page.getByRole('button', { name: 'Glass', exact: true }).tap();
+    await expect(page.locator('#creative-feedback')).toHaveText(/Glass selected/);
+    await page.locator('#creative-close').tap();
+    await fly.tap();
+    await expect(fly).toHaveAttribute('aria-pressed', 'false');
+    expect(await page.evaluate(() => window.game.player.heldStack)).toEqual({ id: 20, count: 64, damage: 0 });
+  });
+  test('touch eating completes on hold and cancels on release or pause', async ({ page }) => {
+    await title(page);
+    await newWorld(page, 'Touch food');
+    await page.evaluate(() => {
+      const player = window.game.player;
+      player.hunger = 10;
+      player.saturation = 0;
+      player.inventory[0] = { id: 297, count: 2, damage: 0 };
+      player.hotbarIndex = 0;
+      const use = document.querySelector('#touch-use');
+      use.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'touch', pointerId: 41, bubbles: true }));
+      use.dispatchEvent(new PointerEvent('pointerup', { pointerType: 'touch', pointerId: 41, bubbles: true }));
+      use.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'touch', pointerId: 42, bubbles: true }));
+      document.querySelector('#touch-pause').click();
+    });
+    await expect(page.locator('#pause-screen')).toBeVisible();
+    expect(await page.evaluate(() => [window.game.player.hunger, window.game.player.heldStack.count, window.game.player.rightDown])).toEqual([10, 2, false]);
+    await page.locator('#btn-back').tap();
+    await page.evaluate(() => {
+      const use = document.querySelector('#touch-use');
+      use.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'touch', pointerId: 43, bubbles: true }));
+    });
+    try { await expect.poll(() => page.evaluate(() => window.game.player.hunger)).toBe(15); }
+    finally {
+      await page.evaluate(() => document.querySelector('#touch-use').dispatchEvent(new PointerEvent('pointerup', { pointerType: 'touch', pointerId: 43, bubbles: true })));
+    }
+  });
 });
 
-test('Classic lobby: unique names, release, create, join and leave', async ({ page, browser }) => {
+for (const mode of ['survival', 'creative']) test(`Multiplayer ${mode}: names, create, join, shared edits and leave`, async ({ page, browser }) => {
+  test.setTimeout(300_000);
   const guestContext = await browser.newContext({ viewport: { width: 800, height: 600 } });
   try {
     const guest = await guestContext.newPage();
     for (const client of [page, guest]) {
-      await title(client, '/?edition=classic&seed=release-smoke');
+      await title(client, '/?seed=release-smoke');
       await client.locator('#btn-multiplayer').click();
     }
     async function claim(client, name) {
@@ -152,6 +339,7 @@ test('Classic lobby: unique names, release, create, join and leave', async ({ pa
     await claim(page, 'OtherHost');
     await expect(page.locator('#mp-name-label')).toContainText('OtherHost');
     await page.locator('#mp-world-name').fill('Smoke room');
+    await page.locator('#mp-mode').selectOption(mode);
     await page.locator('#mp-create').click();
     await playing(page);
     await guest.locator('#mp-refresh').click();
@@ -159,6 +347,60 @@ test('Classic lobby: unique names, release, create, join and leave', async ({ pa
     await playing(guest);
     await expect.poll(() => guest.evaluate(() => window.game.networkRoom?.role)).toBe('guest');
     await expect.poll(() => page.evaluate(() => window.game.networkRoom?.players?.length)).toBe(2);
+    await expect.poll(() => guest.evaluate(() => window.game.player.gameMode)).toBe(mode);
+    await pause(page);
+    const pausedTime = await page.evaluate(() => window.game.sky.timeOfDay);
+    await expect.poll(() => page.evaluate(() => window.game.sky.timeOfDay)).not.toBe(pausedTime);
+    await page.locator('#btn-back').click();
+    const edit = await page.evaluate(() => {
+      const { player, world } = window.game;
+      const x = Math.floor(player.pos.x), y = 255, z = Math.floor(player.pos.z);
+      world.setBlock(x, y, z, 5);
+      return [x, y, z];
+    });
+    await expect.poll(() => guest.evaluate(([x, y, z]) => window.game.world.getBlock(x, y, z), edit)).toBe(5);
+    if (mode === 'survival') {
+      const chest = await page.evaluate(() => {
+        const { player, world } = window.game;
+        player.pointerLocked = true;
+        const [x, y, z] = player.pos.toArray().map(Math.floor);
+        player.pos.set(x + 0.5, y + 0.001, z + 0.5);
+        player.vel.set(0, 0, 0);
+        player.yaw = player.pitch = player.mouseDX = player.mouseDY = 0;
+        player.inventory[0] = { id: 5, count: 3, damage: 0 };
+        player.hotbarIndex = 0;
+        world.setBlock(x, y - 1, z, 1);
+        world.setBlock(x, y, z, 0);
+        world.setBlock(x, y + 1, z, 0);
+        world.setBlock(x, y + 1, z - 1, 0);
+        world.setBlock(x, y + 1, z - 2, 54);
+        return [x, y, z];
+      });
+      await expect.poll(() => page.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(54);
+      await page.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true })));
+      await expect(page.locator('#chest-screen')).toBeVisible();
+      await page.locator('#chest-hotbar [data-inv="0"]').click();
+      await page.locator('#chest-slots [data-chest="0"]').click();
+      expect(await page.evaluate(() => window.game.openChestData.slots[0])).toMatchObject({ id: 5, count: 3 });
+
+      await expect.poll(() => guest.evaluate(([x, y, z]) => window.game.world.getBlock(x, y + 1, z - 2), chest)).toBe(54);
+      await guest.evaluate(([x, y, z]) => {
+        const player = window.game.player;
+        player.pointerLocked = true;
+        player.pos.set(x + 0.5, y + 0.001, z + 0.5);
+        player.vel.set(0, 0, 0);
+        player.yaw = player.pitch = player.mouseDX = player.mouseDY = 0;
+      }, chest);
+      await expect.poll(() => guest.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(54);
+      await guest.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true })));
+      await expect(guest.locator('#toast-msg')).toContainText(/host.*chest/i);
+      expect(await guest.evaluate(() => window.game.ui.mode)).toBe('game');
+      await guest.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true })));
+      await expect.poll(() => guest.evaluate(() => window.game.player.leftDown)).toBe(false);
+      expect(await page.evaluate(() => window.game.openChestData.slots[0])).toMatchObject({ id: 5, count: 3 });
+      expect(await page.evaluate(([x, y, z]) => window.game.world.getBlock(x, y + 1, z - 2), chest)).toBe(54);
+      await page.keyboard.press('Escape');
+    }
     await pause(guest);
     await guest.locator('#btn-save-quit').click();
     await expect(guest.locator('#btn-multiplayer')).toBeVisible();
@@ -167,6 +409,85 @@ test('Classic lobby: unique names, release, create, join and leave', async ({ pa
     await page.locator('#btn-save-quit').click();
     await expect(page.locator('#btn-multiplayer')).toBeVisible();
   } finally { await guestContext.close(); }
+});
+
+test('Multiplayer guests cannot open or mine host-owned chests or furnaces', async ({ page }) => {
+  await title(page);
+  await newWorld(page, 'Storage safety');
+  await page.locator('#game-canvas').click({ position: { x: 400, y: 300 } });
+  await expect.poll(() => page.evaluate(() => window.game.player.pointerLocked)).toBe(true);
+  const target = await page.evaluate(() => {
+    const game = window.game, { player, world } = game;
+    game.networkRoom = { role: 'guest', players: [] };
+    const [x, y, z] = player.pos.toArray().map(Math.floor);
+    player.pos.set(x + 0.5, y + 0.001, z + 0.5);
+    player.vel.set(0, 0, 0);
+    player.yaw = player.pitch = player.mouseDX = player.mouseDY = 0;
+    world.setBlock(x, y - 1, z, 1);
+    world.setBlock(x, y + 1, z - 1, 0);
+    return [x, y + 1, z - 2];
+  });
+  for (const id of [54, 61, 62]) {
+    await page.evaluate(([x, y, z, id]) => window.game.world.setBlock(x, y, z, id), [...target, id]);
+    await expect.poll(() => page.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(id);
+    await page.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true })));
+    await expect(page.locator('#toast-msg')).toContainText(/host.*(chest|furnace)/i);
+    expect(await page.evaluate(() => window.game.ui.mode)).toBe('game');
+    await page.evaluate(() => {
+      document.querySelector('#toast-msg').textContent = '';
+      document.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
+    });
+    await expect(page.locator('#toast-msg')).toContainText(/host.*(chest|furnace)/i, { timeout: 5000 });
+    expect(await page.evaluate(([x, y, z]) => window.game.world.getBlock(x, y, z), target)).toBe(id);
+    expect(await page.evaluate(() => window.game.player.leftDown)).toBe(false);
+  }
+});
+
+test('Storage minecarts cannot be opened or destroyed in multiplayer', async ({ page }) => {
+  await title(page);
+  await newWorld(page, 'Cart safety');
+  await page.locator('#game-canvas').click({ position: { x: 400, y: 300 } });
+  await expect.poll(() => page.evaluate(() => window.game.player.pointerLocked)).toBe(true);
+  await page.evaluate(() => {
+    const { player, world, vehicles } = window.game;
+    const [x, y, z] = player.pos.toArray().map(Math.floor);
+    player.pos.set(x + 0.5, y + 0.001, z + 0.5);
+    player.vel.set(0, 0, 0);
+    player.yaw = player.pitch = player.mouseDX = player.mouseDY = 0;
+    world.setBlock(x, y - 1, z, 1);
+    for (const dz of [-1, -2]) for (const dy of [1, 2]) world.setBlock(x, y + dy, z + dz, 0);
+    vehicles.create('storage', x + 0.5, y + 1.1, z - 1.5);
+  });
+  await expect.poll(() => page.evaluate(() => window.game.vehicles.target(window.game.player)?.type)).toBe('storage');
+  for (const role of ['host', 'guest']) {
+    await page.evaluate(role => { window.game.networkRoom = { role, players: [] }; }, role);
+    for (const button of [2, 0]) {
+      await page.evaluate(button => {
+        document.querySelector('#toast-msg').textContent = '';
+        document.dispatchEvent(new MouseEvent('mousedown', { button, bubbles: true }));
+      }, button);
+      await expect(page.locator('#toast-msg')).toContainText(/storage minecart.*multiplayer/i, { timeout: 5000 });
+      expect(await page.evaluate(() => window.game.ui.mode)).toBe('game');
+      expect(await page.evaluate(() => window.game.vehicles.vehicles.filter(v => v.type === 'storage').length)).toBe(1);
+    }
+  }
+  await page.evaluate(() => {
+    const { player, world, vehicles } = window.game;
+    vehicles.remove(vehicles.vehicles.find(v => v.type === 'storage'));
+    const [x, y, z] = player.pos.toArray().map(Math.floor);
+    world.setBlock(x, y, z - 2, 1);
+    world.setBlock(x, y + 1, z - 2, 66);
+    player.yaw = player.mouseDX = player.mouseDY = 0;
+    player.pitch = -0.35;
+    player.inventory[0] = { id: 342, count: 1, damage: 0 };
+    player.hotbarIndex = 0;
+    document.querySelector('#toast-msg').textContent = '';
+  });
+  await expect.poll(() => page.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(66);
+  await page.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true })));
+  await expect(page.locator('#toast-msg')).toContainText(/storage minecart.*multiplayer/i, { timeout: 5000 });
+  expect(await page.evaluate(() => window.game.player.heldStack?.count)).toBe(1);
+  expect(await page.evaluate(() => window.game.vehicles.vehicles.filter(v => v.type === 'storage').length)).toBe(0);
 });
 
 test('WebGL startup failure presents a reload action that can recover', async ({ page }) => {
@@ -207,7 +528,7 @@ test('storage quota leaves the world open and permits an unstored JSON backup', 
   await page.evaluate(() => {
     const original = Storage.prototype.setItem;
     Storage.prototype.setItem = function (key, value) {
-      if (key.startsWith('aislopcraft:world:')) throw new DOMException('Full', 'QuotaExceededError');
+      if (key.startsWith('aislopcraft:world:') || key.startsWith('aislopcraft:world-v2:')) throw new DOMException('Full', 'QuotaExceededError');
       return original.call(this, key, value);
     };
     const { player } = window.game;
@@ -267,4 +588,54 @@ test('Classic grass renders in daylight with both the Classic and PSX presets', 
   expect(graphicsErrors).toEqual([]);
   expect(sample.classic, JSON.stringify(sample)).toBeGreaterThan(1000);
   expect(sample.psx, JSON.stringify(sample)).toBeGreaterThan(1000);
+});
+
+test('PSX post-processing preserves dark colors instead of crushing them to black', async ({ page }) => {
+  await title(page);
+  await newWorld(page, 'PSX color test');
+  const colors = await page.evaluate(async () => {
+    const { renderer, player } = window.game;
+    window.game.setShaderStyle('psx');
+    const gl = renderer.getContext();
+    const original = renderer.render;
+    async function sample(value) {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { renderer.render = original; reject(new Error('PSX frame not rendered')); }, 10000);
+        renderer.render = function (scene, camera) {
+          const target = this.getRenderTarget();
+          original.call(this, scene, camera);
+          if (target && camera === player.camera) {
+            gl.clearColor(value, value, value, 1);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+          } else if (!target && scene.children[0]?.material?.uniforms?.uScene) {
+            const pixels = new Uint8Array(16 * 16 * 4);
+            gl.readPixels(Math.floor(gl.drawingBufferWidth / 2) - 8, Math.floor(gl.drawingBufferHeight / 2) - 8, 16, 16, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+            let sum = 0;
+            for (let i = 0; i < pixels.length; i += 4) sum += pixels[i];
+            clearTimeout(timer);
+            renderer.render = original;
+            resolve(sum / 256);
+          }
+        };
+      });
+    }
+    return [await sample(0.04), await sample(0.12), await sample(0.5)];
+  });
+  expect(colors[0], JSON.stringify(colors)).toBeGreaterThan(20);
+  expect(colors[1], JSON.stringify(colors)).toBeGreaterThan(colors[0] + 15);
+  expect(colors[2], JSON.stringify(colors)).toBeGreaterThan(colors[1] + 30);
+});
+
+test('pause actions remain reachable on short screens', async ({ page }) => {
+  await title(page);
+  await newWorld(page, 'Short screen');
+  await page.setViewportSize({ width: 700, height: 320 });
+  await pause(page);
+  for (const id of ['btn-back', 'btn-save-quit']) {
+    const button = page.locator(`#${id}`);
+    await button.scrollIntoViewIfNeeded();
+    const box = await button.boundingBox();
+    expect(box.y, id).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height, id).toBeLessThanOrEqual(320);
+  }
 });

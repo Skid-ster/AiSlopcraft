@@ -9,6 +9,7 @@ export const DEFAULT_KEYS = Object.freeze({
   right: 'KeyD',
   jump: 'Space',
   sneak: 'ShiftLeft',
+  sprint: 'ControlLeft',
   inventory: 'KeyE',
   drop: 'KeyQ',
   attack: 'Mouse0',
@@ -26,7 +27,7 @@ export const DEFAULT_KEYS = Object.freeze({
 
 export const KEY_LABELS = Object.freeze({
   forward: 'Forward', back: 'Back', left: 'Left', right: 'Right',
-  jump: 'Jump', sneak: 'Sneak', inventory: 'Inventory', drop: 'Drop',
+  jump: 'Jump', sneak: 'Sneak', sprint: 'Sprint', inventory: 'Inventory', drop: 'Drop',
   attack: 'Attack', use: 'Use / Place',
   hotbar1: 'Hotbar 1', hotbar2: 'Hotbar 2', hotbar3: 'Hotbar 3',
   hotbar4: 'Hotbar 4', hotbar5: 'Hotbar 5', hotbar6: 'Hotbar 6',

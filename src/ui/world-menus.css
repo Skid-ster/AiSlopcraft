@@ -67,3 +67,12 @@
   .help-controls { font-size: 10px; }
   .help-controls div { grid-template-columns: minmax(105px, .8fr) 1.3fr; }
 }
+.creative-panel { width: min(36rem, 94vw); max-height: 90dvh; padding: 1rem; display: flex; flex-direction: column; gap: .65rem; color: #252422; font-family: system-ui, sans-serif; }
+.creative-panel p { font-size: .9rem; }
+.creative-filters { display: flex; gap: .5rem; flex-wrap: wrap; }
+.creative-filters input { flex: 1 1 12rem; min-width: 0; }
+.creative-filters input, .creative-filters select { padding: .5rem; font: inherit; }
+.creative-items { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(9rem, 100%), 1fr)); gap: .35rem; overflow-y: auto; min-height: 0; max-height: 50dvh; padding: .2rem; }
+.creative-items button { color: #211e1a; background: #e0d8c7; border: 1px solid #8c8171; border-radius: 2px; min-height: 2.75rem; padding: .35rem; text-align: left; font: inherit; cursor: pointer; }
+.creative-items button:hover, .creative-items button:focus-visible { background: #fff4c9; }
+#creative-feedback { min-height: 1.2em; }

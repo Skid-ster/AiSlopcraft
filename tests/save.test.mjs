@@ -36,4 +36,19 @@ assert.equal(normalizeWorldSave({ ...world, player: { ...world.player, pos: [Inf
 assert.throws(() => decodeWorldSave('{broken json'), /valid JSON/);
 assert.throws(() => decodeWorldSave(JSON.stringify({ format: 'other', version: 1 })), /Unsupported save/);
 assert.throws(() => encodeWorldSave({ version: 1, seed: 'missing-player', edits: [] }), /incomplete/);
+const overworld = { ...world, version: 2, terrain: 'overworld-v1', gameMode: 'creative',
+  edits: [['-1,255,16', 5, 7]] };
+const modernText = encodeWorldSave(overworld);
+assert.equal(JSON.parse(modernText).version, 2, 'old readers must not silently load a tall world as Beta');
+assert.equal(JSON.parse(text).version, 1, 'legacy exports remain readable by legacy clients');
+assert.deepEqual(decodeWorldSave(modernText).edits, [['-1,255,16', 5, 7]]);
+assert.equal(decodeWorldSave(modernText).gameMode, 'creative');
+assert.equal(normalizeWorldSave({ ...overworld, terrain: 'future' }), null);
+assert.equal(normalizeWorldSave({ ...overworld, version: 1 }), null);
+assert.equal(normalizeWorldSave({ ...overworld, edits: [...overworld.edits, ['0,256,0', 1, 0]] }), null, 'v2 rejects edits outside the published format instead of silently losing them');
+assert.equal(normalizeWorldSave({ ...overworld, edits: [['0,90,0', 256, 0]] }), null, 'v2 block IDs must fit chunk storage');
+assert.throws(() => decodeWorldSave(JSON.stringify({ ...JSON.parse(modernText), version: 1 })), /Unsupported save/);
+const classicRoundTrip = decodeWorldSave(encodeWorldSave({ ...world, edition: 'classic', edits: [['-128,63,127', 5, 2]] }));
+assert.equal(classicRoundTrip.edition, 'classic');
+assert.deepEqual(classicRoundTrip.edits, [['-128,63,127', 5, 2]]);
 console.log('ALL WORLD SAVE TESTS PASSED');

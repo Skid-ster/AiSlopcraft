@@ -1,6 +1,8 @@
 // Portable world-save file format and defensive validation for browser storage/imports.
+import { BETA_HEIGHT, OVERWORLD_TERRAIN, worldHeight } from './world/world-profile.js';
+
 export const WORLD_SAVE_FORMAT = 'aislopcraft-world-save';
-export const WORLD_SAVE_VERSION = 1;
+export const WORLD_SAVE_VERSION = 2;
 export const MAX_WORLD_SAVE_BYTES = 16 * 1024 * 1024;
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -22,15 +24,28 @@ function cleanSlots(slots, expected) {
 }
 
 export function normalizeWorldSave(value) {
-  if (!isObject(value) || value.version !== WORLD_SAVE_VERSION
+  if (!isObject(value) || ![1, WORLD_SAVE_VERSION].includes(value.version)
       || typeof value.seed !== 'string' || value.seed.length < 1 || value.seed.length > 128) return null;
+  const terrain = value.terrain ?? null;
+  const edition = value.edition === 'classic' ? 'classic' : 'beta';
+  const modern = value.version === WORLD_SAVE_VERSION;
+  if (modern ? (terrain !== OVERWORLD_TERRAIN || edition === 'classic') : terrain !== null) return null;
+  // Keep the v1 normalizer's behavior even for legacy Classic backups.
+  const height = terrain ? worldHeight(edition, terrain) : BETA_HEIGHT;
   if (!Array.isArray(value.edits) || value.edits.length > 200_000) return null;
   const edits = [];
   for (const edit of value.edits) {
     if (!Array.isArray(edit) || edit.length < 2 || !validCoordKey(edit[0])
-        || !Number.isInteger(edit[1]) || edit[1] < 0 || edit[1] > 65535) continue;
+        || !Number.isInteger(edit[1]) || edit[1] < 0 || edit[1] > (modern ? 255 : 65535)) {
+      if (modern) return null;
+      continue;
+    }
     const [x, y, z] = edit[0].split(',').map(Number);
-    if (y < 0 || y >= 128) continue;
+    if (y < 0 || y >= height) {
+      if (modern) return null;
+      continue;
+    }
+    if (modern && edit[2] !== undefined && (!Number.isInteger(edit[2]) || edit[2] < 0 || edit[2] > 255)) return null;
     edits.push([`${x},${y},${z}`, edit[1], Number.isInteger(edit[2]) ? Math.max(0, Math.min(255, edit[2])) : 0]);
   }
   const player = isObject(value.player) ? value.player : null;
@@ -89,15 +104,19 @@ export function normalizeWorldSave(value) {
     pos: player.pos.map(Number), yaw: Number.isFinite(player.yaw) ? player.yaw : 0,
     pitch: Number.isFinite(player.pitch) ? Math.max(-Math.PI / 2, Math.min(Math.PI / 2, player.pitch)) : 0,
     health: Number.isFinite(player.health) ? Math.max(1, Math.min(20, player.health)) : 20,
+    hunger: Number.isFinite(player.hunger) ? Math.max(0, Math.min(20, Math.floor(player.hunger))) : 20,
+    saturation: Number.isFinite(player.saturation) ? Math.max(0, Math.min(20, player.saturation)) : 5,
+    exhaustion: Number.isFinite(player.exhaustion) ? Math.max(0, Math.min(40, player.exhaustion)) : 0,
     inventory, armor, hotbarIndex: Number.isInteger(player.hotbarIndex) ? Math.max(0, Math.min(8, player.hotbarIndex)) : 0,
     stats: isObject(player.stats) ? Object.fromEntries(Object.entries(player.stats).filter(([, n]) => Number.isFinite(n)).slice(0, 100)) : {},
   };
+  normalizedPlayer.saturation = Math.min(normalizedPlayer.hunger, normalizedPlayer.saturation);
   const worldId = typeof value.worldId === 'string' && value.worldId.length > 0 && value.worldId.length <= 128 ? value.worldId : value.seed;
-  const edition = value.edition === 'classic' ? 'classic' : 'beta';
   return {
-    version: WORLD_SAVE_VERSION, worldId, seed: value.seed,
+    version: value.version, worldId, seed: value.seed,
     worldName: typeof value.worldName === 'string' && value.worldName.trim() ? value.worldName.trim().slice(0, 48) : value.seed,
     edition,
+    ...(terrain ? { terrain } : {}),
     gameMode: edition === 'classic' ? 'classic' : value.gameMode === 'creative' ? 'creative' : 'survival',
     edits,
     settings: isObject(value.settings) ? value.settings : {},
@@ -113,7 +132,7 @@ export function normalizeWorldSave(value) {
 export function encodeWorldSave(value) {
   const world = normalizeWorldSave(value);
   if (!world) throw new Error('This world save is incomplete or invalid.');
-  const text = JSON.stringify({ format: WORLD_SAVE_FORMAT, version: WORLD_SAVE_VERSION, exportedAt: new Date().toISOString(), world });
+  const text = JSON.stringify({ format: WORLD_SAVE_FORMAT, version: world.version, exportedAt: new Date().toISOString(), world });
   if (new TextEncoder().encode(text).byteLength > MAX_WORLD_SAVE_BYTES) throw new Error('World save is too large to export (maximum 16 MB).');
   return text;
 }
@@ -124,7 +143,7 @@ export function decodeWorldSave(text) {
   }
   let parsed;
   try { parsed = JSON.parse(text); } catch { throw new Error('This is not a valid JSON world-save file.'); }
-  if (!isObject(parsed) || parsed.format !== WORLD_SAVE_FORMAT || parsed.version !== WORLD_SAVE_VERSION) {
+  if (!isObject(parsed) || parsed.format !== WORLD_SAVE_FORMAT || ![1, WORLD_SAVE_VERSION].includes(parsed.version) || parsed.world?.version !== parsed.version) {
     throw new Error('Unsupported save file. Choose an AiSlopcraft world-save JSON file.');
   }
   const world = normalizeWorldSave(parsed.world);

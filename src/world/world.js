@@ -1,19 +1,24 @@
 // World manager: chunk loading, block access, lighting propagation (beta-style).
-import { Chunk, CH, WORLD_H, SEA_LEVEL } from './chunk.js';
+import { Chunk, CH, SEA_LEVEL } from './chunk.js';
 import { WorldGen } from './worldgen.js';
 import { ClassicWorldGen } from './classic-worldgen.js';
-import { AIR, WATER, LAVA, ICE, getBlock, LEAVES, WOOD_DOOR, IRON_DOOR } from './blocks.js';
+import { OverworldGen } from './overworld-gen.js';
+import { OVERWORLD_TERRAIN, worldHeight } from './world-profile.js';
+import { AIR, BEDROCK, getBlock, WOOD_DOOR, IRON_DOOR } from './blocks.js';
 import { WorldLighting, lightOpacity, lightEmission } from './lighting.js';
 
 export class World {
-  constructor(seed, scene, edition = 'beta') {
+  constructor(seed, scene, edition = 'beta', terrain = null) {
     this.seed = seed;
     this.scene = scene;
     this.edition = edition === 'classic' ? 'classic' : 'beta';
     this.minWorldCoord = this.edition === 'classic' ? -128 : -Infinity;
     this.maxWorldCoord = this.edition === 'classic' ? 127 : Infinity;
-    this.maxWorldY = this.edition === 'classic' ? 63 : WORLD_H - 1;
-    this.gen = this.edition === 'classic' ? new ClassicWorldGen(seed) : new WorldGen(seed);
+    this.terrain = this.edition === 'classic' ? null : terrain;
+    if (this.terrain !== null && this.terrain !== OVERWORLD_TERRAIN) throw new Error('Unknown world terrain.');
+    this.height = worldHeight(this.edition, this.terrain);
+    this.maxWorldY = this.height - 1;
+    this.gen = this.edition === 'classic' ? new ClassicWorldGen(seed) : this.terrain ? new OverworldGen(seed) : new WorldGen(seed);
     this.chunks = new Map(); // "cx,cz" -> Chunk
     this.edits = new Map();  // player block edits "x,y,z" -> id
     this.metaEdits = new Map(); // player block metadata "x,y,z" -> meta
@@ -59,7 +64,7 @@ export class World {
     const k = this.key(cx, cz);
     let c = this.chunks.get(k);
     if (!c) {
-      c = new Chunk(cx, cz);
+      c = new Chunk(cx, cz, this.height);
       this.chunks.set(k, c);
     }
     return c;
@@ -94,7 +99,7 @@ export class World {
       if (x < this.minWorldCoord || x > this.maxWorldCoord || z < this.minWorldCoord || z > this.maxWorldCoord) return AIR;
       if (y < 0) return BEDROCK;
       if (y > this.maxWorldY) return AIR;
-    } else if (y < 0 || y >= WORLD_H) return AIR;
+    } else if (y < 0 || y >= this.height) return AIR;
     const cx = Math.floor(x / CH), cz = Math.floor(z / CH);
     const c = this.getChunk(cx, cz);
     if (!c) {
@@ -108,10 +113,11 @@ export class World {
   setBlockGen(x, y, z, id) {
     if (this.edition === 'classic') {
       if (y < 0 || y > this.maxWorldY || x < this.minWorldCoord || x > this.maxWorldCoord || z < this.minWorldCoord || z > this.maxWorldCoord) return;
-    } else if (y < 0 || y >= WORLD_H) return;
+    } else if (y < 0 || y >= this.height) return;
     const cx = Math.floor(x / CH), cz = Math.floor(z / CH);
     const c = this.ensureChunk(cx, cz);
     if (!c.generated) this.gen.fillChunk(c);
+    if (c.decorated && this.edits.has(`${x},${y},${z}`)) return;
     const lx0 = x - cx * CH, lz0 = z - cz * CH;
     const previousId = c.get(lx0, y, lz0), previousMeta = c.getMeta(lx0, y, lz0);
     c.set(lx0, y, lz0, id);
@@ -132,7 +138,7 @@ export class World {
     if (this.edition === 'classic') {
       if (y < 0) return BEDROCK;
       if (y > this.maxWorldY || x < this.minWorldCoord || x > this.maxWorldCoord || z < this.minWorldCoord || z > this.maxWorldCoord) return AIR;
-    } else if (y < 0 || y >= WORLD_H) return AIR;
+    } else if (y < 0 || y >= this.height) return AIR;
     const cx = Math.floor(x / CH), cz = Math.floor(z / CH);
     const c = this.chunks.get(this.key(cx, cz));
     if (!c || !c.generated) return AIR;
@@ -200,7 +206,7 @@ export class World {
   }
 
   getLight(x, y, z) {
-    if (y >= WORLD_H) return 0xf0;
+    if (y >= this.height) return 0xf0;
     if (y < 0) return 0;
     const cx = Math.floor(x / CH), cz = Math.floor(z / CH);
     const c = this.chunks.get(this.key(cx, cz));
@@ -219,7 +225,7 @@ export class World {
   }
 
   heightAt(x, z) {
-    for (let y = WORLD_H - 1; y >= 0; y--) {
+    for (let y = this.maxWorldY; y >= 0; y--) {
       const b = this.getBlock(x, y, z);
       if (b !== AIR && getBlock(b).solid) return y + 1;
     }

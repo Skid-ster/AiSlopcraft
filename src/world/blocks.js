@@ -291,7 +291,7 @@ export const ITEMS = {
   257: { name: 'Iron Pickaxe', tool: 'pickaxe', tier: 2, durability: 250, speed: 6 },
   258: { name: 'Iron Axe', tool: 'axe', tier: 2, durability: 250, speed: 6 },
   259: { name: 'Flint and Steel', tool: 'none', durability: 64 },
-  260: { name: 'Apple', food: 4 },
+  260: { name: 'Apple', food: 4, saturation: 2.4 },
   261: { name: 'Bow', tool: 'bow', durability: 384 },
   262: { name: 'Arrow' },
   263: { name: 'Coal' },
@@ -313,7 +313,7 @@ export const ITEMS = {
   279: { name: 'Diamond Axe', tool: 'axe', tier: 3, durability: 1561, speed: 8 },
   280: { name: 'Stick' },
   281: { name: 'Bowl' },
-  282: { name: 'Mushroom Stew', food: 10, returns: 281 },
+  282: { name: 'Mushroom Stew', food: 6, saturation: 7.2, returns: 281, maxStack: 1 },
   283: { name: 'Golden Sword', tool: 'sword', tier: 0, durability: 32, damage: 4 },
   284: { name: 'Golden Shovel', tool: 'shovel', tier: 0, durability: 32, speed: 12 },
   285: { name: 'Golden Pickaxe', tool: 'pickaxe', tier: 0, durability: 32, speed: 12 },
@@ -328,7 +328,7 @@ export const ITEMS = {
   294: { name: 'Golden Hoe', tool: 'hoe', tier: 0, durability: 32 },
   295: { name: 'Wheat Seeds', places: CROPS },
   296: { name: 'Wheat' },
-  297: { name: 'Bread', food: 5 },
+  297: { name: 'Bread', food: 5, saturation: 6 },
   298: { name: 'Leather Helmet', durability: 56, armorSlot: 0, defense: 1 },
   299: { name: 'Leather Chestplate', durability: 81, armorSlot: 1, defense: 3 },
   300: { name: 'Leather Leggings', durability: 76, armorSlot: 2, defense: 2 },
@@ -346,10 +346,10 @@ export const ITEMS = {
   316: { name: 'Golden Leggings', durability: 106, armorSlot: 2, defense: 3 },
   317: { name: 'Golden Boots', durability: 92, armorSlot: 3, defense: 1 },
   318: { name: 'Flint' },
-  319: { name: 'Raw Porkchop', food: 3, maxStack: 1 },
-  320: { name: 'Cooked Porkchop', food: 8, maxStack: 1 },
+  319: { name: 'Raw Porkchop', food: 3, saturation: 1.8 },
+  320: { name: 'Cooked Porkchop', food: 8, saturation: 12.8 },
   321: { name: 'Painting' },
-  322: { name: 'Golden Apple', food: 20 },
+  322: { name: 'Golden Apple', food: 4, saturation: 9.6, alwaysEdible: true },
   323: { name: 'Sign' },
   325: { name: 'Bucket', maxStack: 16 },
   326: { name: 'Water Bucket', durability: 0, maxStack: 1 },
@@ -374,19 +374,19 @@ export const ITEMS = {
   345: { name: 'Compass' },
   346: { name: 'Fishing Rod', tool: 'rod', durability: 64 },
   348: { name: 'Glowstone Dust' },
-  349: { name: 'Raw Fish', food: 2 },
-  350: { name: 'Cooked Fish', food: 5 },
+  349: { name: 'Raw Fish', food: 2, saturation: 0.4 },
+  350: { name: 'Cooked Fish', food: 5, saturation: 6 },
   351: { name: 'Lapis Lazuli' },
   352: { name: 'Bone' },
   353: { name: 'Sugar' },
   354: { name: 'Cake', places: CAKE_BLOCK, maxStack: 1 },
   355: { name: 'Bed', places: BED_BLOCK, maxStack: 1 },
   356: { name: 'Redstone Repeater', places: REDSTONE_REPEATER },
-  357: { name: 'Cookie', food: 2, maxStack: 8 },
+  357: { name: 'Cookie', food: 2, saturation: 0.4 },
   358: { name: 'Map' },
   359: { name: 'Shears', tool: 'shears', durability: 238 },
-  360: { name: 'Melon', food: 2 },
-  367: { name: 'Rotten Flesh', food: 4 },
+  360: { name: 'Melon', food: 2, saturation: 1.2 },
+  367: { name: 'Rotten Flesh', food: 4, saturation: 0.8 },
   368: { name: 'Bone Meal' },
 };
 
@@ -445,5 +445,5 @@ export function canHarvest(blockId, heldId) {
 // Durability and declared stack limits both apply consistently in every inventory.
 export function itemStackLimit(id) {
   const item = ITEMS[id];
-  return item?.durability ? 1 : (item?.maxStack || (item?.food ? 1 : 64));
+  return item?.durability ? 1 : (item?.maxStack || 64);
 }

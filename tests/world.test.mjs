@@ -1,6 +1,9 @@
 // Headless regression test for the world pipeline: generation, lighting, meshing,
 // mining rules, crafting. Run with: npm test
 import * as THREE from 'three';
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { applySavedEdits } from '../src/world/world-loader.js';
 import { World } from '../src/world/world.js';
 import { buildChunkMesh } from '../src/world/mesher.js';
 import { CH } from '../src/world/chunk.js';
@@ -17,6 +20,49 @@ function check(name, cond) {
 }
 
 const scene = new THREE.Scene();
+for (const [edition, hash] of [
+  ['beta', '9c163e4bfb9a7f559b8d5bcaca3268b0b3a25184d4711a2490dfd11a623b4d1a'],
+  ['classic', 'd84788d5f4e5f7f3ba4d92d79fcf7424be2cc86cb25c3d259cd31c7ff4eeaa9c'],
+]) {
+  const legacy = new World('compat-fixture', scene, edition);
+  const c = legacy.generateChunk(0, 0);
+  assert.equal(createHash('sha256').update(c.blocks.subarray(0, (legacy.maxWorldY + 1) * 256)).digest('hex'), hash);
+  const baseline = legacy.getBlock(1, 10, 1);
+  applySavedEdits(legacy, [['1,10,1', AIR, 0], [`2,${legacy.maxWorldY},1`, TORCH, 5]]);
+  legacy.unloadChunk(0, 0);
+  legacy.generateChunk(0, 0);
+  assert.notEqual(baseline, AIR);
+  assert.equal(legacy.getBlock(1, 10, 1), AIR);
+  assert.equal(legacy.getMeta(2, legacy.maxWorldY, 1), 5);
+}
+const overworld = new World('compat-fixture', scene, 'beta', 'overworld-v1');
+const tallChunk = overworld.generateChunk(0, 0);
+assert.equal(overworld.setBlock(1, 255, 1, TORCH, 5), true, 'top block is writable');
+assert.equal(overworld.setBlock(1, 256, 1, TORCH, 5), false);
+assert.equal(overworld.getLight(2, 255, 1) & 15, 13, 'top-level light spreads horizontally');
+assert.equal(overworld.setBlock(1, 255, 1, STONE), true);
+const highMesh = buildChunkMesh(overworld, tallChunk, null, null, 2);
+assert.ok(highMesh.solid.pos.some((value, i) => i % 3 === 1 && value === 256), 'meshing includes the top face of the highest block');
+assert.equal(overworld.getLight(1, 255, 1), 0);
+assert.equal(overworld.setBlock(1, 255, 1, AIR), true);
+assert.equal(overworld.getLight(1, 255, 1), 0xf0, 'removing the roof at the build ceiling restores direct sunlight');
+assert.equal(overworld.setBlock(15, 200, 0, TORCH, 5), true);
+overworld.generateChunk(1, 0);
+assert.equal(overworld.getLight(16, 200, 0) & 15, 13, 'lighting propagates over a streamed chunk seam at high altitude');
+overworld.unloadChunk(0, 0);
+assert.equal(overworld.getLight(16, 200, 0), 0xf0, 'unloading a seam removes stale torch light but retains direct sun');
+overworld.generateChunk(0, 0);
+assert.equal(overworld.getMeta(15, 200, 0), 5, 'unloading preserves high-altitude metadata');
+const reference = new World('compat-fixture', scene, 'beta', 'overworld-v1');
+const reverse = new World('compat-fixture', scene, 'beta', 'overworld-v1');
+const order = [[-1, 0], [0, 0], [1, 0], [0, -1]];
+for (const [x, z] of order) reference.generateChunk(x, z);
+for (const [x, z] of [...order].reverse()) reverse.generateChunk(x, z);
+for (const [x, z] of order) assert.deepEqual(reference.getChunk(x, z).blocks, reverse.getChunk(x, z).blocks);
+assert.notDeepEqual(reference.getChunk(0, 0).blocks.subarray(0, 128 * 256), new World('compat-fixture', scene).generateChunk(0, 0).blocks);
+reference.generateChunk(-30, 52);
+assert.ok(reference.heightAt(-480, 832) > 128, 'new terrain can actually generate mountains above the old build limit');
+assert.equal(tallChunk.blocks.length, 256 * 256);
 const world = new World('Beta 1.7.3', scene);
 for (let cz = -1; cz <= 1; cz++) for (let cx = -1; cx <= 1; cx++) world.generateChunk(cx, cz);
 

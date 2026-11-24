@@ -76,6 +76,13 @@ w.lighting.chunkRemoved(removed);
 assert.equal(blockLight(w, 16, 10, 8), 0, 'unloaded emitter leaves no ghost light');
 assert.equal(skyLight(w, 20, 50, 8), 15, 'surviving open sky is restored after unload cleanup');
 
+w = blankWorld(); w.generateChunk(0, 0);
+for (const [x, z] of [[7, 8], [8, 7], [8, 9]]) w.setBlock(x, 127, z, STONE);
+w.setBlock(8, 127, 8, WATER);
+assert.equal(skyLight(w, 8, 127, 8), 13);
+w.setBlock(9, 127, 8, STONE);
+assert.equal(skyLight(w, 8, 127, 8), 13, 'roof removal bookkeeping never clears a neighboring independent sky source');
+
 // Random edits must match a fresh, non-incremental rebuild of the same blocks.
 w = blankWorld();
 for (let cz = -1; cz <= 1; cz++) for (let cx = -1; cx <= 1; cx++) w.generateChunk(cx, cz);

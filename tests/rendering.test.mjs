@@ -138,6 +138,15 @@ assert.equal(cacheRenderer.renders, 2, 'moving the view refreshes the shadow map
 cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'shader', 10.6, false, false);
 assert.equal(cacheRenderer.renders, 2, 'Fast graphics skips the expensive dynamic shadow pass');
 assert.equal(cachedLighting.shared.uShadowStrength.value, 0, 'Fast graphics disables shadow sampling in the visible shader');
+cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'cinematic', 10.7);
+assert.ok(cachedLighting.shared.uShadowStrength.value > 0, 'sun shadows resume immediately after returning to Fancy graphics');
+const cinematicStrength = cachedLighting.shared.uShadowStrength.value;
+cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'shader', 10.71);
+assert.ok(cachedLighting.shared.uShadowStrength.value > cinematicStrength, 'switching presets updates shadow strength even with a cached map');
+const rendersBeforeTurn = cacheRenderer.renders;
+cachedCamera.rotation.y = Math.PI / 2;
+cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'shader', 10.9);
+assert.ok(cacheRenderer.renders > rendersBeforeTurn, 'turning in place recenters the sun shadow map');
 cachedLighting.dispose();
 
 const particleScene = { add() {} };

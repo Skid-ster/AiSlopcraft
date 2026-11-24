@@ -37,9 +37,10 @@ assert.deepEqual(cropDrops(0), [{ id: 295, count: 1 }]);
 set(3, 100, 2, CAKE_BLOCK);
 player.health = 10;
 held(280);
-for (let i = 0; i < 6; i++) { player.health = 10; assert.equal(useOnBlock(world, player, at(3, 100, 2)), true); }
+for (let i = 0; i < 7; i++) { player.hunger = 10; assert.equal(useOnBlock(world, player, at(3, 100, 2)), true); }
 assert.equal(world.getBlock(3, 100, 2), AIR);
-assert.equal(player.health, 13);
+assert.equal(player.hunger, 12);
+assert.equal(player.health, 10);
 
 set(4, 100, 2, WATER);
 held(325, 2);
@@ -101,6 +102,7 @@ assert.equal(sanitizeSettings({ renderDistance: 100, fov: 1 }).fov, 30);
 
 player.gameMode = 'creative';
 player.pos.set(7, 120, 7);
+player.toggleFlight();
 player.keys[player.bindings.jump] = true;
 const flightStart = player.pos.y;
 player.update(0.1, world, null);
@@ -118,10 +120,10 @@ player.update(0.1, world, null);
 assert.ok(player.controlsActive && player.pos.y > touchFlightStart, 'virtual touch jump moves the player without pointer lock');
 player.clearTouchInput();
 assert.equal(player.controlsActive, false, 'releasing touch controls returns the player to an idle input state');
-player.gameMode = 'survival';
+player.toggleFlight();
 player.gameMode = 'classic';
 player.pos.set(8.5, 100, 8.5);
-player.classicFlying = true;
+player.toggleFlight();
 player.keys[player.bindings.forward] = true;
 const classicFlightStart = player.pos.z;
 player.update(0.1, world, null);
@@ -130,7 +132,18 @@ player.keys[player.bindings.forward] = false;
 player.health = 20;
 player.damage(8, null);
 assert.equal(player.health, 20, 'Classic creative play has no survival damage');
-player.gameMode = 'survival'; player.classicFlying = false;
+player.toggleFlight(); player.gameMode = 'survival';
+player.bindings.sprint = 'ControlLeft';
+player.keys[player.bindings.forward] = true;
+player.keys[player.bindings.sprint] = true;
+player.hunger = 7;
+player.update(0.05, world, null);
+assert.equal(player.sprinting, true, 'players can sprint when hunger is above six');
+player.hunger = 6;
+player.update(0.05, world, null);
+assert.equal(player.sprinting, false, 'sprinting stops at six hunger');
+player.keys[player.bindings.forward] = false;
+player.keys[player.bindings.sprint] = false;
 
 const saved = [...world.edits].map(([key, id]) => [key, id, world.metaEdits.get(key) || 0]);
 const restored = new World('gameplay-test', new THREE.Scene());
@@ -140,9 +153,10 @@ assert.equal(restored.getBlock(5, 100, 2), CAKE_BLOCK);
 assert.equal(restored.getMeta(5, 100, 2), 3, 'edits and metadata survive a fresh world load');
 console.log('ALL GAMEPLAY TESTS PASSED');
 
-// Beta food stack sizes: only cookies stack.
+// Release-era food stacks, with stew remaining a single-serving item.
 const { itemStackLimit, ITEMS } = await import('../src/world/blocks.js');
-assert.equal(itemStackLimit(260),1);
-assert.equal(itemStackLimit(297),1);
-assert.equal(itemStackLimit(357),8);
+assert.equal(itemStackLimit(260),64);
+assert.equal(itemStackLimit(297),64);
+assert.equal(itemStackLimit(357),64);
+assert.equal(itemStackLimit(282),1);
 assert.equal(ITEMS[357].food,2);

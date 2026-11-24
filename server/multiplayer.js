@@ -1,7 +1,7 @@
 /**
  * AiSlopcraft multiplayer relay + static file server.
  *
- * Wire protocol is unchanged from the previous version. Optional configuration:
+ * The legacy wire protocol is supported alongside terrain-aware rooms. Optional configuration:
  *
  *   PORT / HOST                          listen address (default 8787 / 0.0.0.0)
  *   AISLOPCRAFT_TRUST_PROXY_HOPS         verified number of proxies appending to X-Forwarded-For (1-10)
@@ -13,6 +13,7 @@
  *                                        shared proxy address would count as one client)
  */
 import { createServer } from 'node:http';
+import { OVERWORLD_TERRAIN, worldHeight } from '../src/world/world-profile.js';
 import { createReadStream, realpathSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
@@ -73,7 +74,6 @@ const ITEM_TTL_MS = 6 * 60_000; // clients despawn items at 5 minutes
 const PROJECTILE_TTL_MS = 15_000;
 const UNNAMED_IDLE_MS = 10 * 60_000;
 const COORD_LIMIT = 30_000_000;
-const WORLD_HEIGHT = 128;
 const ROOM_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const SHADER_STYLES = new Set(['classic', 'vibrant', 'cinematic', 'shader', 'psx']);
 const MAX_SHARED_ATLAS_BYTES = 512 * 1024;
@@ -100,11 +100,10 @@ const validRoom = value => /^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/.test(String
 const safeDirection = value => Array.isArray(value) && value.length === 2
   && DIRECTIONS.some(([x, z]) => x === value[0] && z === value[1]);
 
-const validBlockEdit = (x, y, z, id, meta) => [x, y, z, id, meta].every(Number.isInteger)
-  && y >= 0 && y < WORLD_HEIGHT && id >= 0 && id <= 255 && meta >= 0 && meta <= 255
-  && Math.abs(x) <= COORD_LIMIT && Math.abs(z) <= COORD_LIMIT;
-const validRoomBlockEdit = (room, x, y, z, id, meta) => validBlockEdit(x, y, z, id, meta)
-  && (room.edition !== 'classic' || (y <= 63 && x >= -128 && x <= 127 && z >= -128 && z <= 127));
+const validRoomBlockEdit = (room, x, y, z, id, meta) => [x, y, z, id, meta].every(Number.isInteger)
+  && y >= 0 && y < worldHeight(room.edition, room.terrain) && id >= 0 && id <= 255 && meta >= 0 && meta <= 255
+  && Math.abs(x) <= COORD_LIMIT && Math.abs(z) <= COORD_LIMIT
+  && (room.edition !== 'classic' || (x >= -128 && x <= 127 && z >= -128 && z <= 127));
 
 function envInt(name, fallback) {
   const value = Number.parseInt(process.env[name] ?? '', 10);
@@ -575,7 +574,7 @@ export function createMultiplayerServer({
 
   const roomSummary = room => ({
     code: room.code, name: room.name, players: room.clients.size, maxPlayers, seed: room.seed,
-    edition: room.edition || 'beta', gameMode: room.gameMode, access: room.access, passwordProtected: Boolean(room.password), visualMode: room.visuals?.mode || 'individual',
+    edition: room.edition || 'beta', ...(room.terrain ? { terrain: room.terrain } : {}), gameMode: room.gameMode, access: room.access, passwordProtected: Boolean(room.password), visualMode: room.visuals?.mode || 'individual',
   });
 
   function resetRoomState(socket) {
@@ -634,7 +633,7 @@ export function createMultiplayerServer({
     send(socket, {
       type: 'room:joined', requestId, id, code: room.code, name: room.name,
       playerName: name, role: socket === room.host ? 'host' : 'guest',
-      edition: room.edition || 'beta', gameMode: room.gameMode, seed: room.seed, access: room.access, visuals: room.visuals,
+      edition: room.edition || 'beta', ...(room.terrain ? { terrain: room.terrain } : {}), gameMode: room.gameMode, seed: room.seed, access: room.access, visuals: room.visuals,
       players: [...room.clients].map(peer => ({ id: peer.clientId, name: peer.playerName, role: peer === room.host ? 'host' : 'player' })),
     });
     if (socket !== room.host) {
@@ -690,26 +689,31 @@ export function createMultiplayerServer({
 
   function handleRoomsList(socket, message, requestId) {
     if (!allowRate(socket, 'rooms:list', 30, 10_000)) return fail(socket, requestId, 'The room list is refreshing too quickly. Try again in a moment.');
+    const terrain = message.terrain === OVERWORLD_TERRAIN ? OVERWORLD_TERRAIN : null;
     const publicRooms = [...rooms.values()]
-      .filter(room => room.access === 'public' && room.clients.size < maxPlayers)
+      .filter(room => room.access === 'public' && room.clients.size < maxPlayers && (!room.terrain || room.terrain === terrain))
       .map(roomSummary).sort((a, b) => b.players - a.players || a.name.localeCompare(b.name));
-    send(socket, { type: 'rooms:list', requestId, rooms: publicRooms });
+    send(socket, { type: 'rooms:list', requestId, rooms: publicRooms, ...(terrain ? { terrain } : {}) });
   }
 
   /* ----------------------- room lifecycle ------------------------ */
 
   async function handleRoomCreate(socket, message, requestId) {
     if (!socket.playerName) return fail(socket, requestId, 'Choose an available player name before creating a room.');
-    if (message.edition !== 'classic') return fail(socket, requestId, 'Online rooms are available only in the Classic edition.');
+    if (!['beta', 'classic'].includes(message.edition)) return fail(socket, requestId, 'Unsupported world edition.');
+    const terrain = message.terrain ?? null;
+    if (terrain !== null && (message.edition !== 'beta' || terrain !== OVERWORLD_TERRAIN)) return fail(socket, requestId, 'Unsupported world terrain.');
+    if (terrain && (typeof message.seed !== 'string' || !message.seed.length || message.seed.length > 128)) return fail(socket, requestId, 'Choose a valid world seed.');
+    if (message.edition === 'beta' && message.gameMode != null && !['survival', 'creative'].includes(message.gameMode)) return fail(socket, requestId, 'Choose Survival or Creative.');
     if (socket.room) return fail(socket, requestId, 'Leave your current room first.');
     if (!allowRate(socket, 'room:create', 20, 60_000)) return fail(socket, requestId, 'You are creating rooms too quickly. Wait a minute and try again.');
     const playerName = socket.playerName;
     const name = cleanText(message.name, 32) || `${playerName}’s world`;
     const password = String(message.password ?? '').slice(0, 64);
     const access = message.access === 'private' ? 'private' : 'public';
-    const edition = 'classic';
-    const gameMode = 'creative';
-    const seed = cleanText(message.seed, 80) || 'Classic';
+    const edition = message.edition;
+    const gameMode = edition === 'classic' ? 'creative' : message.gameMode || 'survival';
+    const seed = terrain ? message.seed : cleanText(message.seed, 80) || 'AiSlopcraft';
     if (password.length && password.length < 4) return fail(socket, requestId, 'Passwords must be at least four characters.');
     if (rooms.size >= maxRooms) return fail(socket, requestId, `All ${maxRooms} rooms are in use. Try again later.`);
     if (password && !protectedCreateLimiter.allow(socket.addressKey)) return fail(socket, requestId, 'Too many password-protected rooms were created recently. Wait a minute and try again.');
@@ -720,7 +724,7 @@ export function createMultiplayerServer({
       if (socket.readyState !== WebSocket.OPEN || socket.room || !socket.playerName) return;
       if (rooms.size >= maxRooms) return fail(socket, requestId, `All ${maxRooms} rooms are in use. Try again later.`);
       const room = {
-        code: createCode(), name, playerName, access, edition, gameMode, seed, visuals, password: record,
+        code: createCode(), name, playerName, access, edition, terrain, gameMode, seed, visuals, password: record,
         clients: new Set(), edits: new Map(), items: new Map(), itemTimes: new Map(),
         gameState: null, mobs: [], vehicles: new Map(), projectiles: new Map(), host: socket,
       };
@@ -730,7 +734,7 @@ export function createMultiplayerServer({
   }
 
   async function handleRoomJoin(socket, message, requestId) {
-    if (message.edition !== 'classic') return fail(socket, requestId, 'Online rooms are available only in the Classic edition.');
+    if (!['beta', 'classic'].includes(message.edition)) return fail(socket, requestId, 'Unsupported world edition.');
     const code = String(message.code ?? '').trim().toUpperCase();
     const room = rooms.get(code);
     if (!validRoom(code) || !room) {
@@ -742,6 +746,7 @@ export function createMultiplayerServer({
     if (!(await passwordMatches(room.password, String(message.password ?? '').slice(0, 64)))) return fail(socket, requestId, 'Incorrect room password.');
     const requestedEdition = message.edition === 'classic' ? 'classic' : 'beta';
     if ((room.edition || 'beta') !== requestedEdition) return fail(socket, requestId, `This room uses the ${room.edition || 'beta'} edition. Open that edition to join.`);
+    if (room.terrain && message.terrain !== room.terrain) return fail(socket, requestId, 'This room uses a newer world generator. Update your game and rejoin.');
     if (socket.readyState !== WebSocket.OPEN || !socket.playerName) return;
     if (rooms.get(code) !== room) return fail(socket, requestId, 'Room not found. Check the code or ask the host to reopen it.');
     join(socket, room, socket.playerName, requestId);
@@ -918,7 +923,7 @@ export function createMultiplayerServer({
   function handleTntIgnite(socket, message, requestId, room) {
     const now = Date.now();
     const { x, y, z } = message;
-    if (socket === room.host || now - socket.lastTntAt < 500 || !socket.lastState || ![x, y, z].every(Number.isInteger) || y < 0 || y >= WORLD_HEIGHT
+    if (socket === room.host || now - socket.lastTntAt < 500 || !socket.lastState || !validRoomBlockEdit(room, x, y, z, 0, 0)
       || Math.hypot(x + 0.5 - socket.lastState.x, z + 0.5 - socket.lastState.z) > TNT_RANGE) return;
     socket.lastTntAt = now;
     send(room.host, { type: 'tnt:ignite', x, y, z });
