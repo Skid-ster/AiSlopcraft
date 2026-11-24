@@ -22,10 +22,10 @@ export class FluidSimulator {
     });
   }
   loaded(x, y, z) {
-    return y >= 0 && y < WORLD_H && !!this.world.getChunk(Math.floor(x / CH), Math.floor(z / CH))?.generated;
+    return y >= 0 && y < (this.world.height ?? WORLD_H) && !!this.world.getChunk(Math.floor(x / CH), Math.floor(z / CH))?.generated;
   }
   schedule(x, y, z) {
-    if (y < 0 || y >= WORLD_H) return;
+    if (y < 0 || y >= (this.world.height ?? WORLD_H)) return;
     const key = `${x},${y},${z}`;
     if (!this.loaded(x, y, z)) {
       const ck = this.world.key(Math.floor(x / CH), Math.floor(z / CH));

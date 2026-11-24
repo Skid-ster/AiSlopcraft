@@ -1,7 +1,7 @@
 // Incremental, cross-chunk voxel lighting. Sky and emitted light are independent
 // 0..15 channels. Removal uses a flood-fill of stale light followed by a re-add
 // pass from surviving sources, so breaking a torch never leaves a bright ghost.
-import { CH, WORLD_H } from './chunk.js';
+import { CH } from './chunk.js';
 import { AIR, WATER, WATER_FLOW, ICE, LEAVES, WOOD_DOOR, IRON_DOOR, REDSTONE_TORCH, getBlock } from './blocks.js';
 
 const DIRS = [[0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1], [1, 0, 0], [-1, 0, 0]];
@@ -32,7 +32,7 @@ export class WorldLighting {
   }
 
   cell(x, y, z) {
-    if (y < 0 || y >= WORLD_H) return null;
+    if (y < 0 || y >= this.world.height) return null;
     const cx = Math.floor(x / CH), cz = Math.floor(z / CH);
     const chunk = this.world.getChunk(cx, cz);
     if (!chunk?.generated || !chunk.lightingReady) return null;
@@ -70,29 +70,43 @@ export class WorldLighting {
     const x0 = chunk.cx * CH, z0 = chunk.cz * CH;
     for (let z = 0; z < CH; z++) for (let x = 0; x < CH; x++) {
       let light = 15;
-      for (let y = WORLD_H - 1; y >= 0; y--) {
+      for (let y = chunk.height - 1; y >= 0; y--) {
         const i = idx(x, y, z), id = chunk.blocks[i];
         const opacity = lightOpacity(id, chunk.meta[i]);
         const filter = lightFilter(id, chunk.meta[i]);
         if (opacity >= 15) light = 0;
         else if (filter > 0) light = Math.max(0, light - filter);
         chunk.skyLight[i] = light;
-        if (light > 0) skyQ.push(x0 + x, y, z0 + z, light);
         const emission = lightEmission(id, chunk.meta[i]);
         chunk.blockLight[i] = emission;
         if (emission > 0) blockQ.push(x0 + x, y, z0 + z, emission);
+      }
+    }
+    // Vertical sunlight is already settled. Seed only the horizontal frontier
+    // where it can spread, not every full-bright voxel in 190 layers of air.
+    for (let y = 0; y < chunk.height; y++) for (let z = 0; z < CH; z++) for (let x = 0; x < CH; x++) {
+      const i = idx(x, y, z), s = chunk.skyLight[i];
+      if (s <= 1) continue;
+      if ((x > 0 && chunk.skyLight[i - 1] < s - 1 && lightOpacity(chunk.blocks[i - 1], chunk.meta[i - 1]) < 15)
+        || (x < CH - 1 && chunk.skyLight[i + 1] < s - 1 && lightOpacity(chunk.blocks[i + 1], chunk.meta[i + 1]) < 15)
+        || (z > 0 && chunk.skyLight[i - CH] < s - 1 && lightOpacity(chunk.blocks[i - CH], chunk.meta[i - CH]) < 15)
+        || (z < CH - 1 && chunk.skyLight[i + CH] < s - 1 && lightOpacity(chunk.blocks[i + CH], chunk.meta[i + CH]) < 15)) {
+        skyQ.push(x0 + x, y, z0 + z, s);
       }
     }
     this.touched.add(chunk);
     for (const [dx, dz] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
       const neighbor = this.world.getChunk(chunk.cx + dx, chunk.cz + dz);
       if (!neighbor?.lightingReady) continue;
-      for (let y = 0; y < WORLD_H; y++) for (let t = 0; t < CH; t++) {
+      for (let y = 0; y < chunk.height; y++) for (let t = 0; t < CH; t++) {
         const x = dx === -1 ? 0 : dx === 1 ? CH - 1 : t;
         const z = dz === -1 ? 0 : dz === 1 ? CH - 1 : t;
         const nx = dx === -1 ? CH - 1 : dx === 1 ? 0 : x;
         const nz = dz === -1 ? CH - 1 : dz === 1 ? 0 : z;
         const ni = idx(nx, y, nz), i = idx(x, y, z);
+        if (chunk.skyLight[i] > neighbor.skyLight[ni] + 1 && lightOpacity(neighbor.blocks[ni], neighbor.meta[ni]) < 15) {
+          skyQ.push(x0 + x, y, z0 + z, chunk.skyLight[i]);
+        }
         if (lightOpacity(chunk.blocks[i], chunk.meta[i]) >= 15) continue;
         const filter = lightFilter(chunk.blocks[i], chunk.meta[i]);
         const cost = Math.max(1, filter);
@@ -138,6 +152,11 @@ export class WorldLighting {
         const nx = x + DIRS[d][0], ny = y + DIRS[d][1], nz = z + DIRS[d][2];
         const neighbor = this.get(nx, ny, nz, sky);
         if (neighbor <= 0) continue;
+        if (sky && ny === this.world.maxWorldY) {
+          // Independent of adjacent blocks: the sky directly feeds this plane.
+          additions.push(nx, ny, nz, neighbor);
+          continue;
+        }
         const sunColumn = sky && d === 1 && level === 15 && neighbor === 15 && this.opacity(nx, ny, nz) === 0;
         if (neighbor < level || sunColumn) {
           this.set(nx, ny, nz, sky, 0);
@@ -177,13 +196,13 @@ export class WorldLighting {
     for (const sky of [true, false]) {
       const old = this.get(x, y, z, sky);
       const opacityChanged = newOpacity !== oldOpacity;
-      const next = sky ? (newOpacity >= 15 || opacityChanged ? 0 : old) : (emission > 0 ? emission : (opacityChanged || oldEmission > 0 ? 0 : old));
+      const next = sky ? (y === c.chunk.height - 1 ? 15 - newOpacity : newOpacity >= 15 || opacityChanged ? 0 : old)
+        : (emission > 0 ? emission : (opacityChanged || oldEmission > 0 ? 0 : old));
       this.set(x, y, z, sky, next);
       if (old > 0 && (opacityChanged || (!sky && emission < old))) {
-        const additions = [];
-        this.remove([x, y, z, old], sky, additions);
-        (sky ? skyQ : blockQ).push(...additions);
+        this.remove([x, y, z, old], sky, sky ? skyQ : blockQ);
       }
+      if (sky && next > 0) skyQ.push(x, y, z, next);
     }
     this.seedNeighbors(x, y, z, skyQ, blockQ);
     this.add(skyQ, true);
@@ -201,12 +220,14 @@ export class WorldLighting {
     for (const [dx, dz] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
       const neighbor = this.world.getChunk(chunk.cx + dx, chunk.cz + dz);
       if (!neighbor?.lightingReady) continue;
-      for (let y = 0; y < WORLD_H; y++) for (let t = 0; t < CH; t++) {
+      for (let y = 0; y < chunk.height; y++) for (let t = 0; t < CH; t++) {
         const x = dx === -1 ? CH - 1 : dx === 1 ? 0 : t;
         const z = dz === -1 ? CH - 1 : dz === 1 ? 0 : t;
         const wx = neighbor.cx * CH + x, wz = neighbor.cz * CH + z;
         const s = this.get(wx, y, wz, true), b = this.get(wx, y, wz, false);
-        if (s > 0) { this.set(wx, y, wz, true, 0); skyQ.push(wx, y, wz, s); }
+        if (s === 15 || y === chunk.height - 1) {
+          if (s > 0) skyAdd.push(wx, y, wz, s);
+        } else if (s > 0) { this.set(wx, y, wz, true, 0); skyQ.push(wx, y, wz, s); }
         if (b > 0) { this.set(wx, y, wz, false, 0); blockQ.push(wx, y, wz, b); }
       }
     }

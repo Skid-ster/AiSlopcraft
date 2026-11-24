@@ -8,17 +8,18 @@ Survival includes hunger, held-to-eat food, regeneration, starvation, and sprint
 
 ## Features
 
-- **Singleplayer worlds:** create named Survival or Creative worlds with optional seeds, autosaves, rename/delete/re-create, and portable save import/export. Existing Classic saves retain their original rules and terrain.
-- **Explore:** seeded rolling terrain, caves, ores, beaches, deserts, snowy areas, forests, trees, and plants across a 128-block world.
+- **Singleplayer worlds:** create named Survival or Creative worlds with optional seeds, autosaves, rename/delete/re-create, and portable save import/export. Existing Classic and Beta saves keep their original terrain and build limits.
+- **Explore:** new Overworlds build from Y=0 through Y=255. A versioned, seed-based generator creates river valleys, ridges, forests, deserts, snow, caves, and ores. The same seed and generator produce the same terrain regardless of chunk load order.
+- **Create:** search or filter the Creative catalog, fill a chosen hotbar slot, break blocks instantly, and build without using up supplies. Double-tap Jump to toggle collision-aware flight, or use the Fly button on touch.
 - **Mine, build, and survive:** block breaking and placement, voxel movement and collision, jumping, sneaking, swimming, fall/drowning/lava damage, tools and weapon durability, item drops and pickup, hearts, armor, and inventory.
 - **Craft and smelt:** 2×2 inventory recipes, 3×3 crafting-table recipes, and furnaces with input, fuel, progress, and output slots.
 - **Farm and build:** till and irrigate farmland, grow and harvest crops, plant saplings, use doors, ladders, beds, cake, buckets, TNT, and more.
-- **Meet the mobs:** farm animals and hostile night creatures, including zombie and skeleton sunlight damage, creeper fuses, spider movement, mob drops, melee combat, and skeleton arrows. Peaceful, Easy, Normal, and Hard difficulty settings adjust hostile encounters and damage.
+- **Meet the mobs:** farm animals and hostile creatures that spawn at night or in dark caves. Torches protect nearby spawn spaces; zombies and skeletons burn in direct sunlight. Peaceful, Easy, Normal, and Hard difficulty settings adjust hostile encounters and damage.
 - **Multiplayer:** choose a temporary unique player name—no account required—and browse public Survival or Creative worlds. The relay allows up to five rooms and five players per room. Rooms are temporary and do not overwrite singleplayer saves. See [Multiplayer](#multiplayer) for the important synchronization limitations.
 - **Tune the look and performance:** a native Three.js/WebGL renderer with five live presets—Classic, Vibrant, Cinematic, Shader Lite, and **PSX (1.7.10)**. Cinematic and Shader Lite use stabilized directional sun shadows; Shader Lite adds reflective water, fine animated ripples, specular highlights, and sunlit glints. Video settings include Fast/Fancy rendering and All/Decreased/Minimal particles; Fast reduces internal resolution and skips dynamic shadow rendering. PSX is a real multi-pass WebGL preset adapted from the PS1-style affine mapping, depth-scaled vertex snapping, 25% render resolution, 24-step color grading, and ordered dithering in [ckosmic/Minecraft-PSX](https://github.com/ckosmic/minecraft-psx), whose README documents testing on Minecraft 1.7.10 and whose repository declares MIT terms (the checked-in license still has unfilled copyright placeholders). The shader logic is adapted to AiSlopcraft's Three.js render pipeline; it does not make arbitrary OptiFine shaderpack ZIPs executable. Fog, day/night lighting, brightness, and local light on entities are supported.
 - **Use the classic-style interface:** title and texture-pack screens, options, inventory and crafting, hotbar, health/armor/air indicators, pause and death screens, item tooltips, and an F3 debug overlay.
 
-**Current limits:** The world is 128 blocks high, Creative starts with a small block palette rather than a searchable catalog, and Creative flight is unrestricted rather than the Java 1.7.10 flight system. Food effects and other mechanics are approximations. Multiplayer Survival does not have authoritative inventories or synchronized container transactions.
+**Current limits:** Food, mobs, terrain, and other mechanics are approximations. Java worlds/seeds are not compatible, and there is no XP/enchanting, Nether, or End progression. Multiplayer Survival does not have authoritative inventories or synchronized container transactions.
 
 ## Play locally
 
@@ -32,6 +33,8 @@ npm run dev
 Open the local URL printed by Vite (normally `http://localhost:5173`). **Singleplayer** lists existing saves and creates Survival or Creative worlds; **Multiplayer** opens the lobby. Local worlds autosave every 15 seconds and when the tab is hidden during play. You can also save from the pause menu. **World Saves** imports and exports portable JSON saves. Online rooms are temporary and never overwrite singleplayer saves.
 
 On Windows, `npm test` prints a skip for the file-symlink assertion if the OS denies symlink creation. Enable Developer Mode or run with symlink privileges to exercise that assertion locally. All other tests still run; the server's symlink protection is unchanged.
+
+New Overworld backups use save format v2, which older builds intentionally reject rather than loading with the wrong terrain or dropping tall edits. Browser storage keeps Overworld saves separate from v1 Classic (64 blocks) and Beta (128 blocks) saves, so a cached older build cannot overwrite them. Development v2 saves move to the new storage key when opened or listed if there is room for a safe copy; if space is low, download a backup before using an older build. **Re-Create** makes a fresh copy from the selected seed and generator without replacing the original.
 
 To make a production build:
 
@@ -71,7 +74,7 @@ The public service is [aislopcraft-online.onrender.com](https://aislopcraft-onli
 
 A `render.yaml` Blueprint is included for a single combined web service. In Render, choose **New → Blueprint**, connect this repository and the branch you want to publish, then review and create the `aislopcraft-online` service. The Blueprint builds the frontend and runs `npm start`; the Node engine range selects [Node 22 on Render](https://render.com/docs/node-version). The relay binds to Render's `PORT` (8787 by default locally) and `/health` checks the built app is ready. Players use the same site URL without entering a relay address. The Blueprint requests the `free` plan where available; keep one instance because room/name state is process-local. Free services may sleep, and rooms and names do not survive restarts or deploys. After deployment, run `BASE_URL=https://<your-service>.onrender.com npm run smoke:deploy` (PowerShell: set `$env:BASE_URL` first). Share the service URL only after it passes. **The Blueprint does not provision a live service by itself.**
 
-Players on different networks connect to the same service URL. The host and guests need the same world seed; invite links include the host's seed and service URL.
+Players on different networks connect to the same service URL. Invite links include the host's seed, terrain profile and service URL. The relay hides tall rooms from old clients and rejects their joins; legacy room discovery and joins still work.
 
 ### Player names and live leaderboard
 
@@ -83,7 +86,7 @@ Room-password throttling ignores `X-Forwarded-For` by default because arbitrary 
 
 When creating a room, the host can choose **Let each player choose** or **Force the host's shader and texture pack**. Individual mode is the default and leaves every player's visuals untouched. In forced mode the host selects a built-in shader style and an installed texture pack (or default textures); the supported 256×256 block atlas is relayed to room members, and each client restores its personal shader and textures after leaving. Shared atlas payloads are capped at 512 KB and held only in relay memory while the room is open.
 
-Rooms share block edits, chat, player positions, world time, and host-simulated entities. **Survival inventory is not authoritative or fully synchronized.** Current clients restrict chest and furnace use and mining to the host, and do not allow storage minecarts to be placed, opened or destroyed in multiplayer. These are client-side safeguards, not protection against modified or older clients; play with trusted people and keep backups. Host edits are uploaded in validated batches, but movement and other actions are client-reported. Rooms are temporary and are not saved by the relay. The service relays traffic rather than using peer-to-peer connections, so players do not expose local ports.
+Rooms share block edits, chat, player positions, world time, and host-simulated entities. Opening a menu online stops your input, not the shared world. **Survival inventory is not authoritative or fully synchronized.** Current clients restrict chest and furnace use and mining to the host, and do not allow storage minecarts to be placed, opened or destroyed in multiplayer. These are client-side safeguards, not protection against modified or older clients; play with trusted people and keep backups. Host edits are uploaded in validated batches, but movement and other actions are client-reported. Rooms are temporary and are not saved by the relay. The service relays traffic rather than using peer-to-peer connections, so players do not expose local ports.
 
 For local development, run `npm run multiplayer` in one terminal and `npm run dev` in another. Vite proxies the lobby's same-origin `/ws` connection to the local room service, so the address field can stay blank. The **Advanced** setting is only for overriding the endpoint or connecting from static-only hosting.
 
@@ -99,9 +102,9 @@ For local development, run `npm run multiplayer` in one terminal and `npm run de
 | Left click (hold) | Break blocks or attack mobs |
 | Right click (hold) | Place blocks, use items, or eat |
 | 1–9 / scroll wheel | Select hotbar slot |
-| E | Inventory; close a container |
+| E | Inventory or Creative catalog; close a container |
 | B | Open or close the block picker in a legacy Classic world |
-| Double-tap Space | Toggle flight in a legacy Classic world |
+| Double-tap Space | Toggle flight in Creative or a legacy Classic world; use Jump/Sneak to rise/descend |
 | Q | Drop one held item; Ctrl+Q drops the stack |
 | Esc | Pause or close the current screen |
 | F3 | Toggle debug overlay |

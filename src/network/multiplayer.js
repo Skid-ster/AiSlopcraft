@@ -1,3 +1,5 @@
+import { OVERWORLD_TERRAIN } from '../world/world-profile.js';
+
 const REQUEST_TIMEOUT_MS = 12_000;
 const CONNECT_TIMEOUT_MS = 60_000;
 
@@ -103,7 +105,7 @@ export class MultiplayerClient {
     return true;
   }
 
-  listRooms() { return this.request('rooms:list'); }
+  listRooms() { return this.request('rooms:list', { terrain: OVERWORLD_TERRAIN }); }
   listOnlinePlayers() { return this.request('players:list'); }
   claimPlayerName(name) {
     return this.request('player:claim', { name }).then(message => {
@@ -126,7 +128,10 @@ export class MultiplayerClient {
     return Math.max(0, Math.round(now() - startedAt));
   }
   createRoom(options) { return this.request('room:create', options).then(message => { this.room = message; return message; }); }
-  joinRoom(options) { return this.request('room:join', options).then(message => { this.room = message; return message; }); }
+  joinRoom(options) {
+    this.earlyMessages.clear();
+    return this.request('room:join', { ...options, terrain: OVERWORLD_TERRAIN }).then(message => { this.room = message; return message; });
+  }
   leave() {
     const room = this.room;
     this.room = null;

@@ -3,7 +3,8 @@ import * as THREE from 'three';
 import { World } from './world/world.js';
 import { applySavedEdits, selectSpawn } from './world/world-loader.js';
 import { CLASSIC_BLOCKS, isClassicBlock } from './classic.js';
-import { CH, WORLD_H, SEA_LEVEL } from './world/chunk.js';
+import { CH, SEA_LEVEL } from './world/chunk.js';
+import { OVERWORLD_TERRAIN } from './world/world-profile.js';
 import { buildChunkMesh } from './world/mesher.js';
 import { buildAtlas, buildItemIcons, buildEmissionAtlas } from './world/textures.js';
 import { extractBlockSprites, paintBlockSprites } from './world/resource-pack.js';
@@ -26,7 +27,7 @@ import { ParticleManager } from './particles.js';
 import { FirstPersonArm } from './arm.js';
 import { Lighting, PSXPostProcess, SHADER_STYLES, shaderStyleId } from './rendering.js';
 import { loadSettings, persistSettings, sensitivityToRadians, keyLabel } from './settings.js';
-import { decodeWorldSave, encodeWorldSave, MAX_WORLD_SAVE_BYTES } from './save.js';
+import { decodeWorldSave, encodeWorldSave, MAX_WORLD_SAVE_BYTES, WORLD_SAVE_VERSION } from './save.js';
 import { createWorldSaveStore } from './save-manager.js';
 import { useOnBlock, useOnMob, growCrop, cropDrops } from './interactions.js';
 import { FluidSimulator } from './world/fluids.js';
@@ -173,18 +174,28 @@ const SEED = WORLD_PARAMS.get('seed') || 'Beta 1.7.3';
 const WORLD_ID = WORLD_PARAMS.get('id') || SEED;
 const WORLD_NAME = WORLD_PARAMS.get('world') || SEED;
 const REQUESTED_EDITION = WORLD_PARAMS.get('edition') === 'classic' ? 'classic' : null;
+const IS_ROOM_LINK = Boolean(WORLD_PARAMS.get('room'));
+const REQUESTED_TERRAIN = WORLD_PARAMS.get('terrain');
 const worldSaves = createWorldSaveStore(localStorage);
-function readSave() {
-  const save = worldSaves.read(WORLD_ID);
-  return save?.seed === SEED ? save : null;
+const requestedVersion = WORLD_PARAMS.get('saveVersion');
+const selectedSaveVersion = requestedVersion === String(WORLD_SAVE_VERSION) ? WORLD_SAVE_VERSION
+  : requestedVersion === '1' || REQUESTED_TERRAIN === 'legacy' || REQUESTED_EDITION === 'classic' ? 1 : undefined;
+const storedSave = IS_ROOM_LINK ? null : worldSaves.read(WORLD_ID, selectedSaveVersion);
+const savedGame = storedSave?.seed === SEED ? storedSave : null;
+let saveConflict = false;
+try { saveConflict = !IS_ROOM_LINK && !savedGame && worldSaves.has(WORLD_ID); } catch { /* play without local storage */ }
+const EDITION = savedGame?.edition || REQUESTED_EDITION || 'beta';
+const unsupportedTerrain = !savedGame && REQUESTED_TERRAIN != null && !['legacy', OVERWORLD_TERRAIN].includes(REQUESTED_TERRAIN);
+const TERRAIN = EDITION === 'classic' ? null : savedGame ? savedGame.terrain ?? null
+  : REQUESTED_TERRAIN === OVERWORLD_TERRAIN || (!IS_ROOM_LINK && !REQUESTED_TERRAIN) ? OVERWORLD_TERRAIN : null;
+function setTerrainParam(url, terrain) {
+  url.searchParams.set('terrain', terrain || 'legacy');
 }
-const savedGame = readSave();
-const EDITION = REQUESTED_EDITION || savedGame?.edition || 'beta';
 const START_GAME_MODE = EDITION === 'classic' ? 'classic' : WORLD_PARAMS.get('mode') === 'creative' ? 'creative' : 'survival';
 const legacySettings = { ...savedGame?.settings };
 if (legacySettings.sensitivity > 0 && legacySettings.sensitivity < 1) legacySettings.sensitivity = legacySettings.sensitivity / 0.0044 * 100;
 const settings = loadSettings(localStorage, legacySettings);
-const world = new World(SEED, scene, EDITION);
+const world = new World(SEED, scene, EDITION, TERRAIN);
 applySavedEdits(world, savedGame?.edits);
 const fluids = new FluidSimulator(world);
 world.onChunkLoad((cx, cz) => fluids.chunkLoaded(cx, cz));
@@ -207,6 +218,8 @@ let sharedStateTimer = 0;
 const game = {
   world, player, audio, sky, mobs, renderer, lighting, fluids, redstone, vehicles,
   edition: EDITION,
+  onlineSession: IS_ROOM_LINK,
+  hasLocalSave: Boolean(savedGame) || saveConflict,
   atlasCanvas,
   worldName: savedGame?.worldName || WORLD_NAME,
   getResourcePackState() { return resourcePackState(); },
@@ -224,8 +237,10 @@ const game = {
     const url = new URL(location.href);
     url.searchParams.set('id', `menu-${token}`);
     url.searchParams.set('seed', `menu-${classic ? 'classic' : 'beta'}-${token}`);
-    url.searchParams.set('world', classic ? 'Classic Edition' : 'Beta Edition');
+    url.searchParams.set('world', classic ? 'Classic Edition' : 'AiSlopcraft');
     if (classic) url.searchParams.set('edition', 'classic'); else url.searchParams.delete('edition');
+    setTerrainParam(url, classic ? null : OVERWORLD_TERRAIN);
+    url.searchParams.delete('saveVersion');
     url.searchParams.delete('mode'); url.searchParams.delete('room'); url.searchParams.delete('relay'); url.searchParams.delete('launch');
     if (multiplayer) url.searchParams.set('multiplayer', '1'); else url.searchParams.delete('multiplayer');
     location.assign(url.href);
@@ -237,6 +252,8 @@ const game = {
     url.searchParams.set('seed', String(room.seed));
     url.searchParams.set('world', String(room.name || 'Shared Classic World'));
     url.searchParams.set('edition', room.edition === 'classic' ? 'classic' : 'beta');
+    setTerrainParam(url, room.terrain);
+    url.searchParams.delete('saveVersion');
     url.searchParams.set('room', String(room.code || ''));
     url.searchParams.delete('mode');
     url.searchParams.delete('launch');
@@ -245,28 +262,35 @@ const game = {
     if (relay) url.searchParams.set('relay', relay);
     location.assign(url.href);
   },
-  openLocalWorld(seed, name, gameMode = 'survival', worldId = seed, edition = 'beta') {
+  openLocalWorld(seed, name, gameMode = 'survival', worldId = seed, edition = 'beta', terrain = OVERWORLD_TERRAIN) {
     const url = new URL(location.href);
     url.searchParams.set('id', String(worldId));
     url.searchParams.set('seed', String(seed));
     url.searchParams.set('world', String(name || seed));
     url.searchParams.set('mode', gameMode === 'creative' ? 'creative' : gameMode === 'classic' ? 'classic' : 'survival');
     if (edition === 'classic') url.searchParams.set('edition', 'classic'); else url.searchParams.delete('edition');
+    setTerrainParam(url, edition === 'classic' ? null : terrain);
+    url.searchParams.set('saveVersion', String(edition !== 'classic' && terrain ? WORLD_SAVE_VERSION : 1));
     url.searchParams.delete('room');
     url.searchParams.delete('multiplayer');
     url.searchParams.set('launch', '1');
     location.assign(url.href);
   },
-  renameLocalWorld(worldId, name) {
-    worldSaves.rename(worldId, name);
+  newLocalWorldId(prefix) {
+    const token = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    let id = `${prefix}-${token}`;
+    for (let suffix = 1; worldSaves.has(id); suffix++) id = `${prefix}-${token}-${suffix}`;
+    return id;
   },
-  deleteLocalWorld(worldId) {
-    worldSaves.remove(worldId);
+  renameLocalWorld(worldId, name, terrain) {
+    worldSaves.rename(worldId, name, terrain ? WORLD_SAVE_VERSION : 1);
+  },
+  deleteLocalWorld(worldId, terrain) {
+    worldSaves.remove(worldId, terrain ? WORLD_SAVE_VERSION : 1);
     return true;
   },
-  recreateLocalWorld(worldId, seed, name, gameMode = 'survival', edition = 'beta') {
-    this.deleteLocalWorld(worldId);
-    this.openLocalWorld(seed, name, gameMode, worldId, edition);
+  recreateLocalWorld(_worldId, seed, name, gameMode = 'survival', edition = 'beta', terrain = null) {
+    this.openLocalWorld(seed, `${name.slice(0, 42)} Copy`, gameMode, this.newLocalWorldId('world'), edition, terrain);
   },
   getResourcePackForSharing(requestedId = resourcePackState().activeId) {
     if (requestedId == null) return null;
@@ -448,8 +472,7 @@ const game = {
         }
         if (typeof key !== 'string' || !Number.isInteger(id) || !Number.isInteger(meta ?? 0)) continue;
         const [x,y,z] = key.split(',').map(Number);
-        if (![x,y,z].every(Number.isInteger) || y < 0 || y >= WORLD_H) continue;
-        world.recordEdit(x,y,z,id,meta || 0);
+        if (!world.recordEdit(x,y,z,id,meta || 0)) continue;
         if (world.getChunk(Math.floor(x / CH), Math.floor(z / CH))?.generated) world.setBlock(x,y,z,id,meta || 0);
       }
     } finally { applyingNetworkEdit = false; }
@@ -458,7 +481,10 @@ const game = {
     this.networkOffs?.forEach(off => off());
     this.networkOffs = [];
     this.networkRoom = { ...room };
+    this.onlineSession = true;
+    this.hasJoinedRoom = true;
     this.multiplayerClient = client;
+    player.flying = false;
     player.gameMode = this.edition === 'classic' ? 'classic' : room.gameMode === 'creative' ? 'creative' : 'survival';
     for (const peer of room.players || []) if (peer.id !== room.id) createRemoteAvatar(peer.id, peer.name);
     const on = (type, handler) => this.networkOffs.push(client.on(type, handler));
@@ -528,6 +554,7 @@ const game = {
       for (const id of [...remotePlayers.keys()]) removeRemoteAvatar(id);
       ui?.updateNetworkPanel?.();
       ui?.notify?.(message?.reason || `Disconnected from ${closedName}.`);
+      if (this.started || this.loading) this.openEditionHome('beta', true);
     };
     on('room:closed', disconnectRoom);
     on('disconnected', disconnectRoom);
@@ -546,7 +573,7 @@ const game = {
     player.gameMode = 'survival';
     for (const id of [...remotePlayers.keys()]) removeRemoteAvatar(id);
     ui?.updateNetworkPanel?.();
-    ui?.notify?.('Left multiplayer. You are now in singleplayer.');
+    if (this.started || this.loading) this.openEditionHome();
   },
   onRenderDistanceChange() {
     updateChunks(true);
@@ -565,7 +592,7 @@ const game = {
     if (state) this.multiplayerClient.send('vehicle:update', { vehicle: state, riding });
   },
   syncSharedState() {
-    if (!this.networkRoom || !this.multiplayerClient) return;
+    if (this.networkRoom?.role !== 'host' || !this.multiplayerClient) return;
     this.multiplayerClient.send('game:state', { state: { timeOfDay: sky.timeOfDay, chests: [...chests], furnaces: [...furnaces] } });
     if (game.openChestData?.vehicle) this.publishVehicleState(game.openChestData.vehicle, false);
   },
@@ -596,7 +623,7 @@ const game = {
     persistSettings(localStorage, this.settings);
   },
   async saveAndQuit() {
-    if (this.networkRoom) await this.leaveMultiplayer();
+    if (this.networkRoom) { await this.leaveMultiplayer(); return true; }
     else if (!this.saveGame()) return false;
     const url = new URL(location.href);
     url.searchParams.delete('launch');
@@ -607,7 +634,7 @@ const game = {
     return true;
   },
   captureWorldSave() {
-    return { version: 1, worldId: WORLD_ID, seed: SEED, worldName: this.worldName, edition: this.edition, gameMode: player.gameMode,
+    return { version: world.terrain ? WORLD_SAVE_VERSION : 1, ...(world.terrain ? { terrain: world.terrain } : {}), worldId: WORLD_ID, seed: SEED, worldName: this.worldName, edition: this.edition, gameMode: player.gameMode,
       edits: [...world.edits].map(([key, id]) => [key, id, world.metaEdits.get(key) || 0]),
       settings: this.settings, spawnBed: this.spawnBed, timeOfDay: sky.timeOfDay, furnaces: [...furnaces], chests: [...chests], vehicles: vehicles.serialize(),
       items: itemEntities.filter(it => !it.dead).map(it => ({ id: it.id, count: it.count, damage: it.damage, pos: it.mesh.position.toArray(), vy: it.vy, age: it.age })),
@@ -615,18 +642,20 @@ const game = {
   },
   saveGame() {
     // Multiplayer rooms are temporary; never overwrite a local world with room state.
-    if (this.networkRoom) return false;
+    if (this.onlineSession || this.networkRoom || saveConflict || unsupportedTerrain) return false;
     try {
-      worldSaves.write(this.captureWorldSave());
+      worldSaves.write(this.captureWorldSave(), { createOnly: !this.hasLocalSave });
+      this.hasLocalSave = true;
       return true;
     } catch (error) { console.warn('Could not save world', error); ui?.notify('Save failed — browser storage may be full'); return false; }
   },
-  exportWorldSave(requestedWorldId = WORLD_ID) {
-    if (this.networkRoom && requestedWorldId === WORLD_ID) throw new Error('Leave the multiplayer room before exporting a local world save.');
+  exportWorldSave(requestedWorldId = WORLD_ID, terrain = undefined) {
+    if ((this.onlineSession || this.networkRoom) && requestedWorldId === WORLD_ID) throw new Error('Leave the multiplayer room before exporting a local world save.');
+    const version = terrain === undefined ? savedGame?.version ?? selectedSaveVersion : terrain ? WORLD_SAVE_VERSION : 1;
     // Download current progress directly, even if the browser will not store it.
-    const save = this.started && requestedWorldId === WORLD_ID
+    const save = this.started && requestedWorldId === WORLD_ID && (terrain === undefined || terrain === world.terrain)
       ? this.captureWorldSave()
-      : worldSaves.read(requestedWorldId);
+      : worldSaves.read(requestedWorldId, version);
     if (!save || save.worldId !== requestedWorldId) throw new Error('There is no saved world for that selection yet.');
     const blob = new Blob([encodeWorldSave(save)], { type: 'application/json' });
     const href = URL.createObjectURL(blob);
@@ -640,31 +669,33 @@ const game = {
   async importWorldSaveFile(file) {
     if (!file || file.size > MAX_WORLD_SAVE_BYTES) throw new Error('Save file is too large (maximum 16 MB).');
     let save = decodeWorldSave(await file.text());
-    if (worldSaves.has(save.worldId)) {
-      const newId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      save = { ...save, worldId: `import-${newId}`.slice(0, 128) };
+    try {
+      if (worldSaves.has(save.worldId)) save = { ...save, worldId: this.newLocalWorldId('import') };
+      worldSaves.write(save, { createOnly: true });
+    } catch (error) {
+      if (error.name === 'QuotaExceededError') throw new Error('Browser storage is full. Free some space and try again. Existing saves were not changed.');
+      throw error;
     }
-    try { worldSaves.write(save); }
-    catch { throw new Error('Browser storage is full. Remove another saved world or clear browser site data, then try again.'); }
     persistSettings(localStorage, save.settings);
-    const url = new URL(location.href);
-    url.searchParams.set('id', save.worldId);
-    url.searchParams.set('seed', save.seed);
-    url.searchParams.set('world', save.worldName || save.seed);
-    url.searchParams.set('mode', save.gameMode);
-    if (save.edition === 'classic') url.searchParams.set('edition', 'classic'); else url.searchParams.delete('edition');
-    url.searchParams.delete('room');
-    url.searchParams.delete('multiplayer');
-    url.searchParams.set('launch', '1');
-    location.assign(url.href);
+    this.openLocalWorld(save.seed, save.worldName, save.gameMode, save.worldId, save.edition, save.terrain ?? null);
     return true;
   },
   resetWorld() {
-    try { worldSaves.remove(WORLD_ID); } catch {}
-    location.reload();
+    if (this.onlineSession || saveConflict || unsupportedTerrain) return;
+    try {
+      const id = this.newLocalWorldId('world');
+      worldSaves.remove(WORLD_ID, world.terrain ? WORLD_SAVE_VERSION : 1);
+      this.started = false; // Do not resurrect the deleted save in beforeunload.
+      this.openLocalWorld(SEED, this.worldName, savedGame?.gameMode ?? player.gameMode, id, EDITION, world.terrain);
+    } catch (error) { ui.notify(error.message); }
   },
   start() {
     if (this.started || this.loading) return;
+    if (!this.networkRoom && (saveConflict || unsupportedTerrain || this.onlineSession)) {
+      ui.setMode('title');
+      ui.notify('This world cannot be opened from this link. Your existing saves were not changed.');
+      return;
+    }
     this.loading = true;
     ui.showLoading(true);
     // Give the loading screen a frame to paint before synchronous spawn setup.
@@ -673,7 +704,7 @@ const game = {
         this.started = true;
         const spawn = this.prepareSpawn();
         player.respawn(spawn.y, spawn.x, spawn.z);
-        const saved = readSave()?.player;
+        const saved = savedGame?.player;
         if (saved && Array.isArray(saved.pos) && saved.pos.length === 3 && saved.pos.every(Number.isFinite)) {
           player.pos.fromArray(saved.pos); player.yaw = Number(saved.yaw) || 0; player.pitch = Number(saved.pitch) || 0;
           player.health = Math.max(1, Math.min(player.maxHealth, Number(saved.health) || player.maxHealth));
@@ -692,7 +723,7 @@ const game = {
           for (let i = 0; i < palette.length; i++) if (!player.inventory[i]) player.inventory[i] = { id: palette[i], count: 1, damage: 0 };
         }
         if (this.edition === 'classic') {
-          player.classicFlying = false;
+          player.flying = false;
           player.health = player.maxHealth;
           player.dead = false;
           player.armor.fill(null);
@@ -1043,7 +1074,7 @@ function applySharedGameState(state) {
   if (ui?.mode === 'furnace') refreshFurnace();
 }
 
-function updateItems(dt) {
+function updateItems(dt, allowPickup) {
   for (const it of itemEntities) {
     const loaded = world.getChunk(Math.floor(it.mesh.position.x / CH), Math.floor(it.mesh.position.z / CH));
     it.mesh.visible = !!loaded?.generated;
@@ -1066,7 +1097,7 @@ function updateItems(dt) {
 
     // pickup
     const dx = it.mesh.position.x - player.pos.x, dy = it.mesh.position.y - player.pos.y - 0.8, dz = it.mesh.position.z - player.pos.z;
-    if (!player.dead && dx * dx + dy * dy + dz * dz < 1.4 * 1.4 && it.age > 0.4 && !it.pendingPickup) {
+    if (allowPickup && !player.dead && dx * dx + dy * dy + dz * dz < 1.4 * 1.4 && it.age > 0.4 && !it.pendingPickup) {
       if (networked) {
         it.pendingPickup = game.multiplayerClient?.send('item:pickup', { uid: it.uid }) || false;
       } else {
@@ -1236,7 +1267,7 @@ function tryPlaceBlock() {
     const [dx, , dz] = STRUCTURE_DIRECTIONS[meta & 3];
     const hx = px + (placeId === BED_BLOCK ? dx : 0), hy = py + (placeId === BED_BLOCK ? 0 : 1), hz = pz + (placeId === BED_BLOCK ? dz : 0);
     const hc = world.getChunk(Math.floor(hx / CH), Math.floor(hz / CH));
-    if (hy >= WORLD_H || !hc?.generated || world.getBlock(hx,hy,hz) !== AIR) return;
+    if (hy >= world.height || !hc?.generated || world.getBlock(hx,hy,hz) !== AIR) return;
     if (placeId === BED_BLOCK && !getBlock(world.getBlock(hx,hy-1,hz)).solid) return;
     if (hx+1 > pminX && hx < pmaxX && hy+1 > pminY && hy < pmaxY && hz+1 > pminZ && hz < pmaxZ) return;
     if (!world.setBlock(px,py,pz,placeId,meta)) return;
@@ -1786,8 +1817,9 @@ function frame() {
   lastT = now;
   if (dt > 0.1) dt = 0.1;
   const simulationPaused = game.started && ui.mode !== 'title' &&
-    ['pause', 'death', 'inventory', 'crafting', 'furnace', 'chest'].includes(ui.mode);
-  if (!simulationPaused) game.time += dt;
+    ['pause', 'death', 'creative', 'inventory', 'crafting', 'furnace', 'chest'].includes(ui.mode);
+  const networked = Boolean(game.networkRoom);
+  if (!simulationPaused || networked) game.time += dt;
   if (game.started && ui.mode !== 'title' && !game.networkRoom) {
     saveClock += dt;
     if (saveClock >= 15) { game.saveGame(); saveClock = 0; }
@@ -1804,6 +1836,10 @@ function frame() {
       const mountedBeforeVehicleUpdate = vehicles.mounted;
       const ridingVehicle = vehicles.update(dt, player);
       if (!ridingVehicle) player.update(dt, world, audio);
+      if (player.pos.y < -32 && !player.dead) {
+        if (player.gameMode === 'survival') player.damage(40, audio, true);
+        else game.respawn();
+      }
       player.updateHunger(dt, game.settings.difficulty, audio);
       if (game.networkRoom?.role === 'guest') {
         if (mountedBeforeVehicleUpdate && !vehicles.mounted) game.publishVehicleState(mountedBeforeVehicleUpdate, false);
@@ -1838,11 +1874,13 @@ function frame() {
       const eatingStep = advanceEating(eating, dt, player, audio, ui.mode === 'game');
       eating = eatingStep.eating;
       if (eatingStep.completed) ui.refresh();
+    }
 
-      const networked = !!game.networkRoom;
+    // Local menus block input, not the clock and world simulation of a shared room.
+    if (!paused || networked) {
       const hostSimulates = !networked || game.networkRoom.role === 'host';
       if (hostSimulates && game.edition !== 'classic') mobs.update(dt, player, sky.timeOfDay, effects, audio, networked ? remoteMobTargets() : [], game.settings.difficulty);
-      updateItems(dt);
+      updateItems(dt, !paused);
       updateArrows(dt);
       if (hostSimulates) {
         fluids.tick(dt);
@@ -1851,7 +1889,7 @@ function frame() {
         updateCrops(dt);
         updateTNT(dt);
       }
-      updateFishing(dt);
+      if (!paused) updateFishing(dt);
       particles.update(dt, world);
       if (networked && game.multiplayerClient) {
         networkStateTimer -= dt;
@@ -1882,7 +1920,7 @@ function frame() {
           networkItemTimer = 0.4;
         }
       }
-      if (networked && game.multiplayerClient) {
+      if (networked && hostSimulates && game.multiplayerClient) {
         sharedStateTimer -= dt;
         if (sharedStateTimer <= 0) {
           game.multiplayerClient.send('game:state', { state: { timeOfDay: sky.timeOfDay, chests: [...chests], furnaces: [...furnaces] } });
@@ -1933,7 +1971,7 @@ function frame() {
 
     const head = world.getBlock(Math.floor(player.pos.x), Math.floor(player.pos.y + 1.62), Math.floor(player.pos.z));
     const underwater = head === WATER || head === WATER_FLOW;
-    const dayFactor = sky.update(paused ? 0 : dt, camera.position, game.renderDistance, { underwater });
+    const dayFactor = sky.update(paused && !networked ? 0 : dt, camera.position, game.renderDistance, { underwater });
 
     // hurt flash overlay
     const hurtOverlay = document.getElementById('hurt-overlay');

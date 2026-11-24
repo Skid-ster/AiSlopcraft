@@ -31,7 +31,7 @@ export function useOnBlock(world, player, hit, { drop } = {}) {
   }
   if (id === 368 && block === SAPLING) {
     // Do not grow into obstacles or across unloaded chunk borders.
-    if (y + 6 >= WORLD_H) return false;
+    if (y + 6 >= (world.height ?? WORLD_H)) return false;
     for (let dz = -2; dz <= 2; dz++) for (let dx = -2; dx <= 2; dx++) {
       if (!world.getChunk(Math.floor((x + dx) / CH), Math.floor((z + dz) / CH))?.generated) return false;
     }

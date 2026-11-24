@@ -200,5 +200,25 @@ const shelteredZombie = new Mob('zombie', 0, 1.001, 0);
 shelteredZombie.update(0.05, shelteredWorld, { ...player, pos: new THREE.Vector3(40, 1, 0) }, [], {}, audio, 0.5);
 check('a roof prevents actual zombie sun damage', !shelteredZombie.burning && shelteredZombie.hp === 20);
 check('safe-ground search finds a clear, supported spawn position', findSafeGround(world, 2.5, 2.5, 0.6, 1.8) > 1);
+const cave = new FakeWorld();
+cave.fillFloor(0, 31, -4, 4);
+for (let x = 0; x < 32; x++) cave.setBlock(x, 7, 0, STONE);
+cave.getChunk = () => ({ generated: true });
+cave.getLight = (_x, y) => y >= 7 ? 0xf0 : 0;
+const cavePlayer = { ...player, pos: new THREE.Vector3(0.5, 1.001, 0.5) };
+const spawnTypes = time => {
+  const manager = new MobManager(cave, new THREE.Scene());
+  const random = Math.random;
+  Math.random = () => 0;
+  try { manager.update(0.05, cavePlayer, time, {}, audio, [], 2); } finally { Math.random = random; }
+  const result = manager.mobs.filter(mob => mob.def.hostile).map(mob => mob.pos.y);
+  for (const mob of manager.mobs) mob.dispose();
+  return result;
+};
+check('hostiles can spawn on a dark cave floor during daylight', spawnTypes(0.5).some(y => y < 7));
+cave.getLight = (_x, y) => y >= 7 ? 0xf0 : 8;
+check('block light prevents cave spawns at light level eight', spawnTypes(0.5).length === 0);
+cave.getLight = () => 0xf0;
+check('the same exposed ground supports hostile spawning at night', spawnTypes(0).length === 1);
 
 console.log(`\nALL ${checks} MOB TESTS PASSED`);

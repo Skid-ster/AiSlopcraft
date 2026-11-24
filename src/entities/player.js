@@ -108,8 +108,8 @@ export class Player {
     this.breath = 0;
     this.air = 300;
     this.gameMode = 'survival';
-    this.classicFlying = false;
-    this._lastClassicJumpAt = -Infinity;
+    this.flying = false;
+    this.lastFlightJumpAt = -Infinity;
     this.viewBobbing = true;
     this._bobPhase = 0;
     this._bobStrength = 0;
@@ -167,14 +167,12 @@ export class Player {
     });
     document.addEventListener('contextmenu', e => e.preventDefault());
     document.addEventListener('keydown', (e) => {
+      if (e.target?.matches?.('input, select, textarea, [contenteditable]')) return;
       this.keys[e.code] = true;
-      if (this.gameMode === 'classic' && e.code === this.bindings.jump && !e.repeat) {
+      if (this.canFly && !window.uiPause && e.code === this.bindings.jump && !e.repeat) {
         const now = globalThis.performance?.now?.() ?? Date.now();
-        if (now - this._lastClassicJumpAt < 320) {
-          this.classicFlying = !this.classicFlying;
-          this.vel.set(0, 0, 0);
-        }
-        this._lastClassicJumpAt = now;
+        if (now - this.lastFlightJumpAt < 320) this.toggleFlight();
+        else this.lastFlightJumpAt = now;
       }
       for (let i = 1; i <= 9; i++) if (e.code === this.bindings[`hotbar${i}`]) this.hotbarIndex = i - 1;
       if (e.code === this.bindings.attack) this.leftDown = true;
@@ -189,6 +187,16 @@ export class Player {
 
   get heldStack() { return this.inventory[this.hotbarIndex]; }
   get controlsActive() { return this.pointerLocked || this.touchActive; }
+  get canFly() { return this.gameMode === 'creative' || this.gameMode === 'classic'; }
+
+  toggleFlight() {
+    if (!this.canFly || this.dead) return false;
+    this.flying = !this.flying;
+    this.lastFlightJumpAt = -Infinity;
+    this.fallStart = null;
+    this.vel.set(0, 0, 0);
+    return this.flying;
+  }
 
   isKeyDown(code) { return !!this.keys[code] || this.touchKeys.has(code); }
 
@@ -240,8 +248,8 @@ export class Player {
     this.foodTimer = 0;
     this.sprinting = false;
     this.dead = false;
-    this.classicFlying = false;
-    this._lastClassicJumpAt = -Infinity;
+    this.flying = false;
+    this.lastFlightJumpAt = -Infinity;
     this.fallStart = null;
     this.air = 300;
     this.breath = 0;
@@ -331,33 +339,13 @@ export class Player {
     const len = Math.hypot(ax, az);
     if (len > 0) { ax /= len; az /= len; }
 
-    // Classic's double-tap flight keeps ordinary walking/collision until enabled.
-    // While flying it still collides with blocks, unlike the game's unrestricted
-    // creative noclip mode; jump rises and sneak descends.
-    if (this.gameMode === 'classic' && this.classicFlying) {
+    if (this.canFly && this.flying) {
       const vertical = Number(!!this.isKeyDown(this.bindings.jump)) - Number(!!this.isKeyDown(this.bindings.sneak));
       this.vel.set(ax * 8.5, vertical * 8.5, az * 8.5);
       this.moveAxis(1, this.vel.y * dt, world);
+      if (vertical > 0 && Number.isFinite(world.height)) this.pos.y = Math.min(this.pos.y, world.height + 32);
       this.moveAxis(0, this.vel.x * dt, world);
       this.moveAxis(2, this.vel.z * dt, world);
-      this.onGround = false;
-      this.fallStart = null;
-      this.camera.position.set(this.pos.x, this.pos.y + EYE, this.pos.z);
-      const direction = new THREE.Vector3(
-        -Math.sin(this.yaw) * Math.cos(this.pitch),
-        Math.sin(this.pitch),
-        -Math.cos(this.yaw) * Math.cos(this.pitch)
-      );
-      this.camera.lookAt(this.camera.position.clone().add(direction));
-      this._lastX = this.pos.x; this._lastZ = this.pos.z;
-      return;
-    }
-
-    // Beta creative players fly freely and skip block collision and survival physics.
-    if (this.gameMode === 'creative') {
-      const vertical = Number(!!this.isKeyDown(this.bindings.jump)) - Number(!!this.isKeyDown(this.bindings.sneak));
-      this.vel.set(ax * 8.5, vertical * 8.5, az * 8.5);
-      this.pos.addScaledVector(this.vel, dt);
       this.onGround = false;
       this.fallStart = null;
       this.camera.position.set(this.pos.x, this.pos.y + EYE, this.pos.z);

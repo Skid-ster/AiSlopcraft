@@ -186,7 +186,7 @@ export function isDaylight(timeOfDay) {
 
 export function hasDirectSky(world, x, y, z) {
   const bx = Math.floor(x), bz = Math.floor(z);
-  for (let by = Math.max(0, Math.floor(y)); by < WORLD_H; by++) {
+  for (let by = Math.max(0, Math.floor(y)); by < (world.height ?? WORLD_H); by++) {
     const block = world.getBlock(bx, by, bz);
     if (block !== AIR && getBlock(block).solid) return false;
   }
@@ -202,17 +202,23 @@ export function canMobBurnInSun(mob, world, timeOfDay) {
   return hasDirectSky(world, x, y + mob.def.h, z);
 }
 
-export function findSafeGround(world, x, z, width = 0.6, height = 1.8) {
+export function findSafeGround(world, x, z, width = 0.6, height = 1.8, hostile = null) {
   const bx = Math.floor(x), bz = Math.floor(z);
-  const heightAt = typeof world.heightAt === 'function' ? world.heightAt(bx, bz) : WORLD_H - 1;
-  const start = Math.min(WORLD_H - 2, Math.max(1, heightAt + 3));
+  const worldHeight = world.height ?? WORLD_H;
+  const heightAt = typeof world.heightAt === 'function' ? world.heightAt(bx, bz) : worldHeight - 1;
+  const start = Math.min(worldHeight - 1, Math.max(1, heightAt + 3), hostile ? Math.floor(hostile.y) + 12 : Infinity);
+  const bottom = hostile ? Math.max(0, Math.floor(hostile.y) - 12) : 0;
   const minX = Math.floor(x - width / 2 + 0.001), maxX = Math.floor(x + width / 2 - 0.001);
   const minZ = Math.floor(z - width / 2 + 0.001), maxZ = Math.floor(z + width / 2 - 0.001);
 
-  for (let supportY = start; supportY >= 0; supportY--) {
+  for (let supportY = start; supportY >= bottom; supportY--) {
     const supportId = world.getBlock(bx, supportY, bz);
     if (!getBlock(supportId).solid || [LEAVES, LOG, CACTUS, ICE].includes(supportId)) continue;
     const feetY = supportY + 1.001;
+    if (hostile) {
+      const light = world.getLight?.(bx, supportY + 1, bz) ?? 0xf0;
+      if (Math.max(light & 15, (light >> 4) - (hostile.night ? 11 : 0)) > 7) continue;
+    }
     let room = true;
     for (let yy = Math.floor(feetY); yy <= Math.floor(feetY + height - 0.001) && room; yy++) {
       for (let zz = minZ; zz <= maxZ && room; zz++) {
@@ -724,15 +730,15 @@ export class MobManager {
         const z = player.pos.z + Math.sin(angle) * distance;
         const chunk = this.world.getChunk(Math.floor(x / 16), Math.floor(z / 16));
         if (chunk?.generated) {
-          const y = findSafeGround(this.world, x, z, 0.8, 1.8);
-          if (y != null) {
-            if (this.difficulty > 0 && night && hostiles < 10 && Math.random() < 0.7) {
-              const types = ['zombie', 'skeleton', 'creeper', 'spider'];
-              this.add(types[Math.floor(Math.random() * types.length)], x, y, z);
-            } else if (!night && passives < 12 && Math.random() < 0.3) {
-              const types = ['pig', 'cow', 'sheep', 'chicken'];
-              this.add(types[Math.floor(Math.random() * types.length)], x, y, z);
-            }
+          const hostileY = this.difficulty > 0 && hostiles < 10 && Math.random() < 0.7
+            ? findSafeGround(this.world, x, z, 0.9, 1.95, { y: player.pos.y, night }) : null;
+          if (hostileY != null) {
+            const types = ['zombie', 'skeleton', 'creeper', 'spider'];
+            this.add(types[Math.floor(Math.random() * types.length)], x, hostileY, z);
+          } else if (!night && passives < 12 && Math.random() < 0.3) {
+            const y = findSafeGround(this.world, x, z, 0.8, 1.8);
+            const types = ['pig', 'cow', 'sheep', 'chicken'];
+            if (y != null) this.add(types[Math.floor(Math.random() * types.length)], x, y, z);
           }
         }
       }

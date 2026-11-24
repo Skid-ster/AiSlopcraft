@@ -80,7 +80,7 @@ test('Survival food is held to eat and hunger survives a world reload', async ({
   await expect.poll(() => page.evaluate(() => window.game.player.hunger)).toBe(15);
 });
 
-test('New singleplayer Creative worlds start with blocks and preserve their saved inventory', async ({ page }) => {
+test('Creative catalog, flight, high-altitude edits and inventory survive the expected save lifecycle', async ({ page }) => {
   await title(page);
   await page.locator('#btn-singleplayer').click();
   await page.locator('#world-create').click();
@@ -90,6 +90,18 @@ test('New singleplayer Creative worlds start with blocks and preserve their save
   await playing(page);
   expect(await page.evaluate(() => window.game.player.gameMode)).toBe('creative');
   await expect.poll(() => page.evaluate(() => window.game.player.inventory[0]?.id)).toBe(1);
+  await page.keyboard.press('Space');
+  await page.keyboard.press('Space');
+  await expect.poll(() => page.evaluate(() => window.game.player.flying)).toBe(true);
+  await page.keyboard.press('e');
+  await page.getByRole('searchbox', { name: 'Search Creative items' }).fill('Diamond Pickaxe');
+  await expect(page.locator('#creative-items button')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Diamond Pickaxe' }).click();
+  expect(await page.evaluate(() => window.game.player.heldStack)).toEqual({ id: 278, count: 1, damage: 0 });
+  await page.getByRole('button', { name: 'Back to game', exact: true }).click();
+  await page.evaluate(() => { window.game.player.pos.y = -40; });
+  await expect.poll(() => page.evaluate(() => window.game.player.pos.y)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => window.game.world.setBlock(8, 255, 8, 5, 2))).toBe(true);
   await page.evaluate(() => { window.game.player.inventory[0] = null; });
   await pause(page);
   await page.locator('#btn-save-now').click();
@@ -97,9 +109,71 @@ test('New singleplayer Creative worlds start with blocks and preserve their save
   await playing(page);
   expect(await page.evaluate(() => window.game.player.inventory[0])).toBeNull();
   expect(await page.evaluate(() => window.game.player.inventory[1]?.id)).toBe(3);
+  expect(await page.evaluate(() => [window.game.world.getBlock(8, 255, 8), window.game.world.getMeta(8, 255, 8), window.game.player.flying])).toEqual([5, 2, false]);
 });
 
-test('Beta survival: mine, place, craft, die, respawn, and round-trip a portable save', async ({ page }) => {
+test('a saved Beta generator takes precedence over a new-world URL', async ({ page }) => {
+  await title(page);
+  await page.evaluate(() => localStorage.setItem('aislopcraft:world:legacy-fixture', JSON.stringify({
+    version: 1, worldId: 'legacy-fixture', seed: 'compat-fixture', edition: 'beta', gameMode: 'survival',
+    edits: [['1,127,1', 5, 2]], player: { pos: [8.5, 80, 8.5], inventory: Array(36).fill(null), armor: Array(4).fill(null) },
+  })));
+  await page.goto('/?seed=compat-fixture&id=legacy-fixture&terrain=overworld-v1&launch=1');
+  await playing(page);
+  expect(await page.evaluate(() => {
+    const { world } = window.game;
+    return [world.height, world.getBlock(1, 127, 1), world.getMeta(1, 127, 1), world.setBlock(1, 128, 1, 1)];
+  })).toEqual([128, 5, 2, false]);
+  await pause(page);
+  await page.locator('#btn-save-now').click();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('aislopcraft:world:legacy-fixture')).version)).toBe(1);
+});
+
+test('the selector opens either version when an old build creates a same-ID save', async ({ page }) => {
+  await title(page);
+  await page.evaluate(() => {
+    const save = { worldId: 'same-id', seed: 'release-smoke', edition: 'beta', gameMode: 'survival',
+      player: { pos: [8.5, 80, 8.5], inventory: Array(36).fill(null), armor: Array(4).fill(null) } };
+    localStorage.setItem('aislopcraft:world:same-id', JSON.stringify({ ...save, version: 1, worldName: 'Collision Beta', edits: [['1,127,1', 1, 0]] }));
+    localStorage.setItem('aislopcraft:world-v2:same-id', JSON.stringify({ ...save, version: 2, terrain: 'overworld-v1', worldName: 'Collision Overworld', edits: [['1,255,1', 5, 2]] }));
+  });
+  expect(await page.evaluate(async () => {
+    const keys = ['aislopcraft:world:same-id', 'aislopcraft:world-v2:same-id'];
+    const before = keys.map(key => localStorage.getItem(key));
+    const backup = new File([JSON.stringify({ format: 'aislopcraft-world-save', version: 2, world: JSON.parse(before[1]) })], 'copy.json');
+    const setItem = Storage.prototype.setItem;
+    let attemptedKey, message;
+    Storage.prototype.setItem = function (key, value) {
+      if (key.startsWith('aislopcraft:world-v2:')) {
+        attemptedKey = key;
+        throw new DOMException('Full', 'QuotaExceededError');
+      }
+      return setItem.call(this, key, value);
+    };
+    try { await window.game.importWorldSaveFile(backup); }
+    catch (error) { message = error.message; }
+    finally { Storage.prototype.setItem = setItem; }
+    return { failedForCopy: attemptedKey?.startsWith('aislopcraft:world-v2:import-'), keptBoth: keys.every((key, i) => localStorage.getItem(key) === before[i]), message };
+  })).toEqual({ failedForCopy: true, keptBoth: true, message: expect.stringContaining('Browser storage is full') });
+  await page.locator('#btn-singleplayer').click();
+  const legacy = page.getByRole('option', { name: /Collision Beta/ });
+  const modern = page.getByRole('option', { name: /Collision Overworld/ });
+  await modern.click();
+  await expect(modern).toHaveAttribute('aria-selected', 'true');
+  await expect(legacy).toHaveAttribute('aria-selected', 'false');
+  await page.locator('#world-play').click();
+  await playing(page);
+  expect(await page.evaluate(() => window.game.world.getMeta(1, 255, 1))).toBe(2);
+  await pause(page);
+  await page.locator('#btn-save-quit').click();
+  await page.locator('#btn-singleplayer').click();
+  await legacy.click();
+  await page.locator('#world-play').click();
+  await playing(page);
+  expect(await page.evaluate(() => [window.game.world.height, window.game.world.getBlock(1, 127, 1)])).toEqual([128, 1]);
+});
+
+test('Survival: mine, place, craft, die, respawn, and round-trip a portable save', async ({ page }) => {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await title(page);
@@ -186,6 +260,7 @@ test.describe('small portrait touchscreen', () => {
   test('opens inventory, returns to play and pauses using touch', async ({ page }) => {
     await title(page);
     await newWorld(page, 'Pocket world');
+    await expect(page.locator('#touch-fly')).toBeHidden();
     await page.getByRole('button', { name: 'Open or close inventory' }).tap();
     await expect(page.locator('#craft-out')).toBeVisible();
     await page.locator('#touch-panel-return').tap();
@@ -194,6 +269,22 @@ test.describe('small portrait touchscreen', () => {
     await page.getByRole('button', { name: 'Back to game' }).tap();
     await playing(page);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  });
+  test('toggles Creative flight and chooses a catalog block using touch', async ({ page }) => {
+    await title(page);
+    await page.goto('/?seed=release-smoke&id=touch-creative&mode=creative&launch=1');
+    await playing(page);
+    const fly = page.getByRole('button', { name: 'Toggle flight' });
+    await fly.tap();
+    await expect(fly).toHaveAttribute('aria-pressed', 'true');
+    await page.getByRole('button', { name: 'Open or close inventory' }).tap();
+    await page.getByRole('searchbox', { name: 'Search Creative items' }).fill('Glass');
+    await page.getByRole('button', { name: 'Glass', exact: true }).tap();
+    await expect(page.locator('#creative-feedback')).toHaveText(/Glass selected/);
+    await page.locator('#creative-close').tap();
+    await fly.tap();
+    await expect(fly).toHaveAttribute('aria-pressed', 'false');
+    expect(await page.evaluate(() => window.game.player.heldStack)).toEqual({ id: 20, count: 64, damage: 0 });
   });
   test('touch eating completes on hold and cancels on release or pause', async ({ page }) => {
     await title(page);
@@ -257,9 +348,13 @@ for (const mode of ['survival', 'creative']) test(`Multiplayer ${mode}: names, c
     await expect.poll(() => guest.evaluate(() => window.game.networkRoom?.role)).toBe('guest');
     await expect.poll(() => page.evaluate(() => window.game.networkRoom?.players?.length)).toBe(2);
     await expect.poll(() => guest.evaluate(() => window.game.player.gameMode)).toBe(mode);
+    await pause(page);
+    const pausedTime = await page.evaluate(() => window.game.sky.timeOfDay);
+    await expect.poll(() => page.evaluate(() => window.game.sky.timeOfDay)).not.toBe(pausedTime);
+    await page.locator('#btn-back').click();
     const edit = await page.evaluate(() => {
       const { player, world } = window.game;
-      const x = Math.floor(player.pos.x), y = Math.floor(player.pos.y) + 2, z = Math.floor(player.pos.z);
+      const x = Math.floor(player.pos.x), y = 255, z = Math.floor(player.pos.z);
       world.setBlock(x, y, z, 5);
       return [x, y, z];
     });
@@ -433,7 +528,7 @@ test('storage quota leaves the world open and permits an unstored JSON backup', 
   await page.evaluate(() => {
     const original = Storage.prototype.setItem;
     Storage.prototype.setItem = function (key, value) {
-      if (key.startsWith('aislopcraft:world:')) throw new DOMException('Full', 'QuotaExceededError');
+      if (key.startsWith('aislopcraft:world:') || key.startsWith('aislopcraft:world-v2:')) throw new DOMException('Full', 'QuotaExceededError');
       return original.call(this, key, value);
     };
     const { player } = window.game;

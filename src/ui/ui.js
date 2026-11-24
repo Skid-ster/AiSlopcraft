@@ -5,7 +5,7 @@ const MAX_MULTIPLAYER_WORLD_EDITS = 50_000;
 // UI: title screen, hotbar, hearts, armor, inventory, crafting table, furnace, chest,
 // pause, death screen, F3 debug, hover tooltips, shift-click & 3D isometric icons.
 import {
-  ITEMS, itemName, getBlock, isBlock, itemStackLimit, TILES, WOOD_DOOR, IRON_DOOR,
+  ITEMS, itemName, getBlock, isBlock, itemStackLimit, TILES, WOOD_DOOR, IRON_DOOR, AIR, WATER_FLOW, LAVA_FLOW, FURNACE_LIT,
 } from '../world/blocks.js';
 import { matchRecipe, smeltResult } from './recipes.js';
 import { FUEL_TIMES, interactWithFurnaceSlot } from './furnace.js';
@@ -13,9 +13,16 @@ import { OptionsMenu } from './options.js';
 import { CLASSIC_BLOCKS, isClassicBlock } from '../classic.js';
 import { bindTouchPointers, requestGamePointerLock } from '../input.js';
 
+const creativeCatalog = [
+  ...Array.from({ length: 255 }, (_, i) => i + 1).filter(id => ![WATER_FLOW, LAVA_FLOW, FURNACE_LIT].includes(id) && getBlock(id) !== getBlock(AIR)),
+  ...Object.keys(ITEMS).map(Number),
+].map(id => ({ id, name: itemName(id) })).sort((a, b) => a.name.localeCompare(b.name));
+
 function stackLimit(stack) {
   return itemStackLimit(stack.id);
 }
+
+const sameSavedWorld = (a, b) => a?.id === b?.id && (a?.terrain ?? null) === (b?.terrain ?? null);
 
 export function suggestedMultiplayerRelay(location = window.location) {
   const { hostname, host, protocol } = location;
@@ -197,13 +204,13 @@ export class UI {
         empty.textContent = 'No saved worlds found. Create a new world to begin.'; worldList.appendChild(empty);
         this.selectedWorld = null;
       } else {
-        this.selectedWorld = worlds.find(world => world.id === this.selectedWorld?.id) || worlds[0];
+        this.selectedWorld = worlds.find(world => sameSavedWorld(world, this.selectedWorld)) || worlds[0];
         for (const world of worlds) {
           const row = document.createElement('button'); row.type = 'button'; row.className = 'world-list-row';
-          row.setAttribute('role', 'option'); row.setAttribute('aria-selected', String(this.selectedWorld?.id === world.id));
+          row.setAttribute('role', 'option'); row.setAttribute('aria-selected', String(sameSavedWorld(this.selectedWorld, world)));
           row.innerHTML = `<strong></strong><span></span>`;
           row.querySelector('strong').textContent = world.name;
-          row.querySelector('span').textContent = `${world.edition === 'classic' ? 'Legacy Classic world' : world.gameMode === 'creative' ? 'Creative' : 'Survival'} · Seed: ${world.seed}`;
+          row.querySelector('span').textContent = `${world.edition === 'classic' ? 'Legacy Classic world' : `${world.gameMode === 'creative' ? 'Creative' : 'Survival'} · ${world.terrain ? 'Overworld' : 'Legacy Beta'}`} · Seed: ${world.seed}`;
           row.addEventListener('click', () => { this.selectedWorld = world; refreshWorldList(); });
           worldList.appendChild(row);
         }
@@ -223,21 +230,27 @@ export class UI {
     worldsScreen.querySelector('#world-rename').addEventListener('click', () => {
       const world = this.selectedWorld; if (!world) return;
       const name = window.prompt('Rename world', world.name);
-      if (name?.trim()) { this.game.renameLocalWorld?.(world.id, name); refreshWorldList(); }
+      if (!name?.trim()) return;
+      try { this.game.renameLocalWorld?.(world.id, name, world.terrain ?? null); refreshWorldList(); }
+      catch (error) { this.notify(error.message); }
     });
     worldsScreen.querySelector('#world-delete').addEventListener('click', () => {
       const world = this.selectedWorld; if (!world) return;
       if (!window.confirm(`Delete “${world.name}”? This cannot be undone.`)) return;
-      this.game.deleteLocalWorld?.(world.id); this.selectedWorld = null; refreshWorldList();
+      try {
+        this.game.deleteLocalWorld?.(world.id, world.terrain ?? null);
+        this.selectedWorld = null; refreshWorldList();
+      } catch (error) { this.notify(error.message); }
     });
     worldsScreen.querySelector('#world-recreate').addEventListener('click', () => {
       const world = this.selectedWorld; if (!world) return;
-      if (!window.confirm(`Re-create “${world.name}” and erase its saved progress?`)) return;
-      this.game.recreateLocalWorld?.(world.id, world.seed, world.name, world.gameMode, world.edition);
+      if (!window.confirm(`Create a fresh copy of “${world.name}” from the same seed? The existing save will be kept.`)) return;
+      try { this.game.recreateLocalWorld?.(world.id, world.seed, world.name, world.gameMode, world.edition, world.terrain ?? null); }
+      catch (error) { this.notify(error.message); }
     });
     worldsScreen.querySelector('#world-export').addEventListener('click', () => {
       if (!this.selectedWorld) return;
-      try { this.game.exportWorldSave?.(this.selectedWorld.id); }
+      try { this.game.exportWorldSave?.(this.selectedWorld.id, this.selectedWorld.terrain ?? null); }
       catch (error) { this.notify(error.message, 4000); }
     });
     worldsScreen.querySelector('#world-import').addEventListener('click', () => {
@@ -264,9 +277,10 @@ export class UI {
     createScreen.querySelector('#world-create-confirm').addEventListener('click', () => {
       const name = createScreen.querySelector('#new-world-name').value.trim() || 'New World';
       const suppliedSeed = createScreen.querySelector('#new-world-seed').value.trim();
-      const unique = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const seed = suppliedSeed || `aislopcraft-${unique}`;
-      this.game.openLocalWorld?.(seed, name, newWorldMode, `world-${unique}`, 'beta');
+      try {
+        const id = this.game.newLocalWorldId?.('world') || `world-${globalThis.crypto?.randomUUID?.() || Date.now()}`;
+        this.game.openLocalWorld?.(suppliedSeed || `aislopcraft-${id.slice(6)}`, name, newWorldMode, id, 'beta');
+      } catch (error) { this.notify(error.message); }
     });
     createScreen.querySelector('#world-create-cancel').addEventListener('click', () => {
       createScreen.style.display = 'none'; worldsScreen.style.display = 'flex'; refreshWorldList();
@@ -536,7 +550,7 @@ export class UI {
     const world = this.selectedWorld;
     if (!world) return;
     this.game.audio?.click?.();
-    if (this.game.openLocalWorld) this.game.openLocalWorld(world.seed, world.name, world.gameMode, world.id, world.edition);
+    if (this.game.openLocalWorld) this.game.openLocalWorld(world.seed, world.name, world.gameMode, world.id, world.edition, world.terrain ?? null);
     else {
       this.hide('title-screen'); this.setMode('game'); this.game.start?.();
     }
@@ -748,7 +762,7 @@ export class UI {
             screen.querySelector('#mp-username').focus();
             return;
           }
-          if (room.seed && (room.seed !== this.game.seed || (room.edition || 'beta') !== (this.game.edition || 'beta'))) {
+          if (room.seed && this.needsRoomWorld(room)) {
             status.textContent = `Opening the matching ${room.edition || 'beta'} world…`;
             this.game.openRoomHome?.(room);
             return;
@@ -790,6 +804,7 @@ export class UI {
     let createRequested = false;
     try {
       const world = this.game.world;
+      if (this.game.hasJoinedRoom) { this.game.openEditionHome?.('beta', true); return; }
       if (!world?.edits || typeof world.edits[Symbol.iterator] !== 'function') throw new Error('Your world is still loading. Wait a moment, then try again.');
       const entries = [...world.edits].map(([key, id]) => [key, [id, world.metaEdits?.get(key) || 0]]);
       if (entries.length > MAX_MULTIPLAYER_WORLD_EDITS) {
@@ -797,6 +812,9 @@ export class UI {
       }
       status.textContent = 'Connecting to the room service…';
       const { playerName } = await this.connectMultiplayer();
+      if (world.terrain && (await this.multiplayerClient.listRooms()).terrain !== world.terrain) {
+        throw new Error('This relay does not support the Overworld generator. Update the relay or open a legacy Beta world.');
+      }
       const password = screen.querySelector('#mp-password').value;
       const visualMode = screen.querySelector('#mp-visual-policy').value;
       const visuals = visualMode === 'forced' ? {
@@ -812,9 +830,12 @@ export class UI {
       const result = await this.multiplayerClient.createRoom({
         playerName, name: screen.querySelector('#mp-world-name').value.trim(), edition: this.game.edition,
         gameMode: screen.querySelector('#mp-mode').value, access: screen.querySelector('#mp-access').value,
-        password, seed: this.game.seed, visuals,
+        password, seed: this.game.seed, visuals, ...(world.terrain ? { terrain: world.terrain } : {}),
       });
       roomCreated = true;
+      if ((result.terrain ?? null) !== (world.terrain ?? null) || (world.terrain && result.seed !== this.game.seed)) {
+        throw new Error('The relay could not preserve this world’s generator or exact seed.');
+      }
       const batchSize = 1000;
       for (let index = 0; index < entries.length; index += batchSize) {
         status.textContent = `Preparing your world… ${Math.min(index + batchSize, entries.length).toLocaleString()} / ${entries.length.toLocaleString()} edits`;
@@ -867,9 +888,15 @@ export class UI {
     } finally { button.disabled = false; }
   }
 
+  needsRoomWorld(room) {
+    return room.seed !== this.game.seed || (room.edition || 'beta') !== (this.game.edition || 'beta')
+      || (room.terrain ?? null) !== (this.game.world?.terrain ?? null)
+      || (room.role !== 'host' && (this.game.hasLocalSave || this.game.hasJoinedRoom));
+  }
+
   async enterMultiplayer(room) {
     const roomEdition = room.edition || 'beta';
-    if (room.seed !== this.game.seed || roomEdition !== (this.game.edition || 'beta')) {
+    if (this.needsRoomWorld(room)) {
       await this.multiplayerClient.leave();
       if (this.game.openRoomHome) {
         this.game.openRoomHome({ ...room, edition: roomEdition });
@@ -1014,7 +1041,9 @@ export class UI {
       invite.searchParams.set('seed', room.seed);
       invite.searchParams.set('world', room.name || 'Shared World');
       invite.searchParams.set('edition', room.edition || this.game.edition || 'beta');
+      invite.searchParams.set('terrain', room.terrain || 'legacy');
       invite.searchParams.set('room', room.code);
+      invite.searchParams.delete('launch');
       invite.searchParams.set('relay', this.game.multiplayerClient?.relayUrl || '');
       try { await navigator.clipboard.writeText(invite.toString()); this.notify('Invite link copied. Share the code and password separately.'); }
       catch { window.prompt('Copy this invite link:', invite.toString()); }
@@ -1047,17 +1076,16 @@ export class UI {
     if (!this.touchEnabled || !player) return;
     const controls = this.touchControlsEl;
     this.releaseTouchPointers = bindTouchPointers(controls, player, () => this.mode === 'game');
-    controls.querySelector('#touch-fly').addEventListener('click', event => {
-      player.classicFlying = !player.classicFlying;
-      player.vel.set(0, 0, 0);
-      event.currentTarget.textContent = player.classicFlying ? 'Land' : 'Fly';
-      event.currentTarget.setAttribute('aria-pressed', String(player.classicFlying));
+    controls.querySelector('#touch-fly').addEventListener('click', () => {
+      if (this.mode !== 'game' || !player.canFly) return;
+      player.toggleFlight();
+      this.refresh();
     });
     const touchInventory = controls.querySelector('#touch-inventory');
     if (this.game.edition === 'classic') { touchInventory.textContent = 'Blocks'; touchInventory.setAttribute('aria-label', 'Choose a block'); }
     touchInventory.addEventListener('click', () => {
-      if (this.mode === 'game') this.setMode(this.game.edition === 'classic' ? 'classic-blocks' : 'inventory');
-      else if (['inventory', 'crafting', 'furnace', 'chest', 'classic-blocks'].includes(this.mode)) this.setMode('game');
+      if (this.mode === 'game') this.setMode(this.game.edition === 'classic' ? 'classic-blocks' : player.gameMode === 'creative' ? 'creative' : 'inventory');
+      else if (['creative', 'inventory', 'crafting', 'furnace', 'chest', 'classic-blocks'].includes(this.mode)) this.setMode('game');
     });
     controls.querySelector('#touch-pause').addEventListener('click', () => {
       if (this.mode === 'game') this.setMode('pause');
@@ -1338,11 +1366,14 @@ export class UI {
         <div class="inv-title inventory-label">Inventory</div>
         <div class="inv-main" id="inv-main"></div>
         <div class="inv-hotbar" id="inv-hotbar"></div>
+        <button type="button" class="btn" id="btn-creative-catalog" hidden>Creative catalog</button>
       </div>
     `;
     this.root.appendChild(inv);
     this.initPlayerPreview(inv.querySelector('#player-preview-canvas'));
     this.bindBackdropDrop(inv);
+    this.buildCreativeCatalog();
+    inv.querySelector('#btn-creative-catalog').addEventListener('click', () => this.setMode('creative'));
 
     // pause
     const pause = document.createElement('div');
@@ -1777,6 +1808,57 @@ export class UI {
     if (this.mode === 'chest' || this.mode === 'furnace') this.game.syncSharedState?.();
   }
 
+  buildCreativeCatalog() {
+    const screen = document.createElement('div');
+    screen.id = 'creative-screen';
+    screen.className = 'screen panel-screen';
+    screen.style.display = 'none';
+    screen.innerHTML = `
+      <section class="panel creative-panel" aria-labelledby="creative-title">
+        <h2 id="creative-title">Creative catalog</h2>
+        <p>Choose an item to replace the selected hotbar slot.</p>
+        <div class="creative-filters">
+          <input type="search" aria-label="Search Creative items" placeholder="Search items…" autocomplete="off">
+          <select aria-label="Creative item type"><option value="all">All</option><option value="blocks">Blocks</option><option value="items">Items</option></select>
+        </div>
+        <div id="creative-items" class="creative-items"></div>
+        <p id="creative-feedback" role="status"></p>
+        <div class="creative-filters"><button type="button" class="btn" id="creative-inventory">Player inventory</button>
+          <button type="button" class="btn" id="creative-close">Back to game</button></div>
+      </section>`;
+    const list = screen.querySelector('#creative-items');
+    const search = screen.querySelector('input');
+    const filter = screen.querySelector('select');
+    const feedback = screen.querySelector('#creative-feedback');
+    this.refreshCreativeCatalog = () => {
+      const query = search.value.trim().toLowerCase();
+      const entries = creativeCatalog.filter(({ id, name }) => name.toLowerCase().includes(query)
+        && (filter.value === 'all' || isBlock(id) === (filter.value === 'blocks')));
+      const choices = entries.map(({ id, name }) => {
+        const choice = document.createElement('button');
+        choice.type = 'button';
+        choice.textContent = name;
+        choice.addEventListener('click', () => {
+          const player = this.game.player;
+          if (this.mode !== 'creative' || player.gameMode !== 'creative') return;
+          player.inventory[player.hotbarIndex] = { id, count: itemStackLimit(id), damage: 0 };
+          feedback.textContent = `${name} selected in slot ${player.hotbarIndex + 1}.`;
+          this.refresh();
+        });
+        return choice;
+      });
+      list.replaceChildren(...choices);
+      list.scrollTop = 0;
+      feedback.textContent = entries.length ? '' : 'No matching items.';
+    };
+    search.addEventListener('input', this.refreshCreativeCatalog);
+    filter.addEventListener('change', this.refreshCreativeCatalog);
+    screen.querySelector('#creative-inventory').addEventListener('click', () => this.setMode('inventory'));
+    screen.querySelector('#creative-close').addEventListener('click', () => this.setMode('game'));
+    this.root.appendChild(screen);
+    this.creativeScreen = screen;
+  }
+
   showHelp(opener = document.activeElement) {
     if (!this.helpScreen || this.helpScreen.style.display === 'flex') return;
     this.helpReturnMode = this.mode;
@@ -1845,6 +1927,7 @@ export class UI {
       }
       return;
     }
+    if (this.mode === 'creative' && e.target?.matches?.('input, select') && e.code !== 'Escape') return;
     if (e.code === 'Tab' && this.mode === 'game' && this.game.networkRoom) {
       e.preventDefault();
       this.playerListHeld = true;
@@ -1868,8 +1951,8 @@ export class UI {
     if (e.code === (this.game.settings?.keys ? this.game.settings.keys.inventory : 'KeyE')) {
       if (this.mode === 'game' && this.game.edition !== 'classic') {
         e.preventDefault();
-        this.setMode('inventory');
-      } else if (this.mode === 'inventory' || this.mode === 'crafting' || this.mode === 'furnace' || this.mode === 'chest') {
+        this.setMode(this.game.player.gameMode === 'creative' ? 'creative' : 'inventory');
+      } else if (this.mode === 'creative' || this.mode === 'inventory' || this.mode === 'crafting' || this.mode === 'furnace' || this.mode === 'chest') {
         e.preventDefault();
         this.setMode('game');
       }
@@ -1922,6 +2005,7 @@ export class UI {
   }
 
   setMode(mode) {
+    if (mode === 'creative' && this.game.player.gameMode !== 'creative') return;
     this.mode = mode;
     if (this.touchControlsEl) this.touchControlsEl.style.display = this.touchEnabled && mode === 'game' ? 'block' : 'none';
     if (this.touchPanelReturnEl) this.touchPanelReturnEl.hidden = !this.touchEnabled || !['inventory', 'crafting', 'furnace', 'chest'].includes(mode);
@@ -1948,6 +2032,9 @@ export class UI {
     if (title) title.style.display = mode === 'title' ? 'block' : 'none';
     hud.style.display = mode === 'title' ? 'none' : (this.showHud ? 'block' : 'none');
     inv.style.display = (mode === 'inventory' || mode === 'crafting') ? 'flex' : 'none';
+    this.creativeScreen.style.display = mode === 'creative' ? 'flex' : 'none';
+    inv.querySelector('#btn-creative-catalog').hidden = mode !== 'inventory' || this.game.player.gameMode !== 'creative';
+    if (mode === 'creative') this.refreshCreativeCatalog();
     pause.style.display = mode === 'pause' ? 'flex' : 'none';
     death.style.display = mode === 'death' ? 'flex' : 'none';
     if (furnace) furnace.style.display = mode === 'furnace' ? 'flex' : 'none';
@@ -1987,6 +2074,14 @@ export class UI {
   // ---------- rendering ----------
   refresh() {
     const player = this.game.player;
+    const flightButton = this.touchControlsEl?.querySelector('#touch-fly');
+    if (flightButton) {
+      flightButton.hidden = !player.canFly;
+      const label = player.flying ? 'Land' : 'Fly';
+      if (flightButton.textContent !== label) flightButton.textContent = label;
+      const pressed = String(Boolean(player.flying));
+      if (flightButton.getAttribute('aria-pressed') !== pressed) flightButton.setAttribute('aria-pressed', pressed);
+    }
     // hotbar
     const slots = this.hotbarEl.children;
     for (let i = 0; i < 9; i++) {

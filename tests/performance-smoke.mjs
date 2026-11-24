@@ -4,8 +4,8 @@ import { buildChunkMesh } from '../src/world/mesher.js';
 
 const p95 = samples => samples.sort((a, b) => a - b)[Math.ceil(samples.length * 0.95) - 1];
 const results = [];
-for (const distance of [2, 12]) {
-  const world = new World('release-perf', undefined, 'classic');
+for (const [edition, terrain, distance] of [['classic', null, 2], ['classic', null, 12], ['beta', 'overworld-v1', 2]]) {
+  const world = new World('release-perf', undefined, edition, terrain);
   const coordinates = [];
   for (let z = -8; z < 8; z++) for (let x = -8; x < 8; x++) {
     if (x * x + z * z <= (distance + 0.5) ** 2) coordinates.push([x, z]);
@@ -31,10 +31,10 @@ for (const distance of [2, 12]) {
     mesh.push(performance.now() - generated);
   }
   assert.equal(coordinates.length, distance === 2 ? 21 : 256);
-  results.push({ distance, chunks: coordinates.length, genP95Ms: p95(generate), lightP95Ms: p95(light), meshP95Ms: p95(mesh), genAndLightP95Ms: p95(total) });
+  results.push({ world: terrain || edition, distance, chunks: coordinates.length, genP95Ms: p95(generate), lightP95Ms: p95(light), meshP95Ms: p95(mesh), genAndLightP95Ms: p95(total) });
 }
 console.table(results);
 for (const result of results) {
-  assert.ok(result.genAndLightP95Ms < 150, `distance ${result.distance}: p95 chunk generation including light must be under 150 ms`);
-  assert.ok(result.meshP95Ms < 100, `distance ${result.distance}: p95 CPU meshing must be under 100 ms`);
+  assert.ok(result.genAndLightP95Ms < 150, `${result.world} distance ${result.distance}: p95 chunk generation including light must be under 150 ms`);
+  assert.ok(result.meshP95Ms < 100, `${result.world} distance ${result.distance}: p95 CPU meshing must be under 100 ms`);
 }

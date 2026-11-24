@@ -2,6 +2,8 @@
 
 This is a room relay, not a physics or inventory authority. The connection that claimed a name owns that claim; the relay assigns room IDs and the host socket. Choosable names, positions and UID strings do not confer another connection's rights. Shared worlds can use Survival or Creative; the older `classic` wire edition remains supported for existing clients and is creative-only. Current clients restrict chest/furnace use and mining to the host and disable storage-minecart placement, use and destruction in multiplayer, but these client-side safeguards do not bind old or modified clients.
 
+The `beta` edition remains the wire name for the shared game. `room:create` with `terrain: "overworld-v1"` selects the 256-block generator, retains the exact seed, and requires clients to supply that capability in `rooms:list` and `room:join`. A capable list request echoes the supported terrain ID so the frontend can refuse to create a new world on an older relay. Omit `terrain` for legacy Beta (128 blocks) or Classic (64 blocks with finite horizontal bounds). Existing room state and snapshot message types are unchanged; snapshots and single edits use the room's build bounds. Rejoining reconstructs the room from the current shared snapshots, not a saved player inventory. Leaving/disconnecting does not turn room contents into a singleplayer save.
+
 | Message from client | Who can act and what they may change |
 |---|---|
 | `ping`, `players:list`, `rooms:list` | Anyone connected. Read only; the room list shows public rooms with space. |

@@ -377,6 +377,35 @@ try {
   const individual = await request(individualHost, 'room:create', { playerName: 'Solo', name: 'Personal visuals' });
   assert.deepEqual(individual.visuals, { mode: 'individual' }, 'rooms default to player-controlled visuals');
   await request(individualHost, 'room:close');
+  const terrain = 'overworld-v1';
+  assert.equal((await request(individualHost, 'room:create', { edition: 'beta', terrain: 'future' })).type, 'error');
+  for (const gameMode of ['survival', 'creative']) {
+    const room = await request(individualHost, 'room:create', { edition: 'beta', terrain, gameMode, seed: '  long seeded terrain  ' });
+    assert.equal(room.terrain, terrain, 'new worlds retain their generator identity');
+    assert.equal(room.seed, '  long seeded terrain  ', 'modern seed strings are transported exactly');
+    assert.equal(room.gameMode, gameMode);
+    const oldList = await request(anonymous, 'rooms:list');
+    assert.equal(oldList.rooms.some(entry => entry.code === room.code), false, 'old clients do not see tall rooms');
+    const newList = await request(anonymous, 'rooms:list', { terrain });
+    assert.equal(newList.rooms.find(entry => entry.code === room.code)?.terrain, terrain);
+    assert.equal((await request(wrongEditionGuest, 'room:join', { edition: 'beta', code: room.code })).type, 'error');
+    assert.equal((await request(individualHost, 'world:snapshot', { entries: [['0,255,0', [1, 4]]] })).type, 'world:snapshot:accepted');
+    assert.equal((await request(individualHost, 'world:snapshot', { entries: [['0,256,0', [1, 0]]] })).type, 'error');
+    const initialSnapshot = waitFor(wrongEditionGuest, message => message.type === 'world:snapshot' && message.done);
+    const roomJoin = await request(wrongEditionGuest, 'room:join', { edition: 'beta', code: room.code, terrain });
+    assert.equal(roomJoin.terrain, terrain);
+    assert.deepEqual((await initialSnapshot).entries, [['0,255,0', [1, 4]]]);
+    const broadcast = waitFor(individualHost, message => message.type === 'world:edit');
+    wrongEditionGuest.send(JSON.stringify({ type: 'world:edit', edit: { x: 0, y: 256, z: 0, id: 1 } }));
+    wrongEditionGuest.send(JSON.stringify({ type: 'world:edit', edit: { x: 0, y: 255, z: 0, id: 3 } }));
+    assert.deepEqual((await broadcast).edit, { x: 0, y: 255, z: 0, id: 3, meta: 0 });
+    await request(wrongEditionGuest, 'room:leave');
+    const rejoinSnapshot = waitFor(wrongEditionGuest, message => message.type === 'world:snapshot' && message.done);
+    await request(wrongEditionGuest, 'room:join', { edition: 'beta', code: room.code, terrain });
+    assert.deepEqual((await rejoinSnapshot).entries, [['0,255,0', [3, 0]]]);
+    await request(wrongEditionGuest, 'room:leave');
+    await request(individualHost, 'room:close');
+  }
   const psxRoom = await request(individualHost, 'room:create', { playerName: 'Solo', visuals: { mode: 'forced', shaderStyle: 'psx' } });
   assert.equal(psxRoom.visuals.shaderStyle, 'psx', 'relay accepts the 1.7.10 PSX shader preset');
   await request(individualHost, 'room:close');

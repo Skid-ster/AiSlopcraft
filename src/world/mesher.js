@@ -1,7 +1,7 @@
 // Chunk mesher: builds Three.js geometry with baked beta-style lighting
 // (per-face shading + per-vertex light level + biome tint).
 import * as THREE from 'three';
-import { CH, WORLD_H } from './chunk.js';
+import { CH } from './chunk.js';
 import {
   getBlock, AIR, WATER, WATER_FLOW, LAVA, LAVA_FLOW, TILES, LEAVES, ICE, CACTUS, TORCH, REDSTONE_TORCH,
   LADDER, SNOW, CROPS, FARMLAND, CHEST, LEVER, REDSTONE_WIRE, REDSTONE_REPEATER, CAKE_BLOCK, WOOD_DOOR, IRON_DOOR,
@@ -104,11 +104,11 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
   // Cache cross-border reads for this build: AO and smooth lighting repeatedly
   // sample the same neighboring cells, and world lookups otherwise hash strings.
   const paddedWidth = CH + 2;
-  const boundaryBlocks = new Uint16Array(paddedWidth * paddedWidth * WORLD_H);
-  const boundaryLight = new Uint16Array(paddedWidth * paddedWidth * WORLD_H);
+  const boundaryBlocks = new Uint16Array(paddedWidth * paddedWidth * chunk.height);
+  const boundaryLight = new Uint16Array(paddedWidth * paddedWidth * chunk.height);
   const boundaryIndex = (x, y, z) => (y * paddedWidth + z + 1) * paddedWidth + x + 1;
   const getB = (x, y, z) => {
-    if (y < 0 || y >= WORLD_H) return AIR;
+    if (y < 0 || y >= chunk.height) return AIR;
     if (x >= 0 && x < CH && z >= 0 && z < CH) return chunk.get(x, y, z);
     if (x < -1 || x > CH || z < -1 || z > CH) return world.getBlock(wx0 + x, y, wz0 + z);
     const i = boundaryIndex(x, y, z);
@@ -116,7 +116,7 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
     return boundaryBlocks[i] - 1;
   };
   const getL = (x, y, z) => {
-    if (y >= WORLD_H) return 0xf0;
+    if (y >= chunk.height) return 0xf0;
     if (y < 0) return 0;
     if (x >= 0 && x < CH && z >= 0 && z < CH) return chunk.getLight(x, y, z);
     if (x < -1 || x > CH || z < -1 || z > CH) return world.getLight(wx0 + x, y, wz0 + z);
@@ -211,7 +211,7 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
 
   // Avoid traversing the empty sky above this chunk, while preserving blocks
   // placed at any height. The contiguous y-major storage makes this cheap.
-  let top = WORLD_H - 1;
+  let top = chunk.height - 1;
   while (top >= 0) {
     let occupied = false;
     const start = top * CH * CH;
