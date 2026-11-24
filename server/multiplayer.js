@@ -700,16 +700,17 @@ export function createMultiplayerServer({
 
   async function handleRoomCreate(socket, message, requestId) {
     if (!socket.playerName) return fail(socket, requestId, 'Choose an available player name before creating a room.');
-    if (message.edition !== 'classic') return fail(socket, requestId, 'Online rooms are available only in the Classic edition.');
+    if (!['beta', 'classic'].includes(message.edition)) return fail(socket, requestId, 'Unsupported world edition.');
+    if (message.edition === 'beta' && message.gameMode != null && !['survival', 'creative'].includes(message.gameMode)) return fail(socket, requestId, 'Choose Survival or Creative.');
     if (socket.room) return fail(socket, requestId, 'Leave your current room first.');
     if (!allowRate(socket, 'room:create', 20, 60_000)) return fail(socket, requestId, 'You are creating rooms too quickly. Wait a minute and try again.');
     const playerName = socket.playerName;
     const name = cleanText(message.name, 32) || `${playerName}’s world`;
     const password = String(message.password ?? '').slice(0, 64);
     const access = message.access === 'private' ? 'private' : 'public';
-    const edition = 'classic';
-    const gameMode = 'creative';
-    const seed = cleanText(message.seed, 80) || 'Classic';
+    const edition = message.edition;
+    const gameMode = edition === 'classic' ? 'creative' : message.gameMode || 'survival';
+    const seed = cleanText(message.seed, 80) || 'AiSlopcraft';
     if (password.length && password.length < 4) return fail(socket, requestId, 'Passwords must be at least four characters.');
     if (rooms.size >= maxRooms) return fail(socket, requestId, `All ${maxRooms} rooms are in use. Try again later.`);
     if (password && !protectedCreateLimiter.allow(socket.addressKey)) return fail(socket, requestId, 'Too many password-protected rooms were created recently. Wait a minute and try again.');
@@ -730,7 +731,7 @@ export function createMultiplayerServer({
   }
 
   async function handleRoomJoin(socket, message, requestId) {
-    if (message.edition !== 'classic') return fail(socket, requestId, 'Online rooms are available only in the Classic edition.');
+    if (!['beta', 'classic'].includes(message.edition)) return fail(socket, requestId, 'Unsupported world edition.');
     const code = String(message.code ?? '').trim().toUpperCase();
     const room = rooms.get(code);
     if (!validRoom(code) || !room) {

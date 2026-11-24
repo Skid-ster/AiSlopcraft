@@ -270,6 +270,7 @@ export class Lighting {
     this.lastShadowTime = -Infinity;
     this.lastShadowPosition = new THREE.Vector3(Infinity, Infinity, Infinity);
     this.lastShadowSunDirection = new THREE.Vector3(Infinity, Infinity, Infinity);
+    this.lastShadowForward = new THREE.Vector3(Infinity, Infinity, Infinity);
     this.shared = {
       uSky: { value: 1 },
       uSkyTint: { value: new THREE.Color(1, 1, 1) },
@@ -399,14 +400,18 @@ export class Lighting {
   updateShadows(renderer, scene, camera, sky, style, time, force = false, enabled = true) {
     const id = shaderStyleId(style);
     if (!enabled || id < 2 || id === 4 || sky.sunDirection.y <= 0.06) { this.shared.uShadowStrength.value = 0; return; }
-    if (!force && time - this.lastShadowTime < 0.12) return;
+    const wasDisabled = this.shared.uShadowStrength.value === 0;
+    this.shared.uShadowStrength.value = id === 3 ? 0.78 : 0.50;
+    if (!force && !wasDisabled && time - this.lastShadowTime < 0.12) return;
+    camera.getWorldDirection(this._forward);
     const cameraMoved = this.lastShadowPosition.distanceToSquared(camera.position) > 0.25;
+    const cameraTurned = this.lastShadowForward.distanceToSquared(this._forward) > 0.0004;
     const sunMoved = this.lastShadowSunDirection.distanceToSquared(sky.sunDirection) > 0.000004;
-    if (!force && !cameraMoved && !sunMoved && time - this.lastShadowTime < 1.0) return;
+    if (!force && !wasDisabled && !cameraMoved && !cameraTurned && !sunMoved && time - this.lastShadowTime < 1.0) return;
     this.lastShadowTime = time;
     this.lastShadowPosition.copy(camera.position);
+    this.lastShadowForward.copy(this._forward);
     this.lastShadowSunDirection.copy(sky.sunDirection);
-    camera.getWorldDirection(this._forward);
     this._center.copy(camera.position).addScaledVector(this._forward, 18);
     this.shadowCamera.position.copy(this._center).addScaledVector(sky.sunDirection, 95);
     this.shadowCamera.lookAt(this._center);
@@ -428,8 +433,6 @@ export class Lighting {
     this.shadowCamera.updateMatrixWorld(true);
     this.shadowMatrix.set(0.5, 0, 0, 0.5, 0, 0.5, 0, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0, 1);
     this.shadowMatrix.multiply(this.shadowCamera.projectionMatrix).multiply(this.shadowCamera.matrixWorldInverse);
-    this.shared.uShadowStrength.value = id === 3 ? 0.78 : 0.50;
-
     const target = renderer.getRenderTarget();
     const override = scene.overrideMaterial;
     const autoClear = renderer.autoClear;
@@ -519,9 +522,9 @@ export class PSXPostProcess {
           vec2 pixel = floor(vUv * uResolution) + 0.5;
           vec2 sampleUv = pixel / uResolution;
           vec3 color = texture2D(uScene, sampleUv).rgb;
-          color = clamp(1.2 * (color - 0.5) + 0.5, 0.0, 1.0);
-          float dither = (bayer4(pixel) - 7.5) * 0.035;
-          color = floor(clamp(color * 24.0 + dither, 0.0, 23.0)) / 24.0;
+          // Quantize linear light without a contrast offset that erases night colors.
+          float dither = (bayer4(pixel) + 0.5) / 16.0 - 0.5;
+          color = floor(clamp(color * 23.0 + 0.5 + dither, 0.0, 23.0)) / 23.0;
           gl_FragColor = vec4(color, 1.0);
           #include <colorspace_fragment>
         }

@@ -357,9 +357,23 @@ try {
   await request(classicHost, 'room:close');
 
   const individualHost = await connect();
-  const betaRoomRejected = await request(individualHost, 'room:create', { edition: 'beta', playerName: 'Solo' });
-  assert.equal(betaRoomRejected.type, 'error', 'relay does not allocate multiplayer rooms for the Beta edition');
-  assert.match(betaRoomRejected.message, /only in the Classic edition/i);
+  const invalidMode = await request(individualHost, 'room:create', { edition: 'beta', gameMode: 'adventure' });
+  assert.equal(invalidMode.type, 'error', 'unsupported modes cannot allocate a room');
+  const survivalRoom = await request(individualHost, 'room:create', { edition: 'beta', gameMode: 'survival', seed: 'shared-survival' });
+  assert.equal(survivalRoom.type, 'room:joined', 'the shared game can host Survival');
+  assert.equal(survivalRoom.gameMode, 'survival');
+  assert.equal(survivalRoom.edition, 'beta');
+  assert.equal((await request(individualHost, 'world:snapshot', { entries: [['300,100,-300', [1, 0]]] })).type, 'world:snapshot:accepted', 'shared worlds are not limited to Classic bounds');
+  assert.equal((await request(individualHost, 'world:snapshot', { entries: [['0,128,0', [1, 0]]] })).type, 'error', 'edits beyond the current world height remain invalid');
+  const survivalGuest = await request(wrongEditionGuest, 'room:join', { edition: 'beta', code: survivalRoom.code });
+  assert.equal(survivalGuest.type, 'room:joined');
+  assert.equal(survivalGuest.gameMode, 'survival', 'guests receive the host-selected game mode');
+  await request(wrongEditionGuest, 'room:leave');
+  await request(individualHost, 'room:close');
+  const creativeRoom = await request(individualHost, 'room:create', { edition: 'beta', gameMode: 'creative' });
+  assert.equal(creativeRoom.type, 'room:joined', 'the shared game can host Creative');
+  assert.equal(creativeRoom.gameMode, 'creative');
+  await request(individualHost, 'room:close');
   const individual = await request(individualHost, 'room:create', { playerName: 'Solo', name: 'Personal visuals' });
   assert.deepEqual(individual.visuals, { mode: 'individual' }, 'rooms default to player-controlled visuals');
   await request(individualHost, 'room:close');

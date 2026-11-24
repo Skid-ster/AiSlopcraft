@@ -127,13 +127,9 @@ try {
   ui = new UI(game);
 
   check('resource pack manager is available from the title screen', !!btn('btn-pack'));
-  check('Beta menu offers Singleplayer and Classic entry, with no Multiplayer action', !!btn('btn-classic') && !!btn('btn-singleplayer') && !btn('btn-multiplayer') && !!btn('btn-pack') && !!btn('btn-saves') && !!btn('btn-quit'));
+  check('one menu offers Singleplayer and Multiplayer without edition switching', !!btn('btn-singleplayer') && !!btn('btn-multiplayer') && !btn('btn-classic') && !btn('btn-beta') && !!btn('btn-pack') && !!btn('btn-saves') && !!btn('btn-quit'));
   check('title is a full-screen game menu, not a centered marketing website', !!document.querySelector('.classic-main-menu') && !!document.querySelector('#menu-heading') && !document.querySelector('.classic-site-shell') && !document.querySelector('.classic-feature-grid'));
-  check('Beta menu presents only the two play actions and no multiplayer copy', document.querySelectorAll('.classic-menu-actions .title-primary-stack .btn').length === 2 && !document.querySelector('.title-multiplayer-hint') && document.querySelector('.classic-main-menu').textContent.includes('BETA MODE · SINGLEPLAYER ONLY'));
-  let editionHome = null;
-  game.openEditionHome = edition => { editionHome = edition; };
-  btn('btn-classic').click();
-  check('Play Classic opens the distinct Classic edition menu', editionHome === 'classic');
+  check('menu identifies its 1.7.10 inspiration and presents both play actions', document.querySelectorAll('.classic-menu-actions .title-primary-stack .btn').length === 2 && document.querySelector('.title-sub').textContent.includes('1.7.10'));
   const previousEdition = game.edition;
   const selectedClassicBlocks = [];
   game.edition = 'classic';
@@ -194,7 +190,10 @@ try {
   check('particle quality control cycles down for performance', game.settings.particles === 'decreased');
   btn('opt-particles').click();
   check('particle quality control reaches minimal mode', game.settings.particles === 'minimal');
-  btn('opt-shader').click(); btn('opt-shader').click();
+  btn('opt-shader').focus();
+  btn('opt-shader').click();
+  check('keyboard focus remains on the shader control after changing presets', document.activeElement === btn('opt-shader'));
+  btn('opt-shader').click();
   check('shader selection applies live to the game renderer', game.shaderStyle === 'cinematic');
   btn('opt-brightness').value = '120';
   btn('opt-brightness').dispatchEvent(new dom.window.Event('input'));
@@ -232,20 +231,21 @@ try {
   player.inventory.fill(null);
   ui.mode = 'title';
 
-  // ---------- Classic edition: multiplayer lobby ----------
-  check('Beta title has no Multiplayer control', !btn('btn-multiplayer'));
-  game.edition = 'classic';
-  ui.multiplayerOpenButton = btn('btn-singleplayer');
+  // ---------- shared-edition multiplayer lobby ----------
+  game.edition = 'beta';
+  ui.multiplayerOpenButton = btn('btn-multiplayer');
+  btn('btn-multiplayer').focus();
   ui.openMultiplayer();
-  check('Classic Multiplayer opens an accessible dialog and focuses the name field', document.getElementById('multiplayer-screen').style.display === 'flex' && document.getElementById('multiplayer-screen').getAttribute('role') === 'dialog' && document.activeElement === btn('mp-username'));
+  check('Multiplayer opens an accessible dialog and focuses the name field', document.getElementById('multiplayer-screen').style.display === 'flex' && document.getElementById('multiplayer-screen').getAttribute('role') === 'dialog' && document.activeElement === btn('mp-username'));
   document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { code: 'Escape', bubbles: true, cancelable: true }));
-  check('Escape closes Multiplayer and restores focus to its opener', document.getElementById('multiplayer-screen').style.display === 'none' && document.activeElement === btn('btn-singleplayer'));
+  check('Escape closes Multiplayer and restores focus to its opener', document.getElementById('multiplayer-screen').style.display === 'none' && document.activeElement === btn('btn-multiplayer'));
   ui.openMultiplayer();
   check('custom relay configuration is hidden under advanced settings by default', !!document.querySelector('.mp-custom-relay') && !document.querySelector('.mp-custom-relay').open);
   check('multiplayer has a unique-name field but no account or password controls', !!btn('mp-username') && !!btn('mp-claim') && !!btn('mp-release-name') && !btn('mp-auth-password') && !btn('mp-login') && !btn('mp-signup'));
   check('name rules explain the 3–20 character limit and connection-only reservation', btn('mp-username').minLength === 3 && btn('mp-username').maxLength === 20 && document.querySelector('#mp-name-panel').textContent.includes('held while connected'));
   check('multiplayer quick path keeps advanced options and player details collapsed', !document.querySelector('.mp-more-options').open && !document.querySelector('.mp-invite-options').open && !document.querySelector('#mp-online-panel').open);
-  check('Classic lobby keeps clear create/join actions and the existing creative option', btn('mp-world-name').value === 'My world' && btn('mp-mode').value === 'survival' && btn('mp-create').textContent === 'Create public world' && !!btn('mp-refresh'));
+  check('lobby offers Survival and Creative for shared worlds', btn('mp-world-name').value === 'My world' && btn('mp-mode').value === 'survival' && !btn('mp-mode').closest('label').hidden && btn('mp-mode').options.length === 2 && !!btn('mp-refresh'));
+  check('multiplayer lobby warns about incomplete inventory synchronization', /host.*chest.*furnace/i.test(document.getElementById('multiplayer-screen').textContent) && /storage minecart/i.test(document.getElementById('multiplayer-screen').textContent));
   check('public online player list is optional and can be expanded', !!btn('mp-online-list') && !!btn('mp-online-refresh') && !document.querySelector('#mp-online-panel').hidden);
   const fakeNameClient = {
     playerName: null,
@@ -261,7 +261,7 @@ try {
   check('global online leaderboard lists all connected names and identifies me', btn('mp-online-count').textContent === '2 online' && btn('mp-online-list').textContent.includes('Visitor') && btn('mp-online-list').textContent.includes('You'));
   await ui.releaseMultiplayerName();
   check('releasing the temporary name disables room creation', fakeNameClient.playerName === null && btn('mp-name-panel').hidden === false && btn('mp-create').disabled);
-  const lockedRoom = { name: 'Private world', code: 'ABC234', seed: 'test-seed', edition: 'classic', players: 1, maxPlayers: 5, gameMode: 'creative', passwordProtected: true, visualMode: 'individual' };
+  const lockedRoom = { name: 'Private world', code: 'ABC234', seed: 'test-seed', edition: 'beta', players: 1, maxPlayers: 5, gameMode: 'creative', passwordProtected: true, visualMode: 'individual' };
   const roomService = {
     playerName: 'FriendlyBuilder',
     async listRooms() { return { rooms: [lockedRoom] }; },
@@ -277,10 +277,10 @@ try {
   check('choosing a protected public room opens invite details and focuses its password field', btn('mp-code').value === 'ABC234' && document.querySelector('.mp-invite-options').open && document.activeElement === btn('mp-join-password'));
   let routedRoom = null;
   game.openRoomHome = room => { routedRoom = room; };
-  roomService.listRooms = async () => ({ rooms: [{ ...lockedRoom, seed: 'other-classic-seed' }] });
+  roomService.listRooms = async () => ({ rooms: [{ ...lockedRoom, seed: 'other-world-seed' }] });
   await ui.refreshPublicRooms();
   document.querySelector('.mp-room').click();
-  check('joining a public room first opens its matching Classic world seed', routedRoom?.seed === 'other-classic-seed' && routedRoom?.edition === 'classic');
+  check('joining a public room first opens its matching world seed', routedRoom?.seed === 'other-world-seed' && routedRoom?.edition === 'beta');
   delete game.openRoomHome;
   ui.openMultiplayer();
   check('static-only hosting links to the Azure multiplayer setup guide', document.getElementById('mp-status').textContent.includes('static hosting') && document.querySelector('.mp-deploy-link')?.href.endsWith('#deploy-to-azure'));
@@ -296,7 +296,7 @@ try {
   let publishedEdits = [];
   ui.multiplayerClient = {
     playerName: 'Host',
-    async createRoom(options) { createdRoomOptions = options; createdVisuals = options.visuals; return { name: 'Test room', gameMode: 'creative', edition: 'classic' }; },
+    async createRoom(options) { createdRoomOptions = options; createdVisuals = options.visuals; return { name: 'Test room', gameMode: options.gameMode, edition: 'beta' }; },
     async request(type, payload) { if (type === 'world:snapshot') publishedEdits.push(...payload.entries); return { type: 'world:snapshot:accepted' }; },
     send() {},
   };
@@ -307,15 +307,17 @@ try {
   btn('mp-visual-policy').dispatchEvent(new dom.window.Event('change'));
   check('individual visual policy leaves host shader and pack controls disabled', btn('mp-host-shader').disabled && btn('mp-host-texture-pack').disabled);
   await ui.createMultiplayerRoom();
-  check('Classic room creation is edition-tagged creative and leaves visuals player-controlled', createdRoomOptions?.edition === 'classic' && createdRoomOptions?.gameMode === 'creative' && createdVisuals?.mode === 'individual' && !('resourcePack' in createdVisuals));
+  check('Survival room creation uses the selected mode and player-controlled visuals', createdRoomOptions?.edition === 'beta' && createdRoomOptions?.gameMode === 'survival' && createdVisuals?.mode === 'individual' && !('resourcePack' in createdVisuals));
   check('host publishes saved world edits as compact metadata-preserving batches', publishedEdits.length === 2 && publishedEdits[0][1][0] === 4 && publishedEdits[0][1][1] === 1);
   btn('mp-visual-policy').value = 'forced';
   btn('mp-visual-policy').dispatchEvent(new dom.window.Event('change'));
   btn('mp-host-shader').value = 'psx';
   btn('mp-host-texture-pack').value = 'pack-share';
+  btn('mp-mode').value = 'creative';
   check('forced policy enables explicit shader and texture-pack selection', !btn('mp-host-shader').disabled && !btn('mp-host-texture-pack').disabled);
   await ui.createMultiplayerRoom();
   check('forced room creation sends the selected shader and host texture pack', createdVisuals?.mode === 'forced' && createdVisuals.shaderStyle === 'psx' && createdVisuals.resourcePack?.name === 'Host Pack');
+  check('Creative room creation uses the selected mode', createdRoomOptions?.gameMode === 'creative');
   let createFailureCleanup = false;
   const failingRoomClient = {
     playerName: 'Host', room: null, socket: { readyState: 1 },
@@ -336,13 +338,12 @@ try {
   await ui.createMultiplayerRoom();
   check('oversized saved worlds fail before allocating a multiplayer room', !oversizedCreateAttempted && btn('mp-status').textContent.includes('up to 50,000'));
   game.world = { edits: new Map([['1,2,3', 4], ['2,2,3', 5]]), metaEdits: new Map([['1,2,3', 1]]) };
-  const previousMultiplayerEdition = game.edition;
-  game.edition = 'beta';
+  game.edition = 'classic';
   await ui.createMultiplayerRoom();
-  check('Beta multiplayer is unavailable while Beta singleplayer remains the play path', btn('mp-status').textContent.includes('Multiplayer is available in Classic mode'));
+  check('legacy worlds cannot accidentally start incompatible online rooms', btn('mp-status').textContent.includes('Return to the main menu'));
   await ui.joinMultiplayerRoom();
-  check('Beta clients are prevented from joining Classic multiplayer rooms', btn('mp-status').textContent.includes('Multiplayer is available in Classic mode'));
-  game.edition = previousMultiplayerEdition;
+  check('legacy worlds cannot accidentally join incompatible online rooms', btn('mp-status').textContent.includes('Return to the main menu'));
+  game.edition = 'beta';
   let joinFailureCleanup = false;
   const failingJoinClient = {
     playerName: 'Guest', room: null, socket: { readyState: 1 },
@@ -358,7 +359,7 @@ try {
   check('Lobby offers public/private and survival/creative options',
     document.getElementById('mp-access').options.length === 2 && document.getElementById('mp-mode').options.length === 2);
   btn('mp-back').click();
-  check('Back closes Multiplayer and returns keyboard focus to its opener', document.getElementById('multiplayer-screen').style.display === 'none' && document.activeElement === btn('btn-singleplayer'));
+  check('Back closes Multiplayer and returns keyboard focus to its opener', document.getElementById('multiplayer-screen').style.display === 'none' && document.activeElement === btn('btn-multiplayer'));
   game.edition = 'beta';
   game.networkRoom = { name: 'Test room', gameMode: 'survival', code: 'ABC234', id: 'host-id', playerName: 'Host', role: 'host', maxPlayers: 5,
     players: [{ id: 'host-id', name: 'Host', role: 'host' }, { id: 'guest-id', name: 'Guest', role: 'player' }] };
@@ -389,6 +390,12 @@ try {
   testSavedWorlds = [{ id: 'save-id-1', seed: 'map-seed-1', name: 'Existing World', gameMode: 'survival' }];
   btn('btn-singleplayer').click();
   check('Singleplayer opens the saved-world selector', visible('world-select-screen') && !!btn('world-create'));
+  btn('world-import').click();
+  document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { code: 'Escape', bubbles: true, cancelable: true }));
+  check('Escape from the world importer returns to the world selector', visible('world-select-screen') && !visible('world-save-screen'));
+  btn('world-import').click();
+  btn('world-save-screen').dispatchEvent(new dom.window.MouseEvent('mousedown', { bubbles: true }));
+  check('closing the world importer by its backdrop returns to the world selector', visible('world-select-screen') && !visible('world-save-screen'));
   check('saved worlds are listed with Play, Create, Rename, Delete, and Re-Create actions', document.querySelector('.world-list-row strong')?.textContent === 'Existing World' && !!btn('world-play') && !!btn('world-rename') && !!btn('world-delete') && !!btn('world-recreate'));
   btn('world-create').click();
   btn('new-world-name').value = 'Reference World';
@@ -583,27 +590,24 @@ try {
   let classicLaunch = null;
   let betaHomeRequested = false;
   const classicGame = { ...game, edition: 'classic', player: { ...player, touchSupported: false }, listSavedWorlds: () => classicWorlds,
-    openLocalWorld: (...args) => { classicLaunch = args; }, openEditionHome: edition => { betaHomeRequested = edition === 'beta'; } };
+    openLocalWorld: (...args) => { classicLaunch = args; }, openEditionHome: (edition, multiplayer) => { betaHomeRequested = edition === 'beta' && multiplayer; } };
   const classicUi = new UI(classicGame);
-  check('Classic title offers its own Singleplayer and Multiplayer actions plus saves', !!classicDom.window.document.getElementById('btn-singleplayer')
-    && !classicDom.window.document.getElementById('btn-multiplayer').hidden
-    && !!classicDom.window.document.getElementById('btn-saves'));
-  check('Classic multiplayer is always creative rather than exposing Beta Survival mode', classicUi.multiplayerScreen.querySelector('#mp-mode').value === 'creative'
-    && classicUi.multiplayerScreen.querySelector('#mp-mode').closest('label').hidden);
-  check('Classic launcher identifies its edition and clearly advertises multiplayer', classicDom.window.document.querySelector('.title-sub')?.textContent === 'CLASSIC CREATIVE'
-    && classicDom.window.document.querySelector('.classic-menu-version')?.textContent.includes('SINGLEPLAYER + MULTIPLAYER')
-    && classicDom.window.document.querySelector('.title-multiplayer-hint')?.textContent.includes('multiplayer'));
+  check('legacy worlds return to the same unified main menu', !!classicDom.window.document.getElementById('btn-singleplayer')
+    && !!classicDom.window.document.getElementById('btn-multiplayer') && !classicDom.window.document.getElementById('btn-beta'));
+  classicUi.openMultiplayer();
+  check('opening multiplayer from a legacy world returns to the shared edition', betaHomeRequested);
   classicDom.window.document.getElementById('btn-singleplayer').click();
-  check('Classic Singleplayer filters the saved-world list to Classic worlds', classicUi.worldSelectScreen.textContent.includes('Classic save')
-    && !classicUi.worldSelectScreen.textContent.includes('Beta save'));
+  check('both existing and legacy saves remain visible', classicUi.worldSelectScreen.textContent.includes('Classic save')
+    && classicUi.worldSelectScreen.textContent.includes('Beta save') && classicUi.worldSelectScreen.textContent.includes('Legacy Classic world'));
+  classicUi.worldSelectScreen.querySelectorAll('.world-list-row')[1].click();
+  classicUi.worldSelectScreen.querySelector('#world-play').click();
+  check('legacy worlds retain their original edition when opened', classicLaunch?.[4] === 'classic');
   classicUi.worldSelectScreen.querySelector('#world-create').click();
-  check('Classic world creation is explicitly creative and hides Beta survival mode', classicUi.worldCreateScreen.querySelector('#new-world-mode').hidden
-    && classicUi.worldCreateScreen.querySelector('#world-mode-description').textContent.includes('Classic creative'));
-  classicUi.worldCreateScreen.querySelector('#new-world-name').value = 'New Classic';
+  check('new worlds offer the same Survival and Creative choice', !classicUi.worldCreateScreen.querySelector('#new-world-mode').hidden
+    && classicUi.worldCreateScreen.querySelector('#new-world-mode').textContent.includes('Survival'));
+  classicUi.worldCreateScreen.querySelector('#new-world-name').value = 'New World';
   classicUi.worldCreateScreen.querySelector('#world-create-confirm').click();
-  check('Classic Singleplayer creates and saves with the Classic edition', classicLaunch?.[2] === 'classic' && classicLaunch?.[4] === 'classic');
-  classicDom.window.document.getElementById('btn-beta').click();
-  check('Classic edition can return to Beta Singleplayer', betaHomeRequested);
+  check('new worlds use the shared edition without altering legacy saves', classicLaunch?.[2] === 'survival' && classicLaunch?.[4] === 'beta');
   classicUi.setMode('game');
   classicGame.player.leftDown = classicGame.player.rightDown = true;
   classicUi.setMode('pause');

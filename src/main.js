@@ -9,7 +9,7 @@ import { buildAtlas, buildItemIcons, buildEmissionAtlas } from './world/textures
 import { extractBlockSprites, paintBlockSprites } from './world/resource-pack.js';
 import {
   AIR, WATER, WATER_FLOW, LAVA, TORCH, CRAFTING_TABLE, FURNACE, SAND, GRAVEL, LEAVES, GRASS, DIRT,
-  LOG, GLASS, getBlock, breakTime, canHarvest, ITEMS, itemName, isBlock, STONE, COBBLE,
+  LOG, GLASS, BRICK, getBlock, breakTime, canHarvest, ITEMS, itemName, isBlock, STONE, COBBLE,
   TILES, SAPLING, TALL_GRASS, PLANKS, TNT, WOOD_DOOR, IRON_DOOR,
   BED_BLOCK, CAKE_BLOCK, CHEST, CROPS, FARMLAND, WOOL_BASE, LEVER, RAIL, REDSTONE_WIRE, REDSTONE_TORCH, REDSTONE_REPEATER, placeableBlockForItem, FURNACE_LIT
 } from './world/blocks.js';
@@ -218,7 +218,7 @@ const game = {
     ui?.refresh?.();
     return true;
   },
-  openEditionHome(edition = 'beta') {
+  openEditionHome(edition = 'beta', multiplayer = false) {
     const classic = edition === 'classic';
     const token = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const url = new URL(location.href);
@@ -227,6 +227,7 @@ const game = {
     url.searchParams.set('world', classic ? 'Classic Edition' : 'Beta Edition');
     if (classic) url.searchParams.set('edition', 'classic'); else url.searchParams.delete('edition');
     url.searchParams.delete('mode'); url.searchParams.delete('room'); url.searchParams.delete('relay'); url.searchParams.delete('launch');
+    if (multiplayer) url.searchParams.set('multiplayer', '1'); else url.searchParams.delete('multiplayer');
     location.assign(url.href);
   },
   openRoomHome(room) {
@@ -239,6 +240,7 @@ const game = {
     url.searchParams.set('room', String(room.code || ''));
     url.searchParams.delete('mode');
     url.searchParams.delete('launch');
+    url.searchParams.delete('multiplayer');
     const relay = this.multiplayerClient?.relayUrl;
     if (relay) url.searchParams.set('relay', relay);
     location.assign(url.href);
@@ -251,6 +253,7 @@ const game = {
     url.searchParams.set('mode', gameMode === 'creative' ? 'creative' : gameMode === 'classic' ? 'classic' : 'survival');
     if (edition === 'classic') url.searchParams.set('edition', 'classic'); else url.searchParams.delete('edition');
     url.searchParams.delete('room');
+    url.searchParams.delete('multiplayer');
     url.searchParams.set('launch', '1');
     location.assign(url.href);
   },
@@ -608,7 +611,7 @@ const game = {
       edits: [...world.edits].map(([key, id]) => [key, id, world.metaEdits.get(key) || 0]),
       settings: this.settings, spawnBed: this.spawnBed, timeOfDay: sky.timeOfDay, furnaces: [...furnaces], chests: [...chests], vehicles: vehicles.serialize(),
       items: itemEntities.filter(it => !it.dead).map(it => ({ id: it.id, count: it.count, damage: it.damage, pos: it.mesh.position.toArray(), vy: it.vy, age: it.age })),
-      player: { pos: player.pos.toArray(), yaw: player.yaw, pitch: player.pitch, health: player.health, inventory: player.inventory, armor: player.armor, hotbarIndex: player.hotbarIndex, stats: player.stats } };
+      player: { pos: player.pos.toArray(), yaw: player.yaw, pitch: player.pitch, health: player.health, hunger: player.hunger, saturation: player.saturation, exhaustion: player.exhaustion, inventory: player.inventory, armor: player.armor, hotbarIndex: player.hotbarIndex, stats: player.stats } };
   },
   saveGame() {
     // Multiplayer rooms are temporary; never overwrite a local world with room state.
@@ -651,6 +654,7 @@ const game = {
     url.searchParams.set('mode', save.gameMode);
     if (save.edition === 'classic') url.searchParams.set('edition', 'classic'); else url.searchParams.delete('edition');
     url.searchParams.delete('room');
+    url.searchParams.delete('multiplayer');
     url.searchParams.set('launch', '1');
     location.assign(url.href);
     return true;
@@ -673,6 +677,9 @@ const game = {
         if (saved && Array.isArray(saved.pos) && saved.pos.length === 3 && saved.pos.every(Number.isFinite)) {
           player.pos.fromArray(saved.pos); player.yaw = Number(saved.yaw) || 0; player.pitch = Number(saved.pitch) || 0;
           player.health = Math.max(1, Math.min(player.maxHealth, Number(saved.health) || player.maxHealth));
+          player.hunger = saved.hunger;
+          player.saturation = saved.saturation;
+          player.exhaustion = saved.exhaustion;
           if (Array.isArray(saved.inventory) && saved.inventory.length === 36) player.inventory = saved.inventory;
           if (Array.isArray(saved.armor) && saved.armor.length === 4) player.armor = saved.armor;
           player.hotbarIndex = Math.max(0, Math.min(8, Number(saved.hotbarIndex) || 0));
@@ -680,12 +687,9 @@ const game = {
           camera.position.set(player.pos.x, player.pos.y + 1.62, player.pos.z);
         }
         player.gameMode = this.edition === 'classic' ? 'classic' : this.networkRoom?.gameMode || savedGame?.gameMode || START_GAME_MODE;
-        if (this.networkRoom && this.edition !== 'classic') {
-          player.gameMode = this.networkRoom.gameMode;
-          if (player.gameMode === 'creative') {
-            const palette = [STONE, DIRT, GRASS, COBBLE, PLANKS, SAND, GLASS, LOG, TORCH, LEAVES, BRICK, WOOL_BASE];
-            for (let i = 0; i < palette.length; i++) if (!player.inventory[i]) player.inventory[i] = { id: palette[i], count: 1, damage: 0 };
-          }
+        if (player.gameMode === 'creative' && (!saved || this.networkRoom)) {
+          const palette = [STONE, DIRT, GRASS, COBBLE, PLANKS, SAND, GLASS, LOG, TORCH, LEAVES, BRICK, WOOL_BASE];
+          for (let i = 0; i < palette.length; i++) if (!player.inventory[i]) player.inventory[i] = { id: palette[i], count: 1, damage: 0 };
         }
         if (this.edition === 'classic') {
           player.classicFlying = false;
@@ -1124,6 +1128,13 @@ function tryBreakBlock(dt) {
     return;
   }
   const id = world.getBlock(hit.x, hit.y, hit.z);
+  if (game.networkRoom?.role === 'guest' && (id === CHEST || id === FURNACE || id === FURNACE_LIT)) {
+    player.leftDown = false;
+    player.mining.active = false;
+    player.mining.progress = 0;
+    ui.notify('Only the host can use or mine chests and furnaces in multiplayer.');
+    return;
+  }
   const held = player.heldStack;
   const total = player.gameMode === 'creative' ? 0 : player.gameMode === 'classic' ? id === BEDROCK ? Infinity : 0 : breakTime(id, held ? held.id : null);
 
@@ -1171,6 +1182,7 @@ function tryBreakBlock(dt) {
   }
 }
 
+let eating = null;
 function tryPlaceBlock() {
   const held = player.heldStack;
   if (!held) return;
@@ -1178,7 +1190,7 @@ function tryPlaceBlock() {
   // These items are handled once per click, never by repeated block placement.
   if ([295, 325, 326, 327, 368].includes(held.id) || itemDef?.tool === 'hoe') return;
   if (itemDef?.food) {
-    if (advanceEating({id:held.id}, 0, player, audio, ui.mode === 'game').completed) ui.refresh();
+    if (!eating || eating.id !== held.id) eating = { id: held.id, elapsed: 0 };
     return;
   }
 
@@ -1620,6 +1632,11 @@ document.addEventListener('mousedown', (e) => {
   if (ui.mode !== 'game' || !player.controlsActive) return;
   if (`Mouse${e.button}` === player.bindings.attack) {
     const target = vehicles.target(player);
+    if (target?.type === 'storage' && game.networkRoom) {
+      player.leftDown = false;
+      ui.notify('Storage minecarts are unavailable in multiplayer.');
+      return;
+    }
     if (target && vehicles.remove(target)) {
       game.multiplayerClient?.send('vehicle:remove', { uid: target.networkId });
       const x = target.group.position.x - 0.5, y = target.group.position.y, z = target.group.position.z - 0.5;
@@ -1632,6 +1649,10 @@ document.addEventListener('mousedown', (e) => {
     const vehicle = vehicles.target(player);
     if (vehicle) {
       player.rightDown = false;
+      if (vehicle.type === 'storage' && game.networkRoom) {
+        ui.notify('Storage minecarts are unavailable in multiplayer.');
+        return;
+      }
       if (vehicle.type === 'storage') { openChestSlots(vehicle.slots, null, 'Minecart with Chest', vehicle); return; }
       if (vehicle.type === 'powered') {
         if (player.heldStack?.id === 263) {
@@ -1652,6 +1673,11 @@ document.addEventListener('mousedown', (e) => {
     const hit = player.raycast(world, 5, { includeLiquids: held?.id === 325 || held?.id === 333 });
     if (hit) {
       const id = world.getBlock(hit.x, hit.y, hit.z);
+      if (game.networkRoom?.role === 'guest' && (id === CHEST || id === FURNACE || id === FURNACE_LIT)) {
+        player.rightDown = false;
+        ui.notify('Only the host can use or mine chests and furnaces in multiplayer.');
+        return;
+      }
       if (id === CHEST) { openChest(hit.x, hit.y, hit.z); return; }
       if (id === CRAFTING_TABLE) {
         ui.craftSize = 3; ui.setMode('crafting'); return;
@@ -1697,6 +1723,11 @@ document.addEventListener('mousedown', (e) => {
         player.rightDown = false; audio.pop(); firstPersonArm.triggerPlaceSwing(); ui.refresh();
         return;
       }
+    }
+    if (held?.id === 342 && game.networkRoom) {
+      player.rightDown = false;
+      ui.notify('Storage minecarts are unavailable in multiplayer.');
+      return;
     }
     if ([333,328,342,343].includes(held?.id)) {
       player.rightDown = false;
@@ -1767,11 +1798,13 @@ function frame() {
 
   if (game.started && ui.mode !== 'title') {
     const paused = simulationPaused;
+    if (paused) eating = null;
 
     if (!paused) {
       const mountedBeforeVehicleUpdate = vehicles.mounted;
       const ridingVehicle = vehicles.update(dt, player);
       if (!ridingVehicle) player.update(dt, world, audio);
+      player.updateHunger(dt, game.settings.difficulty, audio);
       if (game.networkRoom?.role === 'guest') {
         if (mountedBeforeVehicleUpdate && !vehicles.mounted) game.publishVehicleState(mountedBeforeVehicleUpdate, false);
         else if (vehicles.mounted) {
@@ -1802,6 +1835,9 @@ function frame() {
       } else {
         placeCooldown = 0;
       }
+      const eatingStep = advanceEating(eating, dt, player, audio, ui.mode === 'game');
+      eating = eatingStep.eating;
+      if (eatingStep.completed) ui.refresh();
 
       const networked = !!game.networkRoom;
       const hostSimulates = !networked || game.networkRoom.role === 'host';
@@ -1915,7 +1951,7 @@ function frame() {
       const p = player.pos;
       const biome = world.gen.columnInfo(Math.floor(p.x), Math.floor(p.z));
       ui.updateDebug([
-        `AiSlopcraft Beta 1.7.3 (clone)`,
+        `AiSlopcraft · 1.7.10-inspired`,
         `${fps} fps  T: ${game.time.toFixed(0)}s  chunks: ${world.chunks.size}  q: ${chunkQueue.length}`,
         `XYZ: ${p.x.toFixed(3)} / ${p.y.toFixed(3)} / ${p.z.toFixed(3)}`,
         `Block: ${Math.floor(p.x)} ${Math.floor(p.y)} ${Math.floor(p.z)}`,

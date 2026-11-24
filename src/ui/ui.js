@@ -105,32 +105,29 @@ export class UI {
         this.notify(`${itemName(id)} selected`, 1100);
       }
     });
-    if (this.game.edition === 'classic' && new URLSearchParams(window.location.search).has('room')) {
+    if (['room', 'multiplayer'].some(key => new URLSearchParams(window.location.search).has(key))) {
       setTimeout(() => this.openMultiplayer(), 0);
     }
   }
 
   // ---------- title ----------
   buildTitle() {
-    const classicEdition = this.game.edition === 'classic';
     const div = document.createElement('div');
     div.className = 'screen title-screen';
     div.id = 'title-screen';
     div.innerHTML = `
-      <div class="classic-main-menu edition-${classicEdition ? 'classic' : 'beta'}">
+      <div class="classic-main-menu">
         <main class="classic-main-menu-panel" aria-labelledby="menu-heading">
           <div class="title-logo">
             <div class="title-main"><img src="${logo}" alt="AiSlopcraft"></div>
-            <div class="title-sub">${classicEdition ? 'CLASSIC CREATIVE' : 'JAVA EDITION BETA 1.7.3'}</div>
+            <div class="title-sub">INSPIRED BY JAVA 1.7.10</div>
             <div class="splash">${this.splash}</div>
           </div>
           <h1 class="classic-menu-heading" id="menu-heading">MAIN MENU</h1>
-          <p class="classic-menu-copy">${classicEdition ? 'Creative building · singleplayer and multiplayer' : 'Classic survival · singleplayer only'}</p>
+          <p class="classic-menu-copy">Survival and Creative · play alone or together</p>
           <div class="title-buttons classic-menu-actions">
             <div class="title-primary-stack">
-              ${classicEdition
-                ? '<button class="btn" id="btn-singleplayer">SINGLEPLAYER</button><button class="btn" id="btn-multiplayer">MULTIPLAYER</button><button class="btn" id="btn-beta">BETA 1.7.3</button><small class="title-multiplayer-hint">Classic worlds save locally · multiplayer is account-free</small>'
-                : '<button class="btn" id="btn-singleplayer">SINGLEPLAYER</button><button class="btn" id="btn-classic">PLAY CLASSIC</button>'}
+              <button class="btn" id="btn-singleplayer">SINGLEPLAYER</button><button class="btn" id="btn-multiplayer">MULTIPLAYER</button>
             </div>
             <div class="title-button-row title-secondary-row title-controls-row">
               <button class="btn" id="btn-options">OPTIONS</button>
@@ -144,14 +141,14 @@ export class UI {
             <div class="title-status" id="title-status" role="status" aria-live="polite"></div>
           </div>
         </main>
-        <div class="classic-menu-version">${classicEdition ? 'CLASSIC MODE · SINGLEPLAYER + MULTIPLAYER' : 'BETA MODE · SINGLEPLAYER ONLY'}<span>ESCAPE TO PAUSE IN GAME</span></div>
+        <div class="classic-menu-version">A 1.7.10-INSPIRED SANDBOX<span>ESCAPE TO PAUSE IN GAME</span></div>
       </div>
     `;
     this.root.appendChild(div);
     const worldsScreen = document.createElement('div');
     worldsScreen.id = 'world-select-screen'; worldsScreen.className = 'screen world-menu-screen'; worldsScreen.style.display = 'none';
     worldsScreen.innerHTML = `<section class="world-menu-card">
-      <h2>${classicEdition ? 'Select Classic World' : 'Select Beta World'}</h2>
+      <h2>Select World</h2>
       <div id="world-list" class="world-list" role="listbox" aria-label="Saved worlds"></div>
       <div class="world-actions world-actions-primary">
         <button class="btn" id="world-play">Play Selected World</button>
@@ -173,7 +170,7 @@ export class UI {
     const createScreen = document.createElement('div');
     createScreen.id = 'world-create-screen'; createScreen.className = 'screen world-menu-screen'; createScreen.style.display = 'none';
     createScreen.innerHTML = `<section class="world-create-card">
-      <h2>${classicEdition ? 'Create Classic World' : 'Create Beta World'}</h2>
+      <h2>Create World</h2>
       <label>World Name<input id="new-world-name" maxlength="48" value="New World" autocomplete="off"></label>
       <div class="world-save-location" id="world-save-location">Will be saved in New World</div>
       <button class="btn world-mode-button" id="new-world-mode">Game Mode: Survival</button>
@@ -190,20 +187,14 @@ export class UI {
     div.querySelector('#btn-singleplayer').addEventListener('click', () => {
       this.game.audio?.init?.(); this.game.audio?.click?.(); this.openWorldSelection();
     });
-    div.querySelector('#btn-classic')?.addEventListener('click', () => {
-      this.game.audio?.init?.(); this.game.audio?.click?.(); this.game.openEditionHome?.('classic');
-    });
-    div.querySelector('#btn-beta')?.addEventListener('click', () => {
-      this.game.audio?.init?.(); this.game.audio?.click?.(); this.game.openEditionHome?.('beta');
-    });
     div.querySelector('#btn-help').addEventListener('click', event => this.showHelp(event.currentTarget));
     const worldList = worldsScreen.querySelector('#world-list');
     const refreshWorldList = () => {
-      const worlds = (this.game.listSavedWorlds?.() || []).filter(world => (world.edition === 'classic') === classicEdition);
+      const worlds = this.game.listSavedWorlds?.() || [];
       worldList.replaceChildren();
       if (!worlds.length) {
         const empty = document.createElement('div'); empty.className = 'world-list-empty';
-        empty.textContent = `No saved ${classicEdition ? 'Classic' : 'Beta'} worlds found. Create a new world to begin.`; worldList.appendChild(empty);
+        empty.textContent = 'No saved worlds found. Create a new world to begin.'; worldList.appendChild(empty);
         this.selectedWorld = null;
       } else {
         this.selectedWorld = worlds.find(world => world.id === this.selectedWorld?.id) || worlds[0];
@@ -212,7 +203,7 @@ export class UI {
           row.setAttribute('role', 'option'); row.setAttribute('aria-selected', String(this.selectedWorld?.id === world.id));
           row.innerHTML = `<strong></strong><span></span>`;
           row.querySelector('strong').textContent = world.name;
-          row.querySelector('span').textContent = `${world.edition === 'classic' ? 'Classic Creative' : world.gameMode === 'creative' ? 'Creative' : 'Survival'} · Seed: ${world.seed}`;
+          row.querySelector('span').textContent = `${world.edition === 'classic' ? 'Legacy Classic world' : world.gameMode === 'creative' ? 'Creative' : 'Survival'} · Seed: ${world.seed}`;
           row.addEventListener('click', () => { this.selectedWorld = world; refreshWorldList(); });
           worldList.appendChild(row);
         }
@@ -255,15 +246,10 @@ export class UI {
     createScreen.querySelector('#new-world-name').addEventListener('input', event => {
       createScreen.querySelector('#world-save-location').textContent = `Will be saved in ${event.target.value.trim() || 'New World'}`;
     });
-    let newWorldMode = classicEdition ? 'classic' : 'survival';
+    let newWorldMode = 'survival';
     const worldModeButton = createScreen.querySelector('#new-world-mode');
     const worldModeDescription = createScreen.querySelector('#world-mode-description');
-    if (classicEdition) {
-      worldModeButton.hidden = true;
-      worldModeDescription.textContent = 'Classic creative: unlimited blocks, instant building, and flight.';
-    }
     worldModeButton.addEventListener('click', event => {
-      if (classicEdition) return;
       newWorldMode = newWorldMode === 'survival' ? 'creative' : 'survival';
       event.currentTarget.textContent = `Game Mode: ${newWorldMode === 'creative' ? 'Creative' : 'Survival'}`;
       worldModeDescription.textContent = newWorldMode === 'creative'
@@ -280,7 +266,7 @@ export class UI {
       const suppliedSeed = createScreen.querySelector('#new-world-seed').value.trim();
       const unique = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const seed = suppliedSeed || `aislopcraft-${unique}`;
-      this.game.openLocalWorld?.(seed, name, newWorldMode, `world-${unique}`, classicEdition ? 'classic' : 'beta');
+      this.game.openLocalWorld?.(seed, name, newWorldMode, `world-${unique}`, 'beta');
     });
     createScreen.querySelector('#world-create-cancel').addEventListener('click', () => {
       createScreen.style.display = 'none'; worldsScreen.style.display = 'flex'; refreshWorldList();
@@ -321,14 +307,15 @@ export class UI {
     const saveStatus = saves.querySelector('#save-status');
     const saveInput = saves.querySelector('#save-import-file');
     div.querySelector('#btn-saves').addEventListener('click', () => { this._saveReturnScreen = null; saves.style.display = 'flex'; });
-    saves.querySelector('#save-done').addEventListener('click', () => {
+    const closeSaves = () => {
       saves.style.display = 'none';
       if (this._saveReturnScreen === 'worlds') this.worldSelectScreen.style.display = 'flex';
       this._saveReturnScreen = null;
-    });
-    saves.addEventListener('mousedown', event => { if (event.target === saves) saves.style.display = 'none'; });
+    };
+    saves.querySelector('#save-done').addEventListener('click', closeSaves);
+    saves.addEventListener('mousedown', event => { if (event.target === saves) closeSaves(); });
     document.addEventListener('keydown', event => {
-      if (event.code === 'Escape' && saves.style.display === 'flex') { event.preventDefault(); saves.style.display = 'none'; }
+      if (event.code === 'Escape' && saves.style.display === 'flex') { event.preventDefault(); closeSaves(); }
     }, true);
     saves.querySelector('#save-export').addEventListener('click', () => {
       try { this.game.exportWorldSave?.(); saveStatus.textContent = 'World save downloaded.'; }
@@ -423,6 +410,7 @@ export class UI {
       <div class="multiplayer-card">
         <h2 id="mp-title">Multiplayer</h2>
         <p class="mp-connect-help">Pick a name, then create a world or join one. No account or password needed.</p>
+        <p class="mp-limits">Inventory is not fully synchronized. Only the host can use or mine chests and furnaces; storage minecarts cannot be placed, used or broken in multiplayer.</p>
         <details class="mp-custom-relay">
           <summary>Advanced: custom room service</summary>
           <label>WebSocket address
@@ -520,13 +508,6 @@ export class UI {
       multiplayer.querySelector('#mp-password').placeholder = multiplayer.querySelector('#mp-access').value === 'private' ? 'Optional (invite code also required)' : 'At least 4 characters, optional';
     });
     this.multiplayerScreen = multiplayer;
-    if (this.game.edition === 'classic') {
-      multiplayer.querySelector('#mp-mode').value = 'creative';
-      multiplayer.querySelector('#mp-mode').closest('label').hidden = true;
-      multiplayer.querySelector('#mp-create-title').textContent = '2. Create a Classic world';
-      multiplayer.querySelector('.mp-create-card .mp-card-help').textContent = 'Start a shared Classic creative sandbox with unlimited blocks and flight.';
-      multiplayer.querySelector('#mp-create').textContent = 'Create Classic world';
-    }
     multiplayer.querySelector('#mp-visual-policy').addEventListener('change', event => {
       for (const control of multiplayer.querySelectorAll('[data-forced-visual]')) control.disabled = event.target.value !== 'forced';
     });
@@ -562,11 +543,16 @@ export class UI {
   }
 
   openMultiplayer() {
+    if (this.game.edition === 'classic') {
+      this.game.openEditionHome?.('beta', true);
+      return;
+    }
     const active = document.activeElement;
     this.multiplayerReturnFocus = active && this.multiplayerScreen.contains(active)
       ? this.multiplayerReturnFocus
       : (active === this.multiplayerOpenButton ? active : this.multiplayerOpenButton);
     this.multiplayerScreen.style.display = 'flex';
+    if (this.multiplayerScreen.querySelector('#mp-code').value) this.multiplayerScreen.querySelector('.mp-invite-options').open = true;
     const shader = this.multiplayerScreen.querySelector('#mp-host-shader');
     shader.value = [...shader.options].some(option => option.value === this.game.shaderStyle) ? this.game.shaderStyle : 'classic';
     const texturePack = this.multiplayerScreen.querySelector('#mp-host-texture-pack');
@@ -744,8 +730,8 @@ export class UI {
       list.replaceChildren();
       const editionRooms = result.rooms.filter(room => (room.edition || 'beta') === (this.game.edition || 'beta'));
       if (!editionRooms.length) {
-        list.textContent = `No public ${this.game.edition === 'classic' ? 'Classic' : 'Beta'} worlds yet. Create one and invite your friends.`;
-        status.textContent = 'Room service connected. No worlds for this edition are online right now.';
+        list.textContent = 'No public worlds yet. Create one and invite your friends.';
+        status.textContent = 'Room service connected. No worlds are online right now.';
         return;
       }
       for (const room of editionRooms) {
@@ -792,8 +778,8 @@ export class UI {
 
   async createMultiplayerRoom() {
     const screen = this.multiplayerScreen;
-    if (this.game.edition !== 'classic') {
-      screen.querySelector('#mp-status').textContent = 'Multiplayer is available in Classic mode. Switch editions from the title screen to play online.';
+    if (this.game.edition === 'classic') {
+      screen.querySelector('#mp-status').textContent = 'Return to the main menu to play multiplayer.';
       return;
     }
     const status = screen.querySelector('#mp-status');
@@ -825,7 +811,7 @@ export class UI {
       createRequested = true;
       const result = await this.multiplayerClient.createRoom({
         playerName, name: screen.querySelector('#mp-world-name').value.trim(), edition: this.game.edition,
-        gameMode: 'creative', access: screen.querySelector('#mp-access').value,
+        gameMode: screen.querySelector('#mp-mode').value, access: screen.querySelector('#mp-access').value,
         password, seed: this.game.seed, visuals,
       });
       roomCreated = true;
@@ -852,8 +838,8 @@ export class UI {
 
   async joinMultiplayerRoom() {
     const screen = this.multiplayerScreen;
-    if (this.game.edition !== 'classic') {
-      screen.querySelector('#mp-status').textContent = 'Multiplayer is available in Classic mode. Switch editions from the title screen to play online.';
+    if (this.game.edition === 'classic') {
+      screen.querySelector('#mp-status').textContent = 'Return to the main menu to play multiplayer.';
       return;
     }
     const status = screen.querySelector('#mp-status');
@@ -941,6 +927,7 @@ export class UI {
       <div class="status-bars">
         <div class="hearts" id="hearts"></div>
         <div class="armor-bar" id="armor-bar" style="display:none"></div>
+        <div class="hunger-bar" id="hunger-bar" aria-label="Food level"></div>
       </div>
       <div class="water-bar" id="water-bar" style="display:none"></div>
       <div class="held-name" id="held-name"></div>
@@ -990,6 +977,7 @@ export class UI {
     this.root.appendChild(this.touchPanelReturnEl);
     this.hotbarEl = div.querySelector('#hotbar');
     this.heartsEl = div.querySelector('#hearts');
+    this.hungerBarEl = div.querySelector('#hunger-bar');
     this.armorBarEl = div.querySelector('#armor-bar');
     this.statusBarsEl = div.querySelector('.status-bars');
     this.heldNameEl = div.querySelector('#held-name');
@@ -1283,7 +1271,7 @@ export class UI {
     const name = itemName(stack.id);
     const def = ITEMS[stack.id];
     const meta = [];
-    if (def?.food) meta.push(`Heals ${(def.food / 2).toFixed(def.food % 2 ? 1 : 0)} ♥`);
+    if (def?.food) meta.push(`Restores ${def.food} food`);
     if (def?.defense) meta.push(`+${def.defense} Armor`);
     if (def?.damage) meta.push(`${def.damage} Attack Damage`);
     if (def?.durability) meta.push(`Durability: ${Math.max(1, def.durability - (stack.damage || 0))}/${def.durability}`);
@@ -1372,7 +1360,7 @@ export class UI {
         ${this.game.exportWorldSave ? '<button class="btn" id="btn-save-backup">Download World Backup</button>' : ''}
         ${this.game.saveAndQuit ? '<button class="btn" id="btn-save-quit">Save & Quit to Title</button>' : ''}
         <p id="pause-save-status" role="status"></p>
-        <div class="pause-hint">Beta 1.7.3 — no hunger, no sprint. Eat food or cake to heal!</div>
+        <div class="pause-hint">Eat to restore food. Well-fed players slowly regain health.</div>
       </div>
     `;
     this.root.appendChild(pause);
@@ -1425,11 +1413,11 @@ export class UI {
             <li>Choose <strong>Singleplayer</strong>, then create a Survival world.</li>
             <li>Look around, break nearby trees, and turn logs into planks in your inventory.</li>
             <li>Make a crafting table, tools, and a small shelter before night.</li>
-            <li>Explore for food and resources. This Beta-inspired game has <strong>no hunger or sprinting</strong>; food heals when used.</li>
+            <li>Find food and hold Use to eat. Keep your food bar high to regain health.</li>
           </ol></section>
           <section><h3>Controls</h3><dl class="help-controls">
             <div><dt>W A S D</dt><dd>Move</dd></div><div><dt>Mouse</dt><dd>Look around · click the game to capture</dd></div>
-            <div><dt>Space / Shift</dt><dd>Jump / sneak</dd></div><div><dt>Left / right click</dt><dd>Mine or attack / place or use</dd></div>
+            <div><dt>Space / Shift / Ctrl</dt><dd>Jump / sneak / sprint</dd></div><div><dt>Left / right click</dt><dd>Mine or attack / place or use</dd></div>
             <div><dt>E</dt><dd>Inventory · close containers</dd></div><div><dt>1–9 / wheel</dt><dd>Select a hotbar slot</dd></div>
             <div><dt>Q / Ctrl+Q</dt><dd>Drop one item / drop a stack</dd></div><div><dt>Esc</dt><dd>Pause or close a screen</dd></div>
             <div><dt>F3 / F1</dt><dd>Debug details / hide HUD</dd></div>
@@ -1445,7 +1433,7 @@ export class UI {
             <li>In multiplayer, each player keeps their own inventory. Rooms are temporary and close if the host leaves or the server restarts.</li>
           </ul></section>
         </div>
-        <p class="help-footnote">On touchscreens, use the virtual joystick to move and drag the open center to look. Hold Mine until the block breaks or an attack lands; Use acts on press. Landscape orientation leaves more room for play. Local worlds autosave; multiplayer rooms are temporary.</p>
+        <p class="help-footnote">On touchscreens, use the virtual joystick to move and drag the open center to look. Hold Mine to break blocks and hold Use to eat. Landscape orientation leaves more room for play. Local worlds autosave; multiplayer rooms are temporary.</p>
       </section>`;
     this.root.appendChild(help);
     this.helpScreen = help;
@@ -2081,7 +2069,7 @@ export class UI {
 
   renderHearts() {
     const player = this.game.player;
-    const survivalHud = this.game.edition !== 'classic';
+    const survivalHud = this.game.edition !== 'classic' && player.gameMode !== 'creative';
     if (this.statusBarsEl) this.statusBarsEl.style.display = survivalHud ? '' : 'none';
     const waterBar = document.getElementById('water-bar');
     if (waterBar && !survivalHud) waterBar.style.display = 'none';
@@ -2096,6 +2084,15 @@ export class UI {
         else html += '<span class="heart empty">♡</span>';
       }
       this.heartsEl.innerHTML = html;
+    }
+    const hunger = Number.isFinite(player.hunger) ? player.hunger : 20;
+    if (this.hungerBarEl && this._lastHunger !== hunger) {
+      this._lastHunger = hunger;
+      this.hungerBarEl.setAttribute('aria-label', `Food: ${hunger} of 20`);
+      this.hungerBarEl.innerHTML = Array.from({ length: 10 }, (_, i) => {
+        const v = hunger - i * 2;
+        return `<span class="hunger-icon ${v >= 2 ? 'full' : v >= 1 ? 'half' : 'empty'}"></span>`;
+      }).join('');
     }
 
     // Armor shields (Beta 1.7.3 shows armor icons only when armor > 0)
@@ -2120,7 +2117,7 @@ export class UI {
     // Oxygen bubbles
     const wb = document.getElementById('water-bar');
     const airBucket = player.air < 300 ? Math.ceil(player.air / 15) : 20;
-    if (wb && this._lastAirBucket !== airBucket) {
+    if (wb && survivalHud && this._lastAirBucket !== airBucket) {
       this._lastAirBucket = airBucket;
       if (player.air < 300) {
         wb.style.display = 'flex';
@@ -2369,9 +2366,9 @@ for (const [id, [m, k]] of Object.entries(toolMap)) {
 }
 
 const SPLASHES = [
-  'Also try Terraria!', 'Made in Sweden!', '100% pure!', 'May contain nuts!',
+  'Also try Terraria!', 'Built for the browser!', '100% pure!', 'May contain nuts!',
   'Better than Prey!', 'More polygons!', 'Sniffer!', 'Woo, beta!',
   'As seen on TV!', 'Awesome!', '110803!', 'Kinda like Minecraft!',
-  'Random splash!', 'Made by a robot!', 'Also try Minecraft!', 'Beta 1.7.3!',
-  'The Work of Notch!', 'Now with blocks!', 'Water is wet!', 'No hunger bar!',
+  'Random splash!', 'Made by a robot!', 'Also try Minecraft!', 'Hungry for adventure!',
+  'Built one block at a time!', 'Now with blocks!', 'Water is wet!', 'Keep your food bar full!',
 ];

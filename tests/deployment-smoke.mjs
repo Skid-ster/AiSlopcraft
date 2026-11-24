@@ -55,24 +55,27 @@ try {
   nameClaimed = true;
   assert.ok((await request('players:list')).players.includes(smokeName), 'claimed name appears in the public list');
 
-  const room = await request('room:create', {
-    name: 'Arena smoke room', access: 'public', edition: 'classic', gameMode: 'creative', seed: 'ArenaSmokeSeed', visuals: { mode: 'individual' },
-  });
-  assert.equal(room.type, 'room:joined', 'a claimed player can create and enter a multiplayer world');
-  roomCreated = true;
-  assert.equal(room.role, 'host');
-  assert.equal(room.players[0]?.name, smokeName);
-  const snapshot = await request('world:snapshot', { entries: [['0,40,0', [1, 0]]] });
-  assert.equal(snapshot.type, 'world:snapshot:accepted', 'host can publish initial world edits');
-  assert.equal(snapshot.count, 1);
-  assert.equal((await request('rooms:list')).rooms[0]?.name, 'Arena smoke room', 'created world is immediately discoverable');
-  assert.equal((await request('room:leave')).type, 'room:left', 'host can cleanly close the smoke-test room');
-  roomCreated = false;
+  for (const gameMode of ['survival', 'creative']) {
+    const room = await request('room:create', {
+      name: 'Arena smoke room', access: 'public', edition: 'beta', gameMode, seed: 'ArenaSmokeSeed', visuals: { mode: 'individual' },
+    });
+    assert.equal(room.type, 'room:joined', 'a claimed player can create and enter a multiplayer world');
+    roomCreated = true;
+    assert.equal(room.role, 'host');
+    assert.equal(room.gameMode, gameMode);
+    assert.equal(room.players[0]?.name, smokeName);
+    const snapshot = await request('world:snapshot', { entries: [['0,40,0', [1, 0]]] });
+    assert.equal(snapshot.type, 'world:snapshot:accepted', 'host can publish initial world edits');
+    assert.equal(snapshot.count, 1);
+    assert.ok((await request('rooms:list')).rooms.some(room => room.name === 'Arena smoke room' && room.gameMode === gameMode), 'created world is immediately discoverable');
+    assert.equal((await request('room:leave')).type, 'room:left', 'host can cleanly close the smoke-test room');
+    roomCreated = false;
+  }
   const released = await request('player:release');
   assert.equal(released.type, 'player:released');
   nameClaimed = false;
   assert.ok(!(await request('players:list')).players.includes(smokeName), 'released name disappears from the public list');
-  console.log('Render deployment smoke test passed: site, health, limits, secure WebSocket, claim, world create/snapshot/list/leave, and release.');
+  console.log('Deployment smoke passed: site, health, limits, WebSocket, claim, Survival and Creative rooms, snapshot/list/leave, and release.');
 } finally {
   if (socket.readyState === WebSocket.OPEN) {
     if (roomCreated) await request('room:leave').catch(() => {});

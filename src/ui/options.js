@@ -89,6 +89,7 @@ export class OptionsMenu {
   }
 
   render() {
+    const focusedId = this.el.contains(document.activeElement) ? document.activeElement.id : '';
     const s = this.settings;
     const forcedVisuals = this.game.networkRoom?.visuals?.mode === 'forced' ? this.game.networkRoom.visuals : null;
     const shownShaderStyle = forcedVisuals?.shaderStyle || s.shaderStyle;
@@ -159,6 +160,7 @@ export class OptionsMenu {
       ${body}
     </div>`;
     this.bind();
+    if (focusedId) this.el.querySelector(`#${focusedId}`)?.focus({ preventScroll: true });
   }
 
   bind() {

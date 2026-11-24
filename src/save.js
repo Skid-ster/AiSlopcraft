@@ -89,9 +89,13 @@ export function normalizeWorldSave(value) {
     pos: player.pos.map(Number), yaw: Number.isFinite(player.yaw) ? player.yaw : 0,
     pitch: Number.isFinite(player.pitch) ? Math.max(-Math.PI / 2, Math.min(Math.PI / 2, player.pitch)) : 0,
     health: Number.isFinite(player.health) ? Math.max(1, Math.min(20, player.health)) : 20,
+    hunger: Number.isFinite(player.hunger) ? Math.max(0, Math.min(20, Math.floor(player.hunger))) : 20,
+    saturation: Number.isFinite(player.saturation) ? Math.max(0, Math.min(20, player.saturation)) : 5,
+    exhaustion: Number.isFinite(player.exhaustion) ? Math.max(0, Math.min(40, player.exhaustion)) : 0,
     inventory, armor, hotbarIndex: Number.isInteger(player.hotbarIndex) ? Math.max(0, Math.min(8, player.hotbarIndex)) : 0,
     stats: isObject(player.stats) ? Object.fromEntries(Object.entries(player.stats).filter(([, n]) => Number.isFinite(n)).slice(0, 100)) : {},
   };
+  normalizedPlayer.saturation = Math.min(normalizedPlayer.hunger, normalizedPlayer.saturation);
   const worldId = typeof value.worldId === 'string' && value.worldId.length > 0 && value.worldId.length <= 128 ? value.worldId : value.seed;
   const edition = value.edition === 'classic' ? 'classic' : 'beta';
   return {

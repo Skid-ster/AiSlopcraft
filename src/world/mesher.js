@@ -281,7 +281,7 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
           const light = getL(x, y, z);
           const skyL = light >> 4, blkL = light & 15;
           if (id === CAKE_BLOCK) {
-            const eaten = Math.min(5, meta & 7);
+            const eaten = Math.min(6, meta & 7);
             const x0 = x + 0.0625 + eaten * 0.125;
             pushBox(buf, x0, y, z + 0.0625, x + 0.9375, y + 0.5, z + 0.9375, bd.tiles, skyL, blkL);
           } else {

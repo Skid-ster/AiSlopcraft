@@ -174,21 +174,22 @@ check('planks is NOT replaceable', isReplaceable(PLANKS) === false);
 // --- 6. Survival inventory, eating and respawn invariants ---
 player.inventory.fill(null);
 player.health = 10;
-player.inventory[0] = { id: 320, count: 2, damage: 0 }; // cooked pork restores eight health points
+player.hunger = 10;
+player.inventory[0] = { id: 320, count: 2, damage: 0 }; // cooked pork restores eight food points
 player.pointerLocked = true;
 player.rightDown = true;
 let ate = 0;
 const eatAudio = { eat() { ate++; } };
-let eatingStep = advanceEating({ id: 320 }, 0, player, eatAudio, true);
-check('food heals immediately on use in Beta 1.7.3',
-  eatingStep.completed && eatingStep.eating === null && player.health === 18 && player.inventory[0].count === 1 && ate === 1);
+let eatingStep = advanceEating({ id: 320 }, 1.6, player, eatAudio, true);
+check('food restores hunger after holding use',
+  eatingStep.completed && eatingStep.eating === null && player.health === 10 && player.hunger === 18 && player.inventory[0].count === 1 && ate === 1);
 player.rightDown = false;
 eatingStep = advanceEating({ id: 320 }, 0, player, eatAudio, true);
 check('food is not consumed when use is released',
   !eatingStep.completed && player.inventory[0].count === 1 && ate === 1);
 player.rightDown = true;
-player.health = 20;
-check('food can be consumed at full health in Beta 1.7.3', player.eatHeld({ eat() { ate++; } }) && player.inventory[0] === null && ate === 2);
+player.hunger = 20;
+check('ordinary food cannot be consumed at full hunger', !player.eatHeld({ eat() { ate++; } }) && player.inventory[0].count === 1 && ate === 1);
 
 player.inventory.fill(null);
 player.inventory[0] = { id: PLANKS, count: 63, damage: 0 };

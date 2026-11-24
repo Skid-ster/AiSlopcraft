@@ -1,7 +1,7 @@
 import { DEFAULT_KEYS } from '../settings.js';
 import { requestGamePointerLock } from '../input.js';
 import { itemStackLimit } from '../world/blocks.js';
-// Player physics + controls. Beta 1.7.3 feel: no sprint, 4.317 b/s walk,
+// Player physics + controls: sprinting, 4.317 b/s walk,
 // 1.25-block jump, fall damage, sneak edge-guard, ladders, cobwebs, ice, swimming, armor.
 import * as THREE from 'three';
 import {
@@ -69,7 +69,7 @@ export function blockSelectionBounds(world, x, y, z, id) {
     return [1 - t, 0, 0, 1, 1, 1];
   }
   if (id === CAKE_BLOCK) {
-    const eaten = Math.min(5, (world.getMeta ? world.getMeta(x, y, z) : 0) & 7);
+    const eaten = Math.min(6, (world.getMeta ? world.getMeta(x, y, z) : 0) & 7);
     return [0.0625 + eaten * 0.125, 0, 0.0625, 0.9375, 0.5, 0.9375];
   }
   if (id === LADDER) {
@@ -95,8 +95,13 @@ export class Player {
     this.onLadder = false;
     this.inCobweb = false;
     this.sneaking = false;
+    this.sprinting = false;
     this.health = 20;
     this.maxHealth = 20;
+    this.hunger = 20;
+    this.saturation = 5;
+    this.exhaustion = 0;
+    this.foodTimer = 0;
     this.dead = false;
     this.fallStart = null;
     this.hurtTime = 0;
@@ -229,6 +234,11 @@ export class Player {
     this.yaw = 0;
     this.pitch = 0;
     this.health = this.maxHealth;
+    this.hunger = 20;
+    this.saturation = 5;
+    this.exhaustion = 0;
+    this.foodTimer = 0;
+    this.sprinting = false;
     this.dead = false;
     this.classicFlying = false;
     this._lastClassicJumpAt = -Infinity;
@@ -304,9 +314,11 @@ export class Player {
 
     this.onLadder = feet === LADDER || mid === LADDER;
     this.inCobweb = feet === COBWEB || mid === COBWEB;
+    this.sprinting = this.gameMode === 'survival' && forward > 0 && !this.sneaking && !this.inWater && this.hunger > 6 && this.isKeyDown(this.bindings.sprint);
 
     // acceleration
     let speed = 4.317;
+    if (this.sprinting) speed *= 1.3;
     if (this.sneaking) speed = 1.35;
     if (groundBlock === SLOW_SAND && this.onGround) speed *= 0.55;
     if (this.inWater) speed *= 0.44;
@@ -393,6 +405,7 @@ export class Player {
       this.vel.y = 8.45;
       this.onGround = false;
       this.stats.jumps++;
+      this.addExhaustion(this.sprinting ? 0.8 : 0.2);
       if (audio) audio.jump();
     }
 
@@ -458,6 +471,7 @@ export class Player {
     // walk sound & view bobbing
     const moved = Math.hypot(this.pos.x - (this._lastX ?? this.pos.x), this.pos.z - (this._lastZ ?? this.pos.z));
     this.stats.distance += moved;
+    if (this.gameMode === 'survival') this.addExhaustion(moved * (this.sprinting ? 0.1 : this.inWater ? 0.015 : 0.01));
     if (this.onGround && moved > 0.001) {
       this._walkAcc = (this._walkAcc || 0) + moved;
       if (this._walkAcc > 2.05) {
@@ -637,6 +651,31 @@ export class Player {
     }
   }
 
+  addExhaustion(amount) {
+    if (this.gameMode === 'survival' && !this.dead) this.exhaustion = Math.min(40, this.exhaustion + Math.max(0, amount));
+  }
+
+  updateHunger(dt, difficulty, audio) {
+    if (this.gameMode !== 'survival' || this.dead) return;
+    while (this.exhaustion >= 4) {
+      this.exhaustion -= 4;
+      if (this.saturation > 0) this.saturation = Math.max(0, this.saturation - 1);
+      else if (difficulty > 0) this.hunger = Math.max(0, this.hunger - 1);
+    }
+    const healing = this.hunger >= 18 && this.health < this.maxHealth;
+    const starving = this.hunger === 0 && difficulty > 0;
+    if (!healing && !starving) { this.foodTimer = 0; return; }
+    this.foodTimer += dt;
+    if (this.foodTimer < 4) return;
+    this.foodTimer %= 4;
+    if (healing) {
+      this.health = Math.min(this.maxHealth, this.health + 1);
+      this.addExhaustion(3);
+    } else if (this.health > (difficulty === 1 ? 10 : difficulty === 2 ? 1 : 0)) {
+      this.damage(1, audio, true);
+    }
+  }
+
   // Raycast through blocks (DDA), returns {x,y,z, face:[dx,dy,dz], dist, block, bounds} or null
   raycast(world, maxDist = 5, opts = {}) {
     const dir = new THREE.Vector3(
@@ -771,8 +810,9 @@ export class Player {
     const stack = this.heldStack;
     const def = stack && ITEMS[stack.id];
     const food = def?.food;
-    if (!food || this.dead) return false;
-    this.health = Math.min(this.maxHealth, this.health + food);
+    if (!food || this.dead || (this.hunger >= 20 && !def.alwaysEdible)) return false;
+    this.hunger = Math.min(20, this.hunger + food);
+    this.saturation = Math.min(this.hunger, this.saturation + (def.saturation || 0));
     const returnItem = def.returns || null;
     this.consumeHeld();
     if (returnItem) this.insertItem(returnItem, 1, 0);

@@ -1,0 +1,37 @@
+/* Shared presentation for menus layered over the existing game and HUD. */
+.classic-main-menu .splash { bottom: 60px; }
+
+.pause-screen {
+  justify-content: flex-start;
+  overflow-y: auto;
+  padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+}
+.pause-inner {
+  flex-shrink: 0;
+  width: min(420px, 100%);
+  margin: auto;
+}
+.pause-inner .btn { min-width: 0; width: 100%; }
+
+.mp-limits {
+  margin: 10px 0;
+  padding: 8px 10px;
+  border-left: 3px solid #d8b96a;
+  background: rgba(24, 20, 14, .7);
+  color: #f4e6bf;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.hunger-bar { display: flex; gap: 0; }
+.hunger-icon {
+  width: 22px;
+  height: 22px;
+  background: #d59b51;
+  border: 2px solid #392415;
+  clip-path: polygon(20% 5%, 70% 5%, 90% 25%, 90% 60%, 68% 75%, 55% 75%, 48% 95%, 23% 95%, 29% 70%, 10% 55%, 10% 25%);
+  image-rendering: pixelated;
+}
+.hunger-icon.half { background: linear-gradient(90deg, #d59b51 50%, #49392e 50%); }
+.hunger-icon.empty { background: #49392e; }
+@media (max-width: 520px) { .hunger-icon { width: 17px; height: 17px; } }

@@ -1,17 +1,17 @@
 # WebSocket authority
 
-This is a room relay, not a physics or inventory authority. The connection that claimed a name owns that claim; the relay assigns room IDs and the host socket. Choosable names, positions and UID strings do not confer another connection's rights. Classic multiplayer is creative-only: its UI does not use the legacy survival/entity wire messages below.
+This is a room relay, not a physics or inventory authority. The connection that claimed a name owns that claim; the relay assigns room IDs and the host socket. Choosable names, positions and UID strings do not confer another connection's rights. Shared worlds can use Survival or Creative; the older `classic` wire edition remains supported for existing clients and is creative-only. Current clients restrict chest/furnace use and mining to the host and disable storage-minecart placement, use and destruction in multiplayer, but these client-side safeguards do not bind old or modified clients.
 
 | Message from client | Who can act and what they may change |
 |---|---|
 | `ping`, `players:list`, `rooms:list` | Anyone connected. Read only; the room list shows public rooms with space. |
 | `player:claim`, `player:release` | Connection may claim an available case-insensitive name or release its own claim. Release leaves its room. Disconnect also releases it. |
-| `room:create` | Named client not in a room becomes its own Classic room's host. Seed, access, optional room password and optional shared visuals are set at creation. |
+| `room:create` | Named client not in a room becomes its room's host. Edition, Survival/Creative mode, seed, access, optional room password and optional shared visuals are set at creation. |
 | `room:join`, `room:leave` | Named client acts for itself; join needs a matching room code, password if set, and a free slot. A host leaving closes its room. |
 | `room:close` | Current room's host only. |
 | `player:state`, `chat` | Current members act as themselves. Relay stamps the sending identity. Other clients cannot update that identity. |
 | `world:snapshot` | Host may publish validated edit batches. Canonical block coordinates identify entries, not an owning player. |
-| `world:edit` | Any member may place/remove a valid block within the Classic build bounds. Last accepted edit at a coordinate wins; air removes a block. |
+| `world:edit` | Any member may place/remove a valid block within its edition's build bounds. Last accepted edit at a coordinate wins; air removes a block. |
 | `game:state` | Host publishes shared time and legacy world state under the payload limit. |
 | `item:snapshot` | Host replaces the shared drop collection, including removal by omission. Snapshot IDs must be unique. |
 | `item:spawn` | Host can publish valid drops; guests may publish valid drops near their last reported live position. IDs are scoped to the sender and cannot replace live drops. |

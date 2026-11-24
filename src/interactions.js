@@ -53,11 +53,12 @@ export function useOnBlock(world, player, hit, { drop } = {}) {
     player.consumeHeld();
     return true;
   }
-  if (block === CAKE_BLOCK && player.health < player.maxHealth && !player.dead) {
+  if (block === CAKE_BLOCK && player.hunger < 20 && !player.dead) {
     const bites = world.getMeta(x, y, z) & 7;
-    const changed = bites >= 5 ? world.setBlock(x, y, z, AIR) : world.setMeta(x, y, z, bites + 1);
+    const changed = bites >= 6 ? world.setBlock(x, y, z, AIR) : world.setMeta(x, y, z, bites + 1);
     if (!changed) return false;
-    player.health = Math.min(player.maxHealth, player.health + 3);
+    player.hunger = Math.min(20, player.hunger + 2);
+    player.saturation = Math.min(player.hunger, player.saturation + 0.4);
     return true;
   }
   if (id === 325 && (block === WATER || block === LAVA)) {
