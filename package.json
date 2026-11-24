@@ -13,7 +13,7 @@
     "multiplayer": "node server/multiplayer.js",
     "smoke:production": "node tests/production-smoke.mjs",
     "smoke:deploy": "node tests/deployment-smoke.mjs",
-    "pretest": "node tests/relay-policy.test.mjs && node tests/save-manager.test.mjs",
+    "pretest": "node tests/relay-policy.test.mjs && node tests/save-manager.test.mjs && node tests/world-loader.test.mjs",
     "test:e2e": "playwright test"
   },
   "dependencies": {

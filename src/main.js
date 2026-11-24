@@ -1,6 +1,7 @@
 // AiSlopcraft — Beta-era survival and Classic creative sandbox. Main game loop.
 import * as THREE from 'three';
 import { World } from './world/world.js';
+import { applySavedEdits, selectSpawn } from './world/world-loader.js';
 import { CLASSIC_BLOCKS, isClassicBlock } from './classic.js';
 import { CH, WORLD_H, SEA_LEVEL } from './world/chunk.js';
 import { buildChunkMesh } from './world/mesher.js';
@@ -15,7 +16,7 @@ import {
 import { Player } from './entities/player.js';
 import { createRemoteAvatarModel, disposeRemoteAvatarModel } from './entities/remote-avatar.js';
 import { advanceEating } from './entities/eating.js';
-import { MobManager, findSafeGround, rollMobDrops, mobAttackDamage } from './entities/mobs.js';
+import { MobManager, rollMobDrops, mobAttackDamage } from './entities/mobs.js';
 import { UI } from './ui/ui.js';
 import { showGraphicsStartupError } from './ui/startup-error.js';
 import { Audio } from './audio.js';
@@ -184,13 +185,7 @@ const legacySettings = { ...savedGame?.settings };
 if (legacySettings.sensitivity > 0 && legacySettings.sensitivity < 1) legacySettings.sensitivity = legacySettings.sensitivity / 0.0044 * 100;
 const settings = loadSettings(localStorage, legacySettings);
 const world = new World(SEED, scene, EDITION);
-if (Array.isArray(savedGame?.edits)) {
-  for (const entry of savedGame.edits) {
-    if (!Array.isArray(entry) || entry.length < 2 || typeof entry[0] !== 'string') continue;
-    const coordinates = entry[0].split(',').map(Number);
-    if (coordinates.length === 3) world.recordEdit(...coordinates, Number(entry[1]), Number(entry[2] || 0));
-  }
-}
+applySavedEdits(world, savedGame?.edits);
 const fluids = new FluidSimulator(world);
 world.onChunkLoad((cx, cz) => fluids.chunkLoaded(cx, cz));
 world.onChunkUnload((cx, cz) => fluids.chunkLoaded(cx, cz));
@@ -581,52 +576,9 @@ const game = {
     ui.refresh();
   },
   prepareSpawn() {
-    // Revalidate saved beds so a removed or obstructed bed never traps respawn.
-    if (this.spawnBed && [this.spawnBed.x, this.spawnBed.y, this.spawnBed.z].every(Number.isInteger)) {
-      const bed = this.spawnBed;
-      for (let cz = Math.floor(bed.z / CH) - 1; cz <= Math.floor(bed.z / CH) + 1; cz++)
-        for (let cx = Math.floor(bed.x / CH) - 1; cx <= Math.floor(bed.x / CH) + 1; cx++) world.generateChunk(cx, cz);
-      if (world.getBlock(bed.x, bed.y, bed.z) === BED_BLOCK) {
-        for (const [dx, dz] of [[1,0],[-1,0],[0,1],[0,-1]]) {
-          const x = bed.x + dx, z = bed.z + dz;
-          for (const offset of [0, 1, -1]) {
-            const feet = bed.y + offset;
-            const floor = world.getBlock(x, feet - 1, z);
-            if (!getBlock(floor).solid || floor === LEAVES || floor === LOG) continue;
-            if (!getBlock(world.getBlock(x, feet, z)).solid && !getBlock(world.getBlock(x, feet + 1, z)).solid && world.getBlock(x, feet, z) !== WATER && world.getBlock(x, feet, z) !== LAVA)
-              return { x: x + 0.5, y: feet + 0.001, z: z + 0.5 };
-          }
-        }
-        if (!getBlock(world.getBlock(bed.x, bed.y + 1, bed.z)).solid && !getBlock(world.getBlock(bed.x, bed.y + 2, bed.z)).solid)
-          return { x: bed.x + 0.5, y: bed.y + 0.5635, z: bed.z + 0.5 };
-      }
-      this.spawnBed = null;
-    }
-    // Keep the spawn region generated even after the player has streamed far away.
-    for (let cz = -1; cz <= 1; cz++) {
-      for (let cx = -1; cx <= 1; cx++) world.generateChunk(cx, cz);
-    }
-    // Prefer an open, walkable spawn instead of the top of a tree canopy.
-    const spawnCenter = this.edition === 'classic' ? 0.5 : 8.5;
-    for (let r = 0; r <= 8; r++) {
-      for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
-        if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
-        const x = spawnCenter + dx, z = spawnCenter + dz;
-        const y = findSafeGround(world, x, z, 0.6, 1.8);
-        if (y == null) continue;
-        const bx = Math.floor(x), bz = Math.floor(z);
-        const support = world.getBlock(bx, Math.floor(y - 1), bz);
-        if (support === LEAVES || support === LOG || support === WATER) continue;
-        let open = true;
-        for (let yy = Math.floor(y); yy < Math.floor(y) + 3 && open; yy++) {
-          for (let dz2 = -1; dz2 <= 1 && open; dz2++) for (let dx2 = -1; dx2 <= 1; dx2++) {
-            if (getBlock(world.getBlock(bx + dx2, yy, bz + dz2)).solid) { open = false; break; }
-          }
-        }
-        if (open) return { x, y, z };
-      }
-    }
-    return { x: spawnCenter, y: world.heightAt(Math.floor(spawnCenter), Math.floor(spawnCenter)) + 1.001, z: spawnCenter };
+    const { position, bed } = selectSpawn(world, this.spawnBed);
+    this.spawnBed = bed;
+    return position;
   },
   respawn() {
     vehicles.dismount(player, true);
