@@ -1,4 +1,5 @@
 import { DEFAULT_KEYS } from '../settings.js';
+import { requestGamePointerLock } from '../input.js';
 import { itemStackLimit } from '../world/blocks.js';
 // Player physics + controls. Beta 1.7.3 feel: no sprint, 4.317 b/s walk,
 // 1.25-block jump, fall damage, sneak edge-guard, ladders, cobwebs, ice, swimming, armor.
@@ -130,7 +131,7 @@ export class Player {
     this.invertMouse = false;
 
     canvas.addEventListener('click', () => {
-      if (!this.touchSupported && !this.pointerLocked && !window.uiPause) canvas.requestPointerLock?.();
+      if (!this.touchSupported && !this.pointerLocked && !window.uiPause) requestGamePointerLock(canvas);
     });
     document.addEventListener('pointerlockchange', () => {
       this.pointerLocked = document.pointerLockElement === canvas;

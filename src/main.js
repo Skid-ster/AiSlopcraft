@@ -660,25 +660,27 @@ const game = {
   },
   async saveAndQuit() {
     if (this.networkRoom) await this.leaveMultiplayer();
-    else this.saveGame();
+    else if (!this.saveGame()) return false;
     const url = new URL(location.href);
     url.searchParams.delete('launch');
     history.replaceState(null, '', url);
     this.started = false;
     clearFishing();
     ui.setMode('title');
+    return true;
   },
-  saveGame() {
-    // Multiplayer rooms are temporary shared sessions. Never overwrite a
-    // player's personal singleplayer save with the host's world state.
-    if (this.networkRoom) return false;
-    const payload = { version: 1, worldId: WORLD_ID, seed: SEED, worldName: this.worldName, edition: this.edition, gameMode: player.gameMode,
+  captureWorldSave() {
+    return { version: 1, worldId: WORLD_ID, seed: SEED, worldName: this.worldName, edition: this.edition, gameMode: player.gameMode,
       edits: [...world.edits].map(([key, id]) => [key, id, world.metaEdits.get(key) || 0]),
       settings: this.settings, spawnBed: this.spawnBed, timeOfDay: sky.timeOfDay, furnaces: [...furnaces], chests: [...chests], vehicles: vehicles.serialize(),
       items: itemEntities.filter(it => !it.dead).map(it => ({ id: it.id, count: it.count, damage: it.damage, pos: it.mesh.position.toArray(), vy: it.vy, age: it.age })),
       player: { pos: player.pos.toArray(), yaw: player.yaw, pitch: player.pitch, health: player.health, inventory: player.inventory, armor: player.armor, hotbarIndex: player.hotbarIndex, stats: player.stats } };
+  },
+  saveGame() {
+    // Multiplayer rooms are temporary; never overwrite a local world with room state.
+    if (this.networkRoom) return false;
     try {
-      const save = normalizeWorldSave(payload);
+      const save = normalizeWorldSave(this.captureWorldSave());
       if (!save) throw new Error('The current world state is incomplete.');
       localStorage.setItem(SAVE_KEY, JSON.stringify(save));
       return true;
@@ -686,8 +688,10 @@ const game = {
   },
   exportWorldSave(requestedWorldId = WORLD_ID) {
     if (this.networkRoom && requestedWorldId === WORLD_ID) throw new Error('Leave the multiplayer room before exporting a local world save.');
-    if (this.started && requestedWorldId === WORLD_ID && !this.saveGame()) throw new Error('Could not save this world before exporting.');
-    const save = normalizeWorldSave(JSON.parse(localStorage.getItem(`aislopcraft:world:${requestedWorldId}`) || 'null'));
+    // Download current progress directly, even if the browser will not store it.
+    const save = normalizeWorldSave(this.started && requestedWorldId === WORLD_ID
+      ? this.captureWorldSave()
+      : JSON.parse(localStorage.getItem(`aislopcraft:world:${requestedWorldId}`) || 'null'));
     if (!save || save.worldId !== requestedWorldId) throw new Error('There is no saved world for that selection yet.');
     const blob = new Blob([encodeWorldSave(save)], { type: 'application/json' });
     const href = URL.createObjectURL(blob);
@@ -831,6 +835,29 @@ world.onBlockChange((x,y,z,previousId,id,previousMeta,meta) => {
 
 const ui = new UI(game);
 game.ui = ui;
+const graphicsStatus = document.createElement('div');
+graphicsStatus.className = 'graphics-status';
+graphicsStatus.setAttribute('role', 'status');
+graphicsStatus.hidden = true;
+document.body.append(graphicsStatus);
+let graphicsLost = false;
+let graphicsStatusTimer;
+// Listen on the canvas: WebGL context events do not bubble.
+canvas.addEventListener('webglcontextlost', event => {
+  event.preventDefault();
+  graphicsLost = true;
+  clearTimeout(graphicsStatusTimer);
+  if (ui.mode === 'game') ui.setMode('pause');
+  graphicsStatus.hidden = false;
+  graphicsStatus.textContent = 'Graphics connection lost. Waiting for WebGL to recover. Local worlds can still be backed up from the game menu.';
+});
+canvas.addEventListener('webglcontextrestored', () => {
+  graphicsLost = false;
+  lighting.lastShadowTime = -Infinity;
+  if (ui.mode === 'game') ui.setMode('pause');
+  graphicsStatus.textContent = 'Graphics restored. You can continue playing.';
+  graphicsStatusTimer = setTimeout(() => { graphicsStatus.hidden = true; }, 5000);
+});
 if (WORLD_PARAMS.get('launch') === '1') {
   ui.setMode('game');
   game.start();
@@ -1790,6 +1817,7 @@ let prioritizeDirty = false;
 function frame() {
   requestAnimationFrame(frame);
   const now = performance.now();
+  if (graphicsLost) { lastT = now; return; }
   if (game.settings.maxFps && now - lastT < 1000 / game.settings.maxFps) return;
   let dt = (now - lastT) / 1000;
   lastT = now;

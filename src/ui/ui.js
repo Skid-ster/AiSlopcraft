@@ -11,6 +11,7 @@ import { matchRecipe, smeltResult } from './recipes.js';
 import { FUEL_TIMES, interactWithFurnaceSlot } from './furnace.js';
 import { OptionsMenu } from './options.js';
 import { CLASSIC_BLOCKS, isClassicBlock } from '../classic.js';
+import { requestGamePointerLock } from '../input.js';
 
 function stackLimit(stack) {
   return itemStackLimit(stack.id);
@@ -1049,7 +1050,7 @@ export class UI {
       div.querySelector('#network-chat-form').style.display = 'none';
       div.querySelector('#network-chat-open').style.display = 'block';
       input.blur();
-      if (this.mode === 'game' && !this.touchEnabled) document.getElementById('game-canvas')?.requestPointerLock?.();
+      if (this.mode === 'game' && !this.touchEnabled) requestGamePointerLock(document.getElementById('game-canvas'));
     });
     this.networkPanel = networkPanel;
     this.touchControlsEl = div.querySelector('#touch-controls');
@@ -1233,6 +1234,8 @@ export class UI {
       }
     }
     const saveNow = document.getElementById('btn-save-now');
+    const saveBackup = document.getElementById('btn-save-backup');
+    if (saveBackup) saveBackup.hidden = Boolean(room);
     if (saveNow) saveNow.hidden = !!room;
     const saveQuit = document.getElementById('btn-save-quit');
     if (saveQuit) saveQuit.textContent = room ? 'Leave Multiplayer & Quit to Title' : 'Save & Quit to Title';
@@ -1478,7 +1481,9 @@ export class UI {
         <button class="btn" id="btn-options2">Options...</button>
         <button class="btn" id="btn-respawn">Respawn</button>
         ${this.game.saveGame ? '<button class="btn" id="btn-save-now">Save World Now</button>' : ''}
+        ${this.game.exportWorldSave ? '<button class="btn" id="btn-save-backup">Download World Backup</button>' : ''}
         ${this.game.saveAndQuit ? '<button class="btn" id="btn-save-quit">Save & Quit to Title</button>' : ''}
+        <p id="pause-save-status" role="status"></p>
         <div class="pause-hint">Beta 1.7.3 — no hunger, no sprint. Eat food or cake to heal!</div>
       </div>
     `;
@@ -1497,16 +1502,22 @@ export class UI {
       this.game.respawn();
       this.setMode('game');
     });
+    const pauseSaveStatus = pause.querySelector('#pause-save-status');
+    const saveFailed = 'Save failed — browser storage may be full. Download a backup before leaving.';
     pause.querySelector('#btn-save-now')?.addEventListener('click', () => {
       this.game.audio.click();
       const saved = this.game.saveGame?.();
-      this.notify(saved ? 'World saved in this browser.' : 'World saves are unavailable during multiplayer.');
+      pauseSaveStatus.textContent = saved ? 'World saved in this browser.' : saveFailed;
+    });
+    pause.querySelector('#btn-save-backup')?.addEventListener('click', () => {
+      try { this.game.exportWorldSave(); pauseSaveStatus.textContent = 'World backup downloaded.'; }
+      catch (error) { pauseSaveStatus.textContent = error.message; }
     });
     const saveQuitBtn = pause.querySelector('#btn-save-quit');
     if (saveQuitBtn) {
-      saveQuitBtn.addEventListener('click', () => {
+      saveQuitBtn.addEventListener('click', async () => {
         this.game.audio.click();
-        this.game.saveAndQuit?.();
+        if (await this.game.saveAndQuit() === false) pauseSaveStatus.textContent = saveFailed;
       });
     }
 
@@ -1954,7 +1965,7 @@ export class UI {
         this.networkPanel.querySelector('#network-chat-form').style.display = 'none';
         this.networkPanel.querySelector('#network-chat-open').style.display = 'block';
         e.target.blur();
-        if (this.mode === 'game' && !this.touchEnabled) document.getElementById('game-canvas')?.requestPointerLock?.();
+        if (this.mode === 'game' && !this.touchEnabled) requestGamePointerLock(document.getElementById('game-canvas'));
       }
       return;
     }
@@ -2084,7 +2095,7 @@ export class UI {
         }
       }
       if (!p.touchSupported && !p.pointerLocked && !p.dead) {
-        document.getElementById('game-canvas')?.requestPointerLock?.();
+        requestGamePointerLock(document.getElementById('game-canvas'));
       }
     } else {
       document.exitPointerLock?.();
