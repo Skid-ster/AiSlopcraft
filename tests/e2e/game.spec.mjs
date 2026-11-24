@@ -216,3 +216,46 @@ test('storage quota leaves the world open and permits an unstored JSON backup', 
   expect(JSON.parse(data).world.player.inventory[0]).toMatchObject({ id: 5, count: 7 });
   expect(await page.evaluate(() => window.game.started)).toBe(true);
 });
+
+test('Classic grass renders in daylight with both the Classic and PSX presets', async ({ page }) => {
+  const graphicsErrors = [];
+  page.on('console', message => { if (message.type() === 'error') graphicsErrors.push(message.text()); });
+  await title(page, '/?edition=classic&seed=release-perf');
+  await page.locator('#btn-singleplayer').click();
+  await page.locator('#world-create').click();
+  await page.locator('#world-more-options').click();
+  await page.locator('#new-world-seed').fill('release-perf');
+  await page.locator('#world-create-confirm').click();
+  await playing(page);
+  const sample = await page.evaluate(async () => {
+    const { player, renderer, sky, world } = window.game;
+    sky.time = 0.5;
+    player.pitch = -0.75;
+    const gl = renderer.getContext();
+    const pixels = new Uint8Array(40 * 40 * 4);
+    const original = renderer.render;
+    async function samplePreset(style) {
+      window.game.setShaderStyle(style);
+      return new Promise(resolve => {
+        renderer.render = function (scene, camera) {
+          original.call(this, scene, camera);
+          if (this.getRenderTarget() || (style !== 'psx' && camera !== player.camera)) return;
+          gl.readPixels(gl.drawingBufferWidth / 2 - 20, gl.drawingBufferHeight / 2 - 20, 40, 40, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+          let lit = 0;
+          for (let i = 0; i < pixels.length; i += 4) {
+            if (Math.max(pixels[i], pixels[i + 1], pixels[i + 2]) >= 24) lit++;
+          }
+          resolve(lit);
+          renderer.render = original;
+        };
+      });
+    }
+    while ([...world.chunks.values()].filter(chunk => chunk.meshes).length < 21) {
+      await new Promise(resolve => requestAnimationFrame(resolve));
+    }
+    return { classic: await samplePreset('classic'), psx: await samplePreset('psx') };
+  });
+  expect(graphicsErrors).toEqual([]);
+  expect(sample.classic, JSON.stringify(sample)).toBeGreaterThan(1000);
+  expect(sample.psx, JSON.stringify(sample)).toBeGreaterThan(1000);
+});
