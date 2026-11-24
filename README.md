@@ -1,6 +1,6 @@
 # AiSlopcraft
 
-**[▶ Play AiSlopcraft](https://skid-ster.github.io/AiSlopcraft/)** · [Set up the Azure multiplayer server](#deploy-to-azure) · [Source code](https://github.com/Skid-ster/AiSlopcraft)
+**[▶ Play AiSlopcraft singleplayer](https://skid-ster.github.io/AiSlopcraft/)** · [Deploy multiplayer to Render](#deploy-to-render) · [Deploy to Azure](#deploy-to-azure)
 
 AiSlopcraft is a browser-based voxel sandbox with two ways to play: the original **Beta 1.7.3-inspired survival game** and a dedicated **Classic creative mode**. Explore a seeded world, mine and build, craft and smelt, grow crops, fight familiar mobs, or switch to unlimited block-building and flight in Classic mode.
 
@@ -48,7 +48,7 @@ For the complete local release gate—full tests, clean production build, built-
 
 ## Classic multiplayer
 
-Online multiplayer is available in the Classic edition; Beta remains singleplayer-only. It needs a reachable Node process to coordinate rooms and relay game state; static hosting alone cannot do that. The Azure setup below runs the built game and room service from the **same origin**. One Azure app instance can host at most **5 multiplayer rooms** (game servers), each with at most **5 players including the host** (25 players total). This is one Azure App Service instance—not five separate virtual machines—and the limits are enforced by the relay.
+Online multiplayer is available in the Classic edition; Beta remains singleplayer-only. It needs a reachable Node process to coordinate rooms and relay game state; static GitHub Pages cannot do that. Render and Azure run the built game and relay on the **same origin**. A single instance hosts at most **5 rooms**, each with at most **5 players including the host**. See the [relay authority matrix](docs/relay-authority.md) for protocol rules.
 
 ### Deploy to Azure
 
@@ -60,9 +60,13 @@ Online multiplayer is available in the Classic edition; Beta remains singleplaye
 
 Azure keeps the **service process** available only while the App Service and subscription remain active; check your student-credit balance and expiry. Rooms and world edits are still temporary in-memory sessions: they end if the host leaves or the app restarts/deploys. Keeping world saves across restarts would require a database/storage feature not included here. GitHub Pages remains the singleplayer/static option and cannot itself host rooms.
 
-### Lower-setup option: Render Blueprint
+### Deploy to Render
 
-A `render.yaml` Blueprint is included for a single combined web service. In Render, choose **New → Blueprint**, connect this repository and the branch you want to publish, then review and create the `aislopcraft-online` service. The Blueprint builds the frontend and starts the WebSocket room relay on the same origin; players use the site URL without entering a relay address. It requests Render's `free` plan where available and pins the service to one instance because room/name state is process-local—check current plan terms before creating the service. Free services may sleep when idle, so rooms and names disappear on restarts or deploys. After deployment, run `BASE_URL=https://<your-service>.onrender.com npm run smoke:deploy` to check the site, health endpoint, limits, secure WebSocket, temporary-name claim/release, and an end-to-end public world create → snapshot → list → leave flow. **No hosted service is provisioned by this repository change.**
+A `render.yaml` Blueprint is included for a single combined web service. In Render, choose **New → Blueprint**, connect this repository and the branch you want to publish, then review and create the `aislopcraft-online` service. The Blueprint builds the frontend and runs `npm start`; the Node engine range selects [Node 22 on Render](https://render.com/docs/node-version). The relay binds to Render's `PORT` (8787 by default locally) and `/health` checks the built app is ready. Players use the same site URL without entering a relay address. The Blueprint requests the `free` plan where available; keep one instance because room/name state is process-local. Free services may sleep, and rooms and names do not survive restarts or deploys. After deployment, run `BASE_URL=https://<your-service>.onrender.com npm run smoke:deploy` and share the service URL only after it passes. **The Blueprint does not provision a live service by itself.**
+
+### Licensing
+
+First-party material is [All Rights Reserved](LICENSE). [Third-party notices](THIRD_PARTY_NOTICES.md) document the PSX attribution and upstream terms.
 
 Players on different networks connect to the same service URL. The host and guests need the same world seed; invite links include the host's seed and service URL.
 
