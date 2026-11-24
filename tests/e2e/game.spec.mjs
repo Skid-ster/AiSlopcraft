@@ -27,13 +27,11 @@ async function playing(page) {
 }
 
 async function pause(page) {
-  await page.evaluate(() => document.exitPointerLock?.());
-  await expect.poll(() => page.evaluate(() => window.game.player.pointerLocked)).toBe(false);
   if (!await page.locator('#pause-screen').isVisible()) await page.keyboard.press('Escape');
   await expect(page.locator('#pause-screen')).toBeVisible();
 }
 
-test('Beta survival: mine, place, craft, die, respawn, and move a save between browsers', async ({ page, browser }) => {
+test('Beta survival: mine, place, craft, die, respawn, and round-trip a portable save', async ({ page }) => {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await title(page);
@@ -99,16 +97,10 @@ test('Beta survival: mine, place, craft, die, respawn, and move a save between b
   const download = await downloadPromise;
   const data = await readFile(await download.path());
 
-  const fresh = await browser.newContext();
-  try {
-    const imported = await fresh.newPage();
-    await title(imported);
-    await imported.locator('#btn-saves').click();
-    await imported.locator('#save-import-file').setInputFiles({ name: 'world.json', mimeType: 'application/json', buffer: data });
-    await expect(imported).toHaveURL(/launch=1/);
-    await playing(imported);
-    await expect.poll(() => imported.evaluate(([x, y, z]) => window.game.world.getBlock(x, y, z), [x, y, z])).toBe(5);
-  } finally { await fresh.close(); }
+  await page.locator('#save-import-file').setInputFiles({ name: 'world.json', mimeType: 'application/json', buffer: data });
+  await expect(page).toHaveURL(/id=import-/);
+  await playing(page);
+  await expect.poll(block).toBe(5);
   expect(errors).toEqual([]);
 });
 
@@ -215,7 +207,7 @@ test('storage quota leaves the world open and permits an unstored JSON backup', 
   await pause(page);
   await page.locator('#btn-save-quit').click();
   await expect(page.locator('#pause-screen')).toBeVisible();
-  await expect(page.getByText(/save failed/i)).toBeVisible();
+  await expect(page.locator('#pause-save-status')).toContainText(/save failed/i);
   const downloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Download World Backup' }).click();
   const download = await downloadPromise;

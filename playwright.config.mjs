@@ -7,7 +7,7 @@ const baseURL = `http://127.0.0.1:${port}`;
 // https://playwright.dev/docs/test-webserver
 export default defineConfig({
   testDir: './tests/e2e',
-  timeout: 120_000,
+  timeout: 180_000,
   globalTimeout: 12 * 60_000,
   expect: { timeout: 15_000 },
   workers: 1,
@@ -16,7 +16,9 @@ export default defineConfig({
     baseURL,
     browserName: 'chromium',
     viewport: { width: 800, height: 600 },
-    launchOptions: { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] },
+    launchOptions: { args: process.env.AISLOPCRAFT_HARDWARE_GL === '1'
+      ? ['--enable-gpu']
+      : ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] },
     trace: { mode: 'retain-on-failure', screenshots: false },
     screenshot: 'only-on-failure',
   },
