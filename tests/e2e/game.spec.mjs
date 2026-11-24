@@ -39,13 +39,15 @@ test('Beta survival: mine, place, craft, die, respawn, and round-trip a portable
   await expect.poll(() => page.evaluate(() => window.game.renderer.info.render.calls)).toBeGreaterThan(0);
   await page.locator('#game-canvas').click({ position: { x: 400, y: 300 } });
   await expect.poll(() => page.evaluate(() => window.game.player.pointerLocked)).toBe(true);
-  // Pin the target and supplies; let the real mouse, raycast, simulation and inventory do the work.
+  // Pin the target and supplies; use keybindings so headless pointer-lock mouse
+  // coordinate events do not move the camera between setting up and mining.
   const [x, y, z] = await page.evaluate(() => {
     const { world, player } = window.game;
     const [x, y, z] = player.pos.toArray().map(Math.floor);
-    player.yaw = player.pitch = 0;
-    player.pos.x = x + 0.5;
-    player.pos.z = z + 0.5;
+    player.yaw = player.pitch = player.mouseDX = player.mouseDY = 0;
+    player.pos.set(x + 0.5, y + 0.001, z + 0.5);
+    player.vel.set(0, 0, 0);
+    player.bindings = { ...player.bindings, attack: 'KeyJ', use: 'KeyK' };
     world.setBlock(x, y - 1, z, 1);
     world.setBlock(x, y, z, 0);
     world.setBlock(x, y + 1, z, 0);
@@ -57,10 +59,17 @@ test('Beta survival: mine, place, craft, die, respawn, and round-trip a portable
     return [x, y + 1, z - 2];
   });
   const block = () => page.evaluate(([x, y, z]) => window.game.world.getBlock(x, y, z), [x, y, z]);
-  await page.mouse.down();
-  try { await expect.poll(block).toBe(0); } finally { await page.mouse.up(); }
-  await page.mouse.down({ button: 'right' });
-  try { await expect.poll(block).toBe(5); } finally { await page.mouse.up({ button: 'right' }); }
+  const aim = () => page.evaluate(() => {
+    const { player, world } = window.game;
+    const hit = player.raycast(world, 5);
+    return hit && [hit.x, hit.y, hit.z];
+  });
+  await expect.poll(aim).toEqual([x, y, z]);
+  await page.keyboard.down('j');
+  try { await expect.poll(block).toBe(0); } finally { await page.keyboard.up('j'); }
+  await expect.poll(aim).toEqual([x, y, z - 1]);
+  await page.keyboard.down('k');
+  try { await expect.poll(block).toBe(5); } finally { await page.keyboard.up('k'); }
 
   await page.keyboard.press('e');
   const craft = page.locator('#craft-grid .slot');

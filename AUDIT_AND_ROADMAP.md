@@ -13,7 +13,7 @@ AiSlopcraft remains a procedural browser game: Beta survival/creative is local, 
 
 ## Phase 1 — browser reliability
 
-- [x] Add Chromium smoke for a fresh Beta world, actual mouse mining and placement, inventory crafting, pause/death/respawn, persisted settings and local/portable saves. Add a small portrait touchscreen case and two separate browser sessions for Classic multiplayer names and lobby flow.
+- [x] Add Chromium smoke for a fresh Beta world, mining and placement using real keyboard controls, inventory crafting, pause/death/respawn, persisted settings and local/portable saves. Add a small portrait touchscreen case and two separate browser sessions for Classic multiplayer names and lobby flow.
 - [x] Exercise WebGL startup failure and simulated real context loss/restoration. Keep the world open on quota failures and allow a JSON backup without a storage write. Handle the browser's rejected pointer-lock requests without an uncaught exception.
 - [x] Fix black Classic grass and leaves: the mesher was feeding missing Beta climate fields into vertex tint math. A Node regression checks finite vertex colors and Chromium samples visible grass pixels with both the Classic and PSX presets.
 - [x] Wire the browser suite into `npm run verify` and the Linux CI job, with a separate Windows Node/jsdom job. Hosted Actions execution is pending a push, not inferred from local runs.
