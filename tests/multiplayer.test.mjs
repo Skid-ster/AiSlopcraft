@@ -23,7 +23,14 @@ await writeFile(join(staticDir, 'index.html'), '<!doctype html><title>AiSlopcraf
 await writeFile(join(staticDir, 'assets', 'app.js'), 'window.gameReady = true;');
 await writeFile(join(staticDir, 'assets', 'main-AbCd1234.js'), 'window.versioned = true;');
 await writeFile(join(tempDir, 'secret.json'), '{"private":true}');
-await symlink(join(tempDir, 'secret.json'), join(staticDir, 'assets', 'escape.json'));
+let hasEscapeSymlink = true;
+try {
+  await symlink(join(tempDir, 'secret.json'), join(staticDir, 'assets', 'escape.json'), 'file');
+} catch (error) {
+  if (process.platform !== 'win32' || error.code !== 'EPERM') throw error;
+  hasEscapeSymlink = false;
+  console.log('SKIP: static file symlink assertion requires Windows Developer Mode or symlink privileges.');
+}
 const service = createMultiplayerServer({ logger: { warn() {} }, staticDir });
 service.http.listen(0, '127.0.0.1');
 await once(service.http, 'listening');
@@ -50,7 +57,9 @@ const assetResponse = await fetch(`${base}/assets/app.js`);
 assert.equal(await assetResponse.text(), 'window.gameReady = true;', 'combined service serves static game assets beside the WebSocket relay');
 assert.equal((await fetch(`${base}/assets/main-AbCd1234.js`)).headers.get('cache-control'), 'public, max-age=31536000, immutable', 'content-hashed assets are safely cached for a year');
 assert.equal((await fetch(`${base}/assets/missing.js`)).status, 404, 'missing asset paths do not incorrectly return the SPA shell');
-assert.equal((await fetch(`${base}/assets/escape.json`)).status, 403, 'static serving blocks symlinks outside the build directory');
+if (hasEscapeSymlink) {
+  assert.equal((await fetch(`${base}/assets/escape.json`)).status, 403, 'static serving blocks symlinks outside the build directory');
+}
 assert.match(await (await fetch(`${base}/saved-world`)).text(), /AiSlopcraft/, 'client-side routes fall back to the app entry point');
 assert.equal((await fetch(`${base}/`, { method: 'HEAD' })).status, 200, 'static serving supports HEAD requests');
 const unbuiltService = createMultiplayerServer({ logger: { warn() {} }, staticDir: join(tempDir, 'not-built') });
@@ -141,8 +150,10 @@ try {
   assert.deepEqual((await releasedListEvent).players, [], 'the public live list updates immediately after logout');
   const reused = await request(duplicate, 'player:claim', { name: 'PLAY565' });
   assert.equal(reused.type, 'player:claimed', 'a released name becomes immediately available');
+  const disconnectedList = waitFor(anonymous, message => message.type === 'players:list' && !message.requestId && message.players.length === 0);
   duplicate.close();
   await once(duplicate, 'close');
+  await disconnectedList; // The client can observe its close before the server processes it.
   const reclaimed = await request(anonymous, 'player:claim', { name: 'play565' });
   assert.equal(reclaimed.type, 'player:claimed', 'a disconnect also releases a temporary name');
   await request(anonymous, 'player:release');

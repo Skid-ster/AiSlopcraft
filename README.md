@@ -21,7 +21,7 @@ It aims for the feel of that era: no hunger bar or sprinting, food heals directl
 
 ## Play locally
 
-Install [Node.js 22 LTS](https://nodejs.org/) and run:
+Install [Node.js 22 LTS](https://nodejs.org/) (`>=22 <23`; Node 20 is unsupported) and run:
 
 ```bash
 npm ci
@@ -29,6 +29,8 @@ npm run dev
 ```
 
 Open the local URL printed by Vite (normally `http://localhost:5173`). **Beta Singleplayer** browses Beta saves or creates a survival/creative world with an optional seed. **Play Classic** opens the separate Classic menu, where you can create/load saved creative worlds or host/join Classic multiplayer. Worlds autosave in this browser every 15 seconds, on tab hide, and on save-and-quit; the **World Saves** menu imports and exports portable JSON saves. Online rooms are temporary and never overwrite singleplayer saves.
+
+On Windows, `npm test` prints a skip for the file-symlink assertion if the OS denies symlink creation. Enable Developer Mode or run with symlink privileges to exercise that assertion locally. All other tests still run; the server's symlink protection is unchanged.
 
 To make a production build:
 
