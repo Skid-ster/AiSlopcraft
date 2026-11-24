@@ -1,20 +1,22 @@
 {
   "name": "aislopcraft",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0 --port 4173",
-    "verify": "npm test && npm run build && npm run smoke:production && npm run test:e2e && npm audit --audit-level=low",
+    "verify": "npm test && npm run build && npm run smoke:production && npm run smoke:perf && npm run test:e2e && npm audit --audit-level=low",
     "start": "node server/multiplayer.js",
     "test": "node tests/world.test.mjs && node tests/ui.test.mjs && node tests/textures.test.mjs && node tests/interaction.test.mjs && node tests/gameplay.test.mjs && node tests/fluids.test.mjs && node tests/redstone.test.mjs && node tests/vehicles.test.mjs && node tests/recipes.test.mjs && node tests/furnace.test.mjs && node tests/mobs.test.mjs && node tests/lighting.test.mjs && node tests/rendering.test.mjs && node tests/arm.test.mjs && node tests/remote-avatar.test.mjs && node tests/resource-pack.test.mjs && node tests/save.test.mjs && node tests/multiplayer.test.mjs",
     "multiplayer": "node server/multiplayer.js",
     "smoke:production": "node tests/production-smoke.mjs",
     "smoke:deploy": "node tests/deployment-smoke.mjs",
     "pretest": "node tests/relay-policy.test.mjs && node tests/save-manager.test.mjs && node tests/world-loader.test.mjs && node tests/input.test.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "smoke:perf": "node tests/performance-smoke.mjs",
+    "profile:rendering": "node tests/profile-rendering.mjs"
   },
   "dependencies": {
     "fflate": "^0.8.3",
