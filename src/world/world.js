@@ -23,6 +23,7 @@ export class World {
     this.edits = new Map();  // player block edits "x,y,z" -> id
     this.metaEdits = new Map(); // player block metadata "x,y,z" -> meta
     this.editsByChunk = new Map(); // avoid scanning the entire save on every chunk load
+    this.smoothLighting = true;
     this.lighting = new WorldLighting(this);
     this.blockListeners = new Set();
     this.chunkListeners = new Set();

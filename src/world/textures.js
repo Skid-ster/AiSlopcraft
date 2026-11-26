@@ -577,12 +577,12 @@ export function buildAtlas() {
   });
   put(TILES.jukebox_top, (ox, oy, rnd) => {
     noiseFill(ctx, ox, oy, [120, 92, 58], 10, rnd);
-    for (let y = 3; y < 13; y++) for (let x = 3; x < 13; x++) {
-      const d = Math.abs(x - 7.5) + Math.abs(y - 7.5);
-      if (d < 5) px(ctx, ox + x, oy + y, 40, 30, 22);
+    for (let i = 0; i < TS; i++) {
+      px(ctx, ox + i, oy, 88, 62, 36); px(ctx, ox + i, oy + 15, 88, 62, 36);
+      px(ctx, ox, oy + i, 88, 62, 36); px(ctx, ox + 15, oy + i, 88, 62, 36);
     }
-    px(ctx, ox + 7, oy + 7, 90, 70, 40); px(ctx, ox + 8, oy + 7, 90, 70, 40);
-    px(ctx, ox + 7, oy + 8, 90, 70, 40); px(ctx, ox + 8, oy + 8, 90, 70, 40);
+    for (let y = 3; y < 13; y++) for (let x = 3; x < 13; x++) px(ctx, ox + x, oy + y, 86, 62, 38);
+    for (let x = 5; x < 11; x++) { px(ctx, ox + x, oy + 7, 26, 22, 20); px(ctx, ox + x, oy + 8, 26, 22, 20); }
   });
   put(TILES.cobweb, (ox, oy, rnd) => {
     for (let x = 0; x < TS; x++) for (let y = 0; y < TS; y++) px(ctx, ox + x, oy + y, 0, 0, 0, 0);
@@ -690,17 +690,61 @@ export function buildAtlas() {
     for (let y = 2; y < 7; y++) for (let x = 3; x < 7; x++) px(ctx, ox + x, oy + y, 0, 0, 0, 0);
     for (let y = 2; y < 7; y++) for (let x = 9; x < 13; x++) px(ctx, ox + x, oy + y, 0, 0, 0, 0);
   });
-  put(TILES.redstone_wire, (ox, oy) => {
+  put(TILES.redstone_wire, (ox, oy, rnd) => {
+    for (let y = 0; y < TS; y++) for (let x = 0; x < TS; x++) px(ctx, ox + x, oy + y, 0, 0, 0, 0);
     for (let y = 0; y < TS; y++) for (let x = 0; x < TS; x++) {
-      if ((x >= 6 && x <= 9) || (y >= 6 && y <= 9)) px(ctx, ox+x, oy+y, 190, 26, 20);
+      const dx = Math.abs(x - 7.5), dy = Math.abs(y - 7.5);
+      const onArm = dx <= 1.6 || dy <= 1.6;
+      const onRim = !onArm && (dx <= 2.6 || dy <= 2.6) && ((x + y * 3) % 3 !== 0);
+      if (onArm) {
+        const core = dx <= 0.8 && dy <= 0.8;
+        const spark = rnd() > 0.65;
+        px(ctx, ox + x, oy + y, core || spark ? 248 : 210, core ? 58 : 28, core ? 46 : 22);
+      } else if (onRim && (dx <= 2.6 && dy <= 5.5 || dy <= 2.6 && dx <= 5.5 || (x % 2 === 0 && y % 2 === 1))) {
+        px(ctx, ox + x, oy + y, 146, 18, 14);
+      }
+    }
+    // Clean center hub cross
+    for (let y = 5; y < 11; y++) for (let x = 5; x < 11; x++) {
+      const edge = x === 5 || x === 10 || y === 5 || y === 10;
+      px(ctx, ox + x, oy + y, edge ? 168 : 244, edge ? 20 : 52, edge ? 16 : 38);
     }
   });
-  put(TILES.lever, (ox, oy) => {
-    for (let y = 0; y < TS; y++) for (let x = 0; x < TS; x++) px(ctx, ox+x, oy+y, 130, 110, 80);
+  put(TILES.lever, (ox, oy, rnd) => {
+    for (let y = 0; y < TS; y++) for (let x = 0; x < TS; x++) px(ctx, ox + x, oy + y, 0, 0, 0, 0);
+    // Cobblestone base ears on left/right (kept outside x=7..8 so torchSideRect stays pure wood shaft)
+    for (let y = 12; y < 16; y++) for (let x = 4; x < 12; x++) {
+      if (x === 7 || x === 8) continue;
+      const edge = x === 4 || x === 11 || y === 12 || y === 15;
+      const v = (rnd() - 0.5) * 18;
+      px(ctx, ox + x, oy + y, (edge ? 84 : 122) + v, (edge ? 84 : 122) + v, (edge ? 84 : 122) + v);
+    }
+    // Wood shaft at columns 7..8 (rows 6..15) + dark iron knob tip at rows 6..7
+    for (let y = 8; y < 16; y++) {
+      px(ctx, ox + 7, oy + y, 126, 94, 52);
+      px(ctx, ox + 8, oy + y, 154, 118, 68);
+    }
+    for (let y = 6; y < 8; y++) {
+      px(ctx, ox + 7, oy + y, 88, 86, 86);
+      px(ctx, ox + 8, oy + y, 118, 114, 112);
+    }
   });
-  put(TILES.repeater, (ox, oy) => {
-    for (let y = 0; y < TS; y++) for (let x = 0; x < TS; x++) px(ctx, ox+x, oy+y, 155, 155, 155);
-    for (let y = 3; y < 13; y++) for (let x = 7; x < 9; x++) px(ctx, ox+x, oy+y, 180, 30, 20);
+  put(TILES.repeater, (ox, oy, rnd) => {
+    noiseFill(ctx, ox, oy, [162, 162, 162], 8, rnd);
+    // Beveled stone slab rim
+    for (let i = 0; i < TS; i++) {
+      px(ctx, ox + i, oy, 198, 198, 198); px(ctx, ox, oy + i, 198, 198, 198);
+      px(ctx, ox + i, oy + 15, 96, 96, 96); px(ctx, ox + 15, oy + i, 96, 96, 96);
+    }
+    // Recessed channel + arrowhead pointing north (y=0)
+    for (let y = 2; y < 14; y++) for (let x = 7; x < 9; x++) px(ctx, ox + x, oy + y, 186, 30, 24);
+    px(ctx, ox + 6, oy + 4, 186, 30, 24); px(ctx, ox + 9, oy + 4, 186, 30, 24);
+    px(ctx, ox + 5, oy + 5, 186, 30, 24); px(ctx, ox + 10, oy + 5, 186, 30, 24);
+    // Two redstone torch sockets (rear delay pad + front output pin)
+    for (const [cx, cy] of [[7, 2], [7, 11]]) {
+      px(ctx, ox + cx, oy + cy, 62, 42, 32); px(ctx, ox + cx + 1, oy + cy, 62, 42, 32);
+      px(ctx, ox + cx, oy + cy + 1, 244, 62, 48); px(ctx, ox + cx + 1, oy + cy + 1, 244, 62, 48);
+    }
   });
   for (let stage = 0; stage < 8; stage++) {
     put(TILES.crops0 + stage, (ox, oy, rnd) => {

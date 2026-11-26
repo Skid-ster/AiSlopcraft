@@ -253,4 +253,9 @@ export class Audio {
   furnace() {
     this._noise(0.4, 200, 1, 0.08, 'lowpass');
   }
+
+  jukebox() {
+    const notes = [523.25, 659.25, 783.99, 1046.5, 783.99, 659.25, 587.33, 783.99, 659.25, 523.25];
+    notes.forEach((f, i) => this._tone(f, 0.22, 0.11, 'triangle', null, i * 0.16));
+  }
 }

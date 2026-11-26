@@ -13,6 +13,7 @@ const FOG_NIGHT = new THREE.Color(0x070814);
 const CLOUD_DAY = new THREE.Color(0xffffff);
 const CLOUD_SUNSET = new THREE.Color(0xffb894);
 const CLOUD_NIGHT = new THREE.Color(0x23273a);
+const WATER_BLUE = new THREE.Color(0x174a9b);
 
 export class Sky {
   constructor(scene, camera) {
@@ -22,6 +23,12 @@ export class Sky {
     this.elapsed = 0;
     this.dayFactor = 1;
     this.sunDirection = new THREE.Vector3(1, 0, 0);
+    this._skyColor = new THREE.Color();
+    this._fogColor = new THREE.Color();
+    this._cloudColor = new THREE.Color();
+    this._waterColor = new THREE.Color();
+    this._tmpVec = new THREE.Vector3();
+    scene.background = this._skyColor;
 
     // Analytic gradient: no per-frame CPU vertex-buffer uploads or color pops.
     this.skyDomeGeometry = new THREE.SphereGeometry(480, 32, 16);
@@ -45,16 +52,16 @@ export class Sky {
     scene.add(this.skyDome);
 
     // sun & moon
-    const sunGeo = new THREE.PlaneGeometry(32, 32);
+    const sunGeo = new THREE.PlaneGeometry(46, 46);
     const sunTex = this.makeSunTexture();
     this.sun = new THREE.Mesh(sunGeo, new THREE.MeshBasicMaterial({
-      map: sunTex, transparent: true, depthWrite: false, depthTest: true, fog: false,
+      map: sunTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: true, fog: false,
     }));
     this.sun.renderOrder = -10;
     scene.add(this.sun);
 
     const moonTex = this.makeMoonTexture();
-    this.moon = new THREE.Mesh(new THREE.PlaneGeometry(22, 22), new THREE.MeshBasicMaterial({
+    this.moon = new THREE.Mesh(new THREE.PlaneGeometry(34, 34), new THREE.MeshBasicMaterial({
       map: moonTex, transparent: true, depthWrite: false, depthTest: true, fog: false,
     }));
     this.moon.renderOrder = -10;
@@ -157,18 +164,17 @@ export class Sky {
     this.elapsed += dt;
 
     const sunAngle = (this.time - 0.25) * Math.PI * 2;
-    const sunDir = new THREE.Vector3(Math.cos(sunAngle), Math.sin(sunAngle), 0.18).normalize();
-    this.sunDirection.copy(sunDir);
+    this.sunDirection.set(Math.cos(sunAngle), Math.sin(sunAngle), 0.18).normalize();
 
-    const elev = sunDir.y;
+    const elev = this.sunDirection.y;
     this.dayFactor = Math.max(0, Math.min(1, (elev + 0.12) / 0.32));
 
-    const center = playerPos.clone();
-    this.sun.position.copy(center).add(sunDir.clone().multiplyScalar(400));
-    this.sun.lookAt(center);
-    this.moon.position.copy(center).sub(sunDir.clone().multiplyScalar(400));
-    this.moon.lookAt(center);
-    this.stars.position.copy(center);
+    this._tmpVec.copy(this.sunDirection).multiplyScalar(400);
+    this.sun.position.copy(playerPos).add(this._tmpVec);
+    this.sun.lookAt(playerPos);
+    this.moon.position.copy(playerPos).sub(this._tmpVec);
+    this.moon.lookAt(playerPos);
+    this.stars.position.copy(playerPos);
     this.stars.rotation.z = sunAngle * 0.25;
     this.stars.material.opacity = Math.max(0, 1 - this.dayFactor * 1.8) * 0.9;
 
@@ -180,9 +186,9 @@ export class Sky {
     this.cloudMat.map.offset.y = -playerPos.z / 128;
     this.cloudMat.opacity = 0.65 + this.dayFactor * 0.25;
 
-    const sky = new THREE.Color();
-    const fog = new THREE.Color();
-    const cloud = new THREE.Color();
+    const sky = this._skyColor;
+    const fog = this._fogColor;
+    const cloud = this._cloudColor;
     if (this.dayFactor > 0.65) {
       sky.copy(SKY_DAY);
       fog.copy(FOG_DAY);
@@ -200,26 +206,24 @@ export class Sky {
     }
     this.cloudMat.color.copy(cloud);
     this.scene.background = sky;
-    this.skyDome.position.copy(center);
-    const horizon = sky.clone().lerp(FOG_DAY, 0.20 + 0.25 * this.dayFactor);
-    const zenith = sky.clone().multiplyScalar(0.52);
-    const nadir = sky.clone().multiplyScalar(0.68);
-    this.skyUniforms.uHorizon.value.copy(horizon);
-    this.skyUniforms.uZenith.value.copy(zenith);
-    this.skyUniforms.uNadir.value.copy(nadir);
+    this.skyDome.position.copy(playerPos);
+    this.skyUniforms.uHorizon.value.copy(fog);
+    this.skyUniforms.uZenith.value.copy(sky).multiplyScalar(0.78);
+    this.skyUniforms.uNadir.value.copy(sky).multiplyScalar(0.55);
     this.skyUniforms.uUnderwater.value = underwater ? 1 : 0;
-    this.skyUniforms.uWaterColor.value.copy(FOG_NIGHT).lerp(new THREE.Color(0x174a9b), this.dayFactor);
+    this._waterColor.copy(FOG_NIGHT).lerp(WATER_BLUE, this.dayFactor);
+    this.skyUniforms.uWaterColor.value.copy(this._waterColor);
     this.sun.visible = this.moon.visible = this.stars.visible = !underwater;
     this.clouds.visible = !underwater && this.showClouds !== false;
     if (this.scene.fog) {
       if (underwater) {
-        this.scene.fog.color.copy(FOG_NIGHT).lerp(new THREE.Color(0x174a9b), this.dayFactor);
+        this.scene.fog.color.copy(this._waterColor);
         this.scene.fog.near = 0.5;
         this.scene.fog.far = 26;
       } else {
         const far = Math.max(24, renderDistance * 16 - 8);
         this.scene.fog.color.copy(fog);
-        this.scene.fog.near = far * 0.52;
+        this.scene.fog.near = far * 0.70;
         this.scene.fog.far = far;
       }
     }

@@ -5,7 +5,7 @@ import { DEFAULT_KEYS, KEY_LABELS, keyLabel, rebindKey } from '../settings.js';
 const SHADERS = ['classic', 'vibrant', 'cinematic', 'shader', 'psx'];
 const SHADER_NAMES = { classic: 'Classic', vibrant: 'Vibrant', cinematic: 'Cinematic', shader: 'Shader Lite', psx: 'PSX (1.7.10)' };
 const SHADER_HINTS = {
-  classic: 'Beta-style light and fog, with no enhanced sun shadows.',
+  classic: 'Minecraft 1.7.10-style lightmap, smooth AO, and fog, with no enhanced sun shadows.',
   vibrant: 'Brighter, more saturated colors. No sun-shadow pass.',
   cinematic: 'Warm color grading with soft, filtered block shadows.',
   shader: 'Shader Lite adds real sun-shadow mapping, 3×3 filtered shadows, reflective water, fine animated ripples and sun-lit caustic glints. External OptiFine shaderpacks are not supported by this WebGL renderer.',
@@ -16,6 +16,10 @@ const DIFFICULTIES = ['Peaceful', 'Easy', 'Normal', 'Hard'];
 
 function pct(v) { return Math.round(v * 100); }
 function onOff(v) { return v ? 'ON' : 'OFF'; }
+function brightnessLabel(v) {
+  const n = Math.round(Number(v));
+  return n <= 50 ? 'Brightness: Moody' : n >= 150 ? 'Brightness: Bright' : `Brightness: ${n}%`;
+}
 
 export class OptionsMenu {
   constructor(game, onClose) {
@@ -111,14 +115,15 @@ export class OptionsMenu {
         ${this.slider('opt-render', 'Render Distance', 2, 12, 1, s.renderDistance, v => `Render Distance: ${v} chunks`)}
         ${this.slider('opt-fps', 'Max Framerate', 0, FPS_STEPS.length - 1, 1, fpsIndex, v => `Max Framerate: ${FPS_STEPS[v] === 0 ? 'Unlimited' : FPS_STEPS[v] + ' fps'}`)}
         ${this.button('opt-graphics', `Graphics: ${s.graphics === 'fast' ? 'Fast' : 'Fancy'}`)}
-        ${this.button('opt-particles', `Particles: ${s.particles === 'all' ? 'All' : s.particles === 'decreased' ? 'Decreased' : 'Minimal'}`)}
+        ${this.button('opt-smooth', `Smooth Lighting: ${onOff(s.smoothLighting !== false)}`)}
         <p class="performance-hint">Fast lowers render resolution and skips real-time sun shadows. Fancy uses your selected render scale and enables shadows in Cinematic and Shader Lite.</p>
-        ${this.button('opt-bob', `View Bobbing: ${onOff(s.viewBobbing)}`)}
+        ${this.button('opt-particles', `Particles: ${s.particles === 'all' ? 'All' : s.particles === 'decreased' ? 'Decreased' : 'Minimal'}`)}
         ${this.button('opt-clouds', `Clouds: ${onOff(s.clouds)}`)}
-        ${this.slider('opt-brightness', 'Brightness', 50, 150, 1, pct(s.brightness), v => `Brightness: ${v}%`)}
+        ${this.button('opt-bob', `View Bobbing: ${onOff(s.viewBobbing)}`)}
         ${this.slider('opt-fov', 'FOV', 30, 110, 1, s.fov, v => `FOV: ${v}`)}
+        ${this.slider('opt-brightness', 'Brightness', 50, 150, 1, pct(s.brightness), brightnessLabel)}
         ${this.slider('opt-scale', 'Render Scale', 50, 100, 5, pct(s.renderScale), v => `Render Scale: ${v}%`)}
-        ${this.button('opt-shader', `Shaders: ${SHADER_NAMES[shownShaderStyle]}${forcedVisuals ? ' (Server)' : ''}`, '', !!forcedVisuals)}
+        ${this.button('opt-shader', `Shaders: ${SHADER_NAMES[shownShaderStyle]}${forcedVisuals ? ' (Server)' : ''}`, 'opt-shader-wide', !!forcedVisuals)}
         <p class="shader-hint" id="shader-hint">${forcedVisuals ? 'The host enforces this shader for the multiplayer room.' : SHADER_HINTS[shownShaderStyle]}</p>
       </div>
       <div class="mc-done-row">${this.button('opt-done', 'Done')}</div>`;
@@ -195,6 +200,7 @@ export class OptionsMenu {
     range('opt-render', v => { s.renderDistance = v; label('opt-render', `Render Distance: ${v} chunks`); });
     range('opt-fps', v => { s.maxFps = FPS_STEPS[v]; label('opt-fps', `Max Framerate: ${s.maxFps === 0 ? 'Unlimited' : s.maxFps + ' fps'}`); });
     click('opt-graphics', () => { s.graphics = s.graphics === 'fast' ? 'fancy' : 'fast'; this.apply(); this.render(); });
+    click('opt-smooth', () => { s.smoothLighting = s.smoothLighting === false; this.apply(); this.render(); });
     click('opt-particles', () => {
       const modes = ['all', 'decreased', 'minimal'];
       s.particles = modes[(modes.indexOf(s.particles) + 1) % modes.length];
@@ -202,7 +208,7 @@ export class OptionsMenu {
     });
     click('opt-bob', () => { s.viewBobbing = !s.viewBobbing; this.apply(); this.render(); });
     click('opt-clouds', () => { s.clouds = !s.clouds; this.apply(); this.render(); });
-    range('opt-brightness', v => { s.brightness = v / 100; label('opt-brightness', `Brightness: ${v}%`); });
+    range('opt-brightness', v => { s.brightness = v / 100; label('opt-brightness', brightnessLabel(v)); });
     range('opt-fov', v => { s.fov = v; label('opt-fov', `FOV: ${v}`); });
     range('opt-scale', v => { s.renderScale = v / 100; label('opt-scale', `Render Scale: ${v}%`); });
     click('opt-shader', () => { s.shaderStyle = SHADERS[(SHADERS.indexOf(s.shaderStyle) + 1) % SHADERS.length]; this.apply(); this.render(); });

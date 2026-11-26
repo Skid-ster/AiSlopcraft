@@ -36,6 +36,10 @@ export class OverworldGen extends WorldGen {
   decorate(_world, chunk) {
     if (chunk.decorated) return;
     const x0 = chunk.cx * CH, z0 = chunk.cz * CH;
+    const biomeCache = chunk.biomeCache;
+    const infoAt = (x, z) => (biomeCache && x >= x0 && x < x0 + CH && z >= z0 && z < z0 + CH)
+      ? biomeCache[(z - z0) * CH + (x - x0)]
+      : this.columnInfo(x, z);
     // Each chunk projects nearby features into itself only. Neither neighbors'
     // load order nor player edits can influence the generated block image.
     const inChunk = (x, z) => x >= x0 && x < x0 + CH && z >= z0 && z < z0 + CH;
@@ -49,7 +53,7 @@ export class OverworldGen extends WorldGen {
         const x = cx * CH + rng.nextInt(CH), z = cz * CH + rng.nextInt(CH);
         const chance = rng.next(), trunk = 4 + rng.nextInt(3);
         if (x < x0 - 2 || x > x0 + CH + 1 || z < z0 - 2 || z > z0 + CH + 1) continue;
-        const { height, biome } = this.columnInfo(x, z);
+        const { height, biome } = infoAt(x, z);
         if (height <= SEA_LEVEL + 1 || height >= chunk.height - 8) continue;
         if (biome === 'desert') {
           if (chance < 0.29) for (let y = 1; y <= trunk - 3; y++) place(x, height + y, z, CACTUS);
@@ -67,10 +71,10 @@ export class OverworldGen extends WorldGen {
     }
     const plants = new RNG(this.seed ^ Math.imul(chunk.cx, 1103515245) ^ Math.imul(chunk.cz, 12345) ^ 0x713);
     for (let z = z0; z < z0 + CH; z++) for (let x = x0; x < x0 + CH; x++) {
-      const { height, biome } = this.columnInfo(x, z);
+      const { height, biome } = infoAt(x, z);
       const roll = plants.next();
       if (height === SEA_LEVEL && biome !== 'snow' && roll < 0.16 &&
-          [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dz]) => this.columnInfo(x + dx, z + dz).height < SEA_LEVEL)) {
+          [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dz]) => infoAt(x + dx, z + dz).height < SEA_LEVEL)) {
         for (let y = 1; y <= 3; y++) place(x, height + y, z, SUGARCANE);
       } else if (height > SEA_LEVEL && biome !== 'desert') {
         if (biome === 'snow' && roll < 0.74) place(x, height + 1, z, SNOW);

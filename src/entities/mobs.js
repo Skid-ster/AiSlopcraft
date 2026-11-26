@@ -1,6 +1,6 @@
 // Box-model mobs with terrain-aware movement and Beta-era combat behavior.
 import * as THREE from 'three';
-import { getBlock, AIR, WATER, LAVA, LEAVES, LOG, CACTUS, ICE, ITEMS } from '../world/blocks.js';
+import { getBlock, AIR, WATER, WATER_FLOW, LAVA, LAVA_FLOW, LEAVES, LOG, CACTUS, ICE, ITEMS } from '../world/blocks.js';
 import { WORLD_H } from '../world/chunk.js';
 
 export const MOB_DEFS = {
@@ -197,7 +197,8 @@ export function canMobBurnInSun(mob, world, timeOfDay) {
   if (!mob || (mob.type !== 'zombie' && mob.type !== 'skeleton') || !isDaylight(timeOfDay)) return false;
   const { x, y, z } = mob.pos;
   for (const sampleY of [y + 0.1, y + mob.def.h * 0.55, y + mob.def.h - 0.05]) {
-    if (world.getBlock(Math.floor(x), Math.floor(sampleY), Math.floor(z)) === WATER) return false;
+    const b = world.getBlock(Math.floor(x), Math.floor(sampleY), Math.floor(z));
+    if (b === WATER || b === WATER_FLOW) return false;
   }
   return hasDirectSky(world, x, y + mob.def.h, z);
 }
@@ -224,7 +225,7 @@ export function findSafeGround(world, x, z, width = 0.6, height = 1.8, hostile =
       for (let zz = minZ; zz <= maxZ && room; zz++) {
         for (let xx = minX; xx <= maxX; xx++) {
           const id = world.getBlock(xx, yy, zz);
-          if (getBlock(id).solid || id === WATER || id === LAVA) { room = false; break; }
+          if (getBlock(id).solid || id === WATER || id === WATER_FLOW || id === LAVA || id === LAVA_FLOW) { room = false; break; }
         }
       }
     }
@@ -647,8 +648,8 @@ export class Mob {
   }
 
   damage(amount, audio, options = {}) {
-    if (this.dead || amount <= 0) return false;
-    this.hp = Math.max(0, this.hp - amount);
+    if (this.dead || (amount <= 0 && !options.knockback)) return false;
+    this.hp = Math.max(0, this.hp - Math.max(0, amount));
     this.hurtTime = options.silentHurt ? 0.2 : 0.35;
     if (options.knockback) this.vel.add(options.knockback);
     if (!this.def.hostile) {
@@ -707,6 +708,7 @@ export class MobManager {
   add(type, x, y, z) {
     const mob = new Mob(type, x, y, z);
     this.lighting?.prepare(mob.group);
+    this.lighting?.refreshObject(mob.group, this.world, mob.pos, mob.def.h * 0.65);
     this.mobs.push(mob);
     this.group.add(mob.group);
     return mob;
@@ -847,8 +849,11 @@ export class MobManager {
     const dx = target.pos.x - player.pos.x;
     const dz = target.pos.z - player.pos.z;
     const length = Math.hypot(dx, dz) || 1;
-    const knockback = new THREE.Vector3((dx / length) * 3.4, 1.15, (dz / length) * 3.4);
-    target.damage(mobAttackDamage(heldId), audio, { knockback });
+    const isCrit = player.onGround === false && (player.vel?.y ?? 0) < -0.1 && !player.inWater && !player.onLadder;
+    const kbScale = player.sprinting ? 1.35 : 1.0;
+    const knockback = new THREE.Vector3((dx / length) * 3.4 * kbScale, 1.15, (dz / length) * 3.4 * kbScale);
+    const dmg = isCrit ? Math.ceil(mobAttackDamage(heldId) * 1.5) : mobAttackDamage(heldId);
+    target.damage(dmg, audio, { knockback });
     if (typeof player.useHeldOn === 'function') player.useHeldOn(AIR);
     return true;
   }

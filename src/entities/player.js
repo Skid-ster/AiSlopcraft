@@ -110,6 +110,8 @@ export class Player {
     this.gameMode = 'survival';
     this.flying = false;
     this.lastFlightJumpAt = -Infinity;
+    this.lastForwardTapAt = -Infinity;
+    this.doubleTapSprinting = false;
     this.viewBobbing = true;
     this._bobPhase = 0;
     this._bobStrength = 0;
@@ -169,16 +171,27 @@ export class Player {
     document.addEventListener('keydown', (e) => {
       if (e.target?.matches?.('input, select, textarea, [contenteditable]')) return;
       this.keys[e.code] = true;
-      if (this.canFly && !window.uiPause && e.code === this.bindings.jump && !e.repeat) {
+      if (!e.repeat && !window.uiPause) {
         const now = globalThis.performance?.now?.() ?? Date.now();
-        if (now - this.lastFlightJumpAt < 320) this.toggleFlight();
-        else this.lastFlightJumpAt = now;
+        if (this.canFly && e.code === this.bindings.jump) {
+          if (now - this.lastFlightJumpAt < 320) this.toggleFlight();
+          else this.lastFlightJumpAt = now;
+        }
+        if (e.code === this.bindings.forward) {
+          if (now - this.lastForwardTapAt < 300) this.doubleTapSprinting = true;
+          this.lastForwardTapAt = now;
+        }
       }
       for (let i = 1; i <= 9; i++) if (e.code === this.bindings[`hotbar${i}`]) this.hotbarIndex = i - 1;
       if (e.code === this.bindings.attack) this.leftDown = true;
       if (e.code === this.bindings.use) this.rightDown = true;
     });
-    document.addEventListener('keyup', (e) => { this.keys[e.code] = false; if (e.code === this.bindings.attack) { this.leftDown = false; this.mining.active = false; this.mining.progress = 0; } if (e.code === this.bindings.use) this.rightDown = false; });
+    document.addEventListener('keyup', (e) => {
+      this.keys[e.code] = false;
+      if (e.code === this.bindings.forward) this.doubleTapSprinting = false;
+      if (e.code === this.bindings.attack) { this.leftDown = false; this.mining.active = false; this.mining.progress = 0; }
+      if (e.code === this.bindings.use) this.rightDown = false;
+    });
     document.addEventListener('wheel', (e) => {
       if (!this.pointerLocked) return;
       this.hotbarIndex = (this.hotbarIndex + (e.deltaY > 0 ? 1 : -1) + 9) % 9;
@@ -247,6 +260,8 @@ export class Player {
     this.exhaustion = 0;
     this.foodTimer = 0;
     this.sprinting = false;
+    this.doubleTapSprinting = false;
+    this.lastForwardTapAt = -Infinity;
     this.dead = false;
     this.flying = false;
     this.lastFlightJumpAt = -Infinity;
@@ -286,8 +301,12 @@ export class Player {
     this.pitch = Math.max(-limit, Math.min(limit, this.pitch));
     this.hurtTime = Math.max(0, this.hurtTime - dt);
     this.camera.position.set(this.pos.x, this.pos.y + EYE, this.pos.z);
-    const dir = new THREE.Vector3(-Math.sin(this.yaw) * Math.cos(this.pitch), Math.sin(this.pitch), -Math.cos(this.yaw) * Math.cos(this.pitch));
-    this.camera.lookAt(this.camera.position.clone().add(dir));
+    const cosP = Math.cos(this.pitch);
+    this.camera.lookAt(
+      this.camera.position.x - Math.sin(this.yaw) * cosP,
+      this.camera.position.y + Math.sin(this.pitch),
+      this.camera.position.z - Math.cos(this.yaw) * cosP,
+    );
   }
 
   update(dt, world, audio) {
@@ -322,7 +341,10 @@ export class Player {
 
     this.onLadder = feet === LADDER || mid === LADDER;
     this.inCobweb = feet === COBWEB || mid === COBWEB;
-    this.sprinting = this.gameMode === 'survival' && forward > 0 && !this.sneaking && !this.inWater && this.hunger > 6 && this.isKeyDown(this.bindings.sprint);
+    if (forward <= 0 || this.sneaking || this.inWater || (this.gameMode === 'survival' && this.hunger <= 6)) {
+      this.doubleTapSprinting = false;
+    }
+    this.sprinting = (this.gameMode !== 'survival' || this.hunger > 6) && forward > 0 && !this.sneaking && !this.inWater && (this.isKeyDown(this.bindings.sprint) || this.doubleTapSprinting);
 
     // acceleration
     let speed = 4.317;
@@ -340,8 +362,9 @@ export class Player {
     if (len > 0) { ax /= len; az /= len; }
 
     if (this.canFly && this.flying) {
+      const flySpeed = this.sprinting ? 13.0 : 8.5;
       const vertical = Number(!!this.isKeyDown(this.bindings.jump)) - Number(!!this.isKeyDown(this.bindings.sneak));
-      this.vel.set(ax * 8.5, vertical * 8.5, az * 8.5);
+      this.vel.set(ax * flySpeed, vertical * 8.5, az * flySpeed);
       this.moveAxis(1, this.vel.y * dt, world);
       if (vertical > 0 && Number.isFinite(world.height)) this.pos.y = Math.min(this.pos.y, world.height + 32);
       this.moveAxis(0, this.vel.x * dt, world);
@@ -349,12 +372,12 @@ export class Player {
       this.onGround = false;
       this.fallStart = null;
       this.camera.position.set(this.pos.x, this.pos.y + EYE, this.pos.z);
-      const direction = new THREE.Vector3(
-        -Math.sin(this.yaw) * Math.cos(this.pitch),
-        Math.sin(this.pitch),
-        -Math.cos(this.yaw) * Math.cos(this.pitch)
+      const cosP = Math.cos(this.pitch);
+      this.camera.lookAt(
+        this.camera.position.x - Math.sin(this.yaw) * cosP,
+        this.camera.position.y + Math.sin(this.pitch),
+        this.camera.position.z - Math.cos(this.yaw) * cosP,
       );
-      this.camera.lookAt(this.camera.position.clone().add(direction));
       this._lastX = this.pos.x; this._lastZ = this.pos.z;
       return;
     }
@@ -516,12 +539,12 @@ export class Player {
       this.pos.y + EYE - (this.sneaking ? 0.14 : 0) + bobOffY,
       this.pos.z + rightZ * bobOffX
     );
-    const dir = new THREE.Vector3(
-      -Math.sin(this.yaw) * Math.cos(this.pitch),
-      Math.sin(this.pitch),
-      -Math.cos(this.yaw) * Math.cos(this.pitch)
+    const cosP = Math.cos(this.pitch);
+    this.camera.lookAt(
+      this.camera.position.x - Math.sin(this.yaw) * cosP,
+      this.camera.position.y + Math.sin(this.pitch),
+      this.camera.position.z - Math.cos(this.yaw) * cosP,
     );
-    this.camera.lookAt(this.camera.position.clone().add(dir));
     if (this.hurtTime > 0 && this.camera.rotation) {
       this.camera.rotation.z += Math.sin((this.hurtTime / 0.5) * Math.PI) * 0.07;
     }
@@ -545,6 +568,25 @@ export class Player {
     return false;
   }
 
+  _collidesAt(world, px, py, pz) {
+    const minX = px - W / 2, maxX = px + W / 2;
+    const minY = py, maxY = py + H;
+    const minZ = pz - W / 2, maxZ = pz + W / 2;
+    for (let y = Math.floor(minY); y <= Math.floor(maxY); y++) {
+      for (let z = Math.floor(minZ); z <= Math.floor(maxZ); z++) {
+        for (let x = Math.floor(minX); x <= Math.floor(maxX); x++) {
+          if (!this._solidBlockAt(world, x, y, z)) continue;
+          const b = world.getBlock(x, y, z);
+          const bounds = blockSelectionBounds(world, x, y, z, b);
+          const bx0 = x + (bounds ? bounds[0] : 0), by0 = y + (bounds ? bounds[1] : 0), bz0 = z + (bounds ? bounds[2] : 0);
+          const bx1 = x + (bounds ? bounds[3] : 1), by1 = y + (bounds ? bounds[4] : 1), bz1 = z + (bounds ? bounds[5] : 1);
+          if (maxX > bx0 && minX < bx1 && maxY > by0 && minY < by1 && maxZ > bz0 && minZ < bz1) return true;
+        }
+      }
+    }
+    return false;
+  }
+
   moveAxis(axis, amount, world) {
     if (amount === 0) return 'ok';
     const pos = this.pos;
@@ -554,6 +596,36 @@ export class Player {
     const minX = pos.x - W / 2, maxX = pos.x + W / 2;
     const minY = pos.y, maxY = pos.y + H;
     const minZ = pos.z - W / 2, maxZ = pos.z + W / 2;
+
+    if ((axis === 0 || axis === 2) && this.onGround && !this.flying) {
+      let hit = false;
+      let maxStepY = -Infinity;
+      let canStep = true;
+      for (let y = Math.floor(minY); y <= Math.floor(maxY); y++) {
+        for (let z = Math.floor(minZ); z <= Math.floor(maxZ); z++) {
+          for (let x = Math.floor(minX); x <= Math.floor(maxX); x++) {
+            if (!this._solidBlockAt(world, x, y, z)) continue;
+            const b = world.getBlock(x, y, z);
+            const bounds = blockSelectionBounds(world, x, y, z, b);
+            const bx0 = x + (bounds ? bounds[0] : 0), by0 = y + (bounds ? bounds[1] : 0), bz0 = z + (bounds ? bounds[2] : 0);
+            const bx1 = x + (bounds ? bounds[3] : 1), by1 = y + (bounds ? bounds[4] : 1), bz1 = z + (bounds ? bounds[5] : 1);
+            if (maxX > bx0 && minX < bx1 && maxY > by0 && minY < by1 && maxZ > bz0 && minZ < bz1) {
+              hit = true;
+              if (by1 > minY && by1 - minY <= 0.57) {
+                if (by1 > maxStepY) maxStepY = by1;
+              } else {
+                canStep = false;
+              }
+            }
+          }
+        }
+      }
+      if (!hit) return 'ok';
+      if (canStep && maxStepY > -Infinity && !this._collidesAt(world, pos.x, maxStepY + 0.001, pos.z)) {
+        pos.y = maxStepY + 0.001;
+        return 'ok';
+      }
+    }
 
     for (let y = Math.floor(minY); y <= Math.floor(maxY); y++) {
       for (let z = Math.floor(minZ); z <= Math.floor(maxZ); z++) {

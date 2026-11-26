@@ -71,10 +71,12 @@ export class WorldGen {
   fillChunk(chunk) {
     const { cx, cz } = chunk;
     const B = chunk.blocks;
+    const biomeCache = chunk.biomeCache || (chunk.biomeCache = new Array(CH * CH));
     for (let z = 0; z < CH; z++) {
       for (let x = 0; x < CH; x++) {
         const wx = cx * CH + x, wz = cz * CH + z;
         const info = this.columnInfo(wx, wz);
+        biomeCache[z * CH + x] = info;
         const h = info.height;
         for (let y = 0; y <= Math.max(h, SEA_LEVEL); y++) {
           let id = AIR;
@@ -225,10 +227,11 @@ export class WorldGen {
     // Flowers / shrubs / cane / pumpkins for this chunk only (no overflow needed)
     if (isHome) {
       const rng2 = new RNG(this.seed ^ (ocx * 1103515245 + ocz * 12345 + 7));
+      const biomeCache = chunk.biomeCache;
       for (let i = 0; i < 26; i++) {
         const x = rng2.nextInt(CH), z = rng2.nextInt(CH);
         const wx = ocx * CH + x, wz = ocz * CH + z;
-        const info = this.columnInfo(wx, wz);
+        const info = biomeCache?.[z * CH + x] || this.columnInfo(wx, wz);
         const h = info.height;
         if (h <= SEA_LEVEL) continue;
         const ground = world.getBlockGen(wx, h, wz);
@@ -252,10 +255,11 @@ export class WorldGen {
       }
       // sugar cane near water
       const rng3 = new RNG(this.seed ^ (ocx * 22695477 + ocz * 69069 + 13));
+      const biomeCache3 = chunk.biomeCache;
       for (let i = 0; i < 10; i++) {
         const x = rng3.nextInt(CH), z = rng3.nextInt(CH);
         const wx = ocx * CH + x, wz = ocz * CH + z;
-        const info = this.columnInfo(wx, wz);
+        const info = biomeCache3?.[z * CH + x] || this.columnInfo(wx, wz);
         const h = info.height;
         if (h <= SEA_LEVEL - 1) continue;
         // near water?

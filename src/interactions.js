@@ -1,9 +1,21 @@
 // Small, testable survival interactions shared by the game and regression tests.
 import {
-  AIR, GRASS, DIRT, FARMLAND, CROPS, CAKE_BLOCK, WATER, LAVA, SAPLING, LOG, LEAVES,
+  AIR, GRASS, DIRT, FARMLAND, CROPS, CAKE_BLOCK, WATER, WATER_FLOW, LAVA, SAPLING, LOG, LEAVES,
   ITEMS, WOOL_BASE,
 } from './world/blocks.js';
 import { CH, WORLD_H } from './world/chunk.js';
+
+export function hasNearbyWater(world, x, y, z) {
+  for (let dy = 0; dy <= 1; dy++) {
+    for (let dz = -4; dz <= 4; dz++) {
+      for (let dx = -4; dx <= 4; dx++) {
+        const b = world.getBlock(x + dx, y + dy, z + dz);
+        if (b === WATER || b === WATER_FLOW) return true;
+      }
+    }
+  }
+  return false;
+}
 
 function replaceOneHeld(player, id, drop) {
   player.consumeHeld(1);
@@ -20,7 +32,8 @@ export function useOnBlock(world, player, hit, { drop } = {}) {
   const held = player.heldStack;
   const id = held?.id;
   if (ITEMS[id]?.tool === 'hoe' && (block === GRASS || block === DIRT) && face[1] === 1 && world.getBlock(x, y + 1, z) === AIR) {
-    if (!world.setBlock(x, y, z, FARMLAND)) return false;
+    const wet = hasNearbyWater(world, x, y, z) ? 7 : 0;
+    if (!world.setBlock(x, y, z, FARMLAND, wet)) return false;
     player.useHeldOn(block);
     return true;
   }
@@ -93,9 +106,12 @@ export function useOnMob(player, mob, { drop, random = Math.random } = {}) {
 
 export function growCrop(world, x, y, z, random = Math.random) {
   if (world.getBlock(x, y, z) !== CROPS || world.getBlock(x, y - 1, z) !== FARMLAND) return false;
+  const wet = hasNearbyWater(world, x, y - 1, z) ? 7 : 0;
+  if (world.getMeta(x, y - 1, z) !== wet) world.setMeta(x, y - 1, z, wet);
   const stage = world.getMeta(x, y, z) & 7;
   const light = world.getLight(x, y, z);
-  if (stage >= 7 || Math.max(light >> 4, light & 15) < 9 || random() >= 0.05) return false;
+  const chance = wet ? 0.08 : 0.05;
+  if (stage >= 7 || Math.max(light >> 4, light & 15) < 9 || random() >= chance) return false;
   return world.setMeta(x, y, z, stage + 1);
 }
 
