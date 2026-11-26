@@ -9,20 +9,21 @@ import { buildChunkMesh } from './world/mesher.js';
 import { buildAtlas, buildItemIcons, buildEmissionAtlas } from './world/textures.js';
 import { extractBlockSprites, paintBlockSprites } from './world/resource-pack.js';
 import {
-  AIR, WATER, WATER_FLOW, LAVA, TORCH, CRAFTING_TABLE, FURNACE, SAND, GRAVEL, LEAVES, GRASS, DIRT,
-  LOG, GLASS, BRICK, getBlock, breakTime, canHarvest, ITEMS, itemName, isBlock, STONE, COBBLE,
-  TILES, SAPLING, TALL_GRASS, PLANKS, TNT, WOOD_DOOR, IRON_DOOR,
+  AIR, WATER, WATER_FLOW, LAVA, LAVA_FLOW, TORCH, CRAFTING_TABLE, FURNACE, SAND, GRAVEL, LEAVES, GRASS, DIRT,
+  LOG, GLASS, BRICK, getBlock, breakTime, canHarvest, ITEMS, itemName, isBlock, itemStackLimit, STONE, COBBLE,
+  TILES, SAPLING, TALL_GRASS, PLANKS, TNT, WOOD_DOOR, IRON_DOOR, JUKEBOX, STONE_SLAB, DOUBLE_STONE_SLAB,
   BED_BLOCK, CAKE_BLOCK, CHEST, CROPS, FARMLAND, WOOL_BASE, LEVER, RAIL, REDSTONE_WIRE, REDSTONE_TORCH, REDSTONE_REPEATER, placeableBlockForItem, FURNACE_LIT
 } from './world/blocks.js';
 import { Player } from './entities/player.js';
 import { createRemoteAvatarModel, disposeRemoteAvatarModel } from './entities/remote-avatar.js';
-import { advanceEating } from './entities/eating.js';
+import { advanceEating, EAT_DURATION } from './entities/eating.js';
 import { MobManager, rollMobDrops, mobAttackDamage } from './entities/mobs.js';
 import { UI } from './ui/ui.js';
 import { showGraphicsStartupError } from './ui/startup-error.js';
 import { Audio } from './audio.js';
 import { Sky } from './sky.js';
-import { createFurnaceState, tickFurnace, interactWithFurnaceSlot } from './ui/furnace.js';
+import { createFurnaceState, tickFurnace, interactWithFurnaceSlot, FUEL_TIMES } from './ui/furnace.js';
+import { smeltResult } from './ui/recipes.js';
 import { ParticleManager } from './particles.js';
 import { FirstPersonArm } from './arm.js';
 import { Lighting, PSXPostProcess, SHADER_STYLES, shaderStyleId } from './rendering.js';
@@ -421,6 +422,8 @@ const game = {
   applySettings() {
     const s = this.settings;
     const distanceChanged = this.renderDistance !== s.renderDistance;
+    const smoothChanged = world.smoothLighting !== s.smoothLighting;
+    world.smoothLighting = s.smoothLighting;
     this.renderDistance = s.renderDistance;
     this.keepInventory = s.keepInventory;
     mobs.difficulty = s.difficulty;
@@ -445,6 +448,11 @@ const game = {
       this.ui.hintEl.textContent = this.edition === 'classic'
         ? `Click to play · WASD move · Space jump · double-tap Space to fly · left-click break · right-click place · B blocks · middle-click pick · Esc pause`
         : `Click to play | ${keyLabel(k.forward)}/${keyLabel(k.left)}/${keyLabel(k.back)}/${keyLabel(k.right)} move · ${keyLabel(k.jump)} jump · ${keyLabel(k.sneak)} sneak · ${keyLabel(k.drop)} drop · ${keyLabel(k.inventory)} inventory · F3 debug · Esc pause`;
+    }
+    if (smoothChanged) {
+      for (const chunk of world.chunks.values()) {
+        if (chunk.generated && chunk.meshes) chunk.dirty = true;
+      }
     }
     if (distanceChanged && this.started) this.onRenderDistanceChange();
   },
@@ -622,6 +630,10 @@ const game = {
   saveSettings() {
     persistSettings(localStorage, this.settings);
   },
+  refreshContainers() {
+    refreshChest();
+    refreshFurnace();
+  },
   async saveAndQuit() {
     if (this.networkRoom) { await this.leaveMultiplayer(); return true; }
     else if (!this.saveGame()) return false;
@@ -629,6 +641,8 @@ const game = {
     url.searchParams.delete('launch');
     history.replaceState(null, '', url);
     this.started = false;
+    lastCX = null;
+    lastCZ = null;
     clearFishing();
     ui.setMode('title');
     return true;
@@ -900,9 +914,9 @@ function updateCrackOverlayUV(stage) {
 const chunkQueue = [];
 let lastCX = null, lastCZ = null;
 
-function updateChunks(force = false) {
-  const pcx = Math.floor(player.pos.x / CH);
-  const pcz = Math.floor(player.pos.z / CH);
+function updateChunks(force = false, targetX = player.pos.x, targetZ = player.pos.z) {
+  const pcx = Math.floor(targetX / CH);
+  const pcz = Math.floor(targetZ / CH);
   if (!force && pcx === lastCX && pcz === lastCZ) return;
   lastCX = pcx; lastCZ = pcz;
 
@@ -952,7 +966,7 @@ function processChunkQueue(budget = performance.now() + 4) {
 function rebuildDirtyChunks(budget = performance.now() + 4) {
   let n = 0;
   for (const chunk of world.chunks.values()) {
-    if (n >= 1 || performance.now() >= budget) break;
+    if (n >= 4 || performance.now() >= budget) break;
     if (chunk.dirty && chunk.generated && chunk.meshes) {
       const built = buildChunkMesh(world, chunk, atlasTex, waterTex, game.renderDistance);
       const meshes = {};
@@ -1075,25 +1089,58 @@ function applySharedGameState(state) {
 }
 
 function updateItems(dt, allowPickup) {
-  for (const it of itemEntities) {
+  const networked = !!game.networkRoom;
+  const networkGuest = networked && game.networkRoom.role !== 'host';
+  for (let idx = 0; idx < itemEntities.length; idx++) {
+    const it = itemEntities[idx];
+    if (it.dead) continue;
     const loaded = world.getChunk(Math.floor(it.mesh.position.x / CH), Math.floor(it.mesh.position.z / CH));
     it.mesh.visible = !!loaded?.generated;
     if (!loaded?.generated) continue; // preserve drops rather than falling through unloaded terrain
-    const networked = !!game.networkRoom;
-    const networkGuest = networked && game.networkRoom.role !== 'host';
     if (!networkGuest) {
       it.age += dt;
-      if (!it.onGround) it.vy -= 14 * dt;
-      it.mesh.position.y += it.vy * dt;
+      const inBlock = world.getBlock(Math.floor(it.mesh.position.x), Math.floor(it.mesh.position.y), Math.floor(it.mesh.position.z));
+      if (inBlock === LAVA || inBlock === LAVA_FLOW) {
+        audio.fizz?.();
+        particles.spawnEffect(it.mesh.position.clone(), { color: 0x777777, life: 0.45, scale: 0.6, vy: 1.2, gravity: -0.2 });
+        it.dead = true;
+        continue;
+      }
       const bx = Math.floor(it.mesh.position.x), by = Math.floor(it.mesh.position.y - 0.14), bz = Math.floor(it.mesh.position.z);
-      if (getBlock(world.getBlock(bx, by, bz)).solid && it.vy <= 0) {
-        it.mesh.position.y = by + 1.15;
-        it.vy = 0;
-        it.onGround = true;
+      const supportSolid = getBlock(world.getBlock(bx, by, bz)).solid;
+      if (!supportSolid) it.onGround = false;
+      if (!it.onGround) {
+        it.vy -= 14 * dt;
+        it.mesh.position.y += it.vy * dt;
+        const nby = Math.floor(it.mesh.position.y - 0.14);
+        if (getBlock(world.getBlock(bx, nby, bz)).solid && it.vy <= 0) {
+          it.mesh.position.y = nby + 1.15;
+          it.vy = 0;
+          it.onGround = true;
+        }
+      }
+      // Merge nearby matching stacks on the ground
+      if (it.age > 0.25) {
+        const limit = itemStackLimit(it.id);
+        if (it.count < limit) {
+          for (let j = idx + 1; j < itemEntities.length; j++) {
+            const other = itemEntities[j];
+            if (other.dead || other.id !== it.id || (other.damage || 0) !== (it.damage || 0) || other.age <= 0.25) continue;
+            if (other.count >= limit) continue;
+            if (it.mesh.position.distanceToSquared(other.mesh.position) > 1.56) continue;
+            const take = Math.min(other.count, limit - it.count);
+            if (take > 0) {
+              it.count += take;
+              other.count -= take;
+              if (other.count <= 0) other.dead = true;
+              if (it.count >= limit) break;
+            }
+          }
+        }
       }
       it.mesh.rotation.y += dt * 1.6;
-      lighting.refreshObject(it.mesh, world, it.mesh.position, 0);
     }
+    lighting.refreshObject(it.mesh, world, it.mesh.position, 0);
 
     // pickup
     const dx = it.mesh.position.x - player.pos.x, dy = it.mesh.position.y - player.pos.y - 0.8, dz = it.mesh.position.z - player.pos.z;
@@ -1231,15 +1278,28 @@ function tryPlaceBlock() {
 
   // Replaceable blocks: if hit is TALL_GRASS, SAPLING, WATER, or LAVA, place directly at hit
   const hitBlockId = world.getBlock(hit.x, hit.y, hit.z);
+  const pminX = player.pos.x - 0.35, pmaxX = player.pos.x + 0.35;
+  const pminZ = player.pos.z - 0.35, pmaxZ = player.pos.z + 0.35;
+  const pminY = player.pos.y, pmaxY = player.pos.y + 1.8;
+
+  // Stack stone slab on top of an existing slab to form a full double slab
+  if (placeId === STONE_SLAB && hitBlockId === STONE_SLAB && hit.face[1] === 1) {
+    if (hit.x + 1 > pminX && hit.x < pmaxX && hit.y + 1 > pminY && hit.y + 0.5 < pmaxY && hit.z + 1 > pminZ && hit.z < pmaxZ) return;
+    if (!world.setBlock(hit.x, hit.y, hit.z, DOUBLE_STONE_SLAB, 0)) return;
+    if (player.gameMode !== 'creative' && player.gameMode !== 'classic') player.consumeHeld();
+    audio.place(DOUBLE_STONE_SLAB);
+    player.stats.blocksPlaced++;
+    firstPersonArm.triggerPlaceSwing();
+    ui.refresh();
+    return;
+  }
+
   const isReplaceable = (hitBlockId === TALL_GRASS || hitBlockId === SAPLING || hitBlockId === WATER || hitBlockId === LAVA);
   const px = isReplaceable ? hit.x : hit.x + hit.face[0];
   const py = isReplaceable ? hit.y : hit.y + hit.face[1];
   const pz = isReplaceable ? hit.z : hit.z + hit.face[2];
 
   // don't place inside the player
-  const pminX = player.pos.x - 0.35, pmaxX = player.pos.x + 0.35;
-  const pminZ = player.pos.z - 0.35, pmaxZ = player.pos.z + 0.35;
-  const pminY = player.pos.y, pmaxY = player.pos.y + 1.8;
   if (px + 1 > pminX && px < pmaxX && py + 1 > pminY && py < pmaxY && pz + 1 > pminZ && pz < pmaxZ) return;
 
   const existing = world.getBlock(px, py, pz);
@@ -1253,7 +1313,7 @@ function tryPlaceBlock() {
   if (placeId === WOOD_DOOR || placeId === IRON_DOOR || placeId === BED_BLOCK) {
     const fx = -Math.sin(player.yaw), fz = -Math.cos(player.yaw);
     meta = Math.abs(fz) >= Math.abs(fx) ? (fz > 0 ? 1 : 0) : (fx > 0 ? 3 : 2);
-  } else if (placeId === REDSTONE_TORCH || placeId === LEVER) {
+  } else if (placeId === TORCH || placeId === REDSTONE_TORCH || placeId === LEVER) {
     const [dx,dy,dz] = hit.face;
     if (dy < 0) return;
     meta = dx > 0 ? 1 : dx < 0 ? 2 : dz > 0 ? 3 : dz < 0 ? 4 : 0;
@@ -1316,17 +1376,22 @@ function explode(pos, radius, player, damageMultiplier = 1) {
   player.vel.add(kb);
 }
 
-// ---- arrows ----
+// ---- arrows & throwables ----
 const arrows = [];
 const arrowGeometry = new THREE.BoxGeometry(0.08, 0.08, 0.5);
-function createArrow(from, velocity, owner, targetId = null, uid = null, networkRemote = false, damage = 2) {
-  const mesh = new THREE.Mesh(arrowGeometry, new THREE.MeshBasicMaterial({ color: 0x8a6a42 }));
+const throwableGeometry = new THREE.BoxGeometry(0.18, 0.18, 0.18);
+function createArrow(from, velocity, owner, targetId = null, uid = null, networkRemote = false, damage = 2, kind = 'arrow') {
+  const geo = kind === 'arrow' ? arrowGeometry : throwableGeometry;
+  const color = kind === 'snowball' ? 0xf2f8ff : kind === 'egg' ? 0xefe2be : 0x8a6a42;
+  const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color }));
   lighting.prepare(mesh);
   mesh.position.copy(from);
   lighting.refreshObject(mesh, world, mesh.position, 0);
   scene.add(mesh);
-  arrows.push({ mesh, vel: velocity, age: 0, owner, targetId,
-    uid: uid || globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`, networkRemote, networkTimer: 0, damage });
+  const entry = { mesh, vel: velocity, age: 0, owner, targetId, kind,
+    uid: uid || globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`, networkRemote, networkTimer: 0, damage };
+  arrows.push(entry);
+  return entry;
 }
 function shootArrow(fromMob, player, damage = 2) {
   const from = fromMob.pos.clone().add(new THREE.Vector3(0, 1.6, 0));
@@ -1336,6 +1401,12 @@ function shootArrow(fromMob, player, damage = 2) {
 function shootPlayerArrow() {
   const dir = new THREE.Vector3(-Math.sin(player.yaw) * Math.cos(player.pitch), Math.sin(player.pitch), -Math.cos(player.yaw) * Math.cos(player.pitch));
   createArrow(camera.position.clone().addScaledVector(dir, 0.45), dir.multiplyScalar(22), 'player');
+  audio.bow();
+}
+function shootThrowable(itemId) {
+  const kind = itemId === 332 ? 'snowball' : 'egg';
+  const dir = new THREE.Vector3(-Math.sin(player.yaw) * Math.cos(player.pitch), Math.sin(player.pitch), -Math.cos(player.yaw) * Math.cos(player.pitch));
+  createArrow(camera.position.clone().addScaledVector(dir, 0.45), dir.multiplyScalar(17), 'player', null, null, false, 0, kind);
   audio.bow();
 }
 function upsertNetworkProjectile(shot) {
@@ -1379,7 +1450,13 @@ function updateArrows(dt) {
       const block = world.getBlock(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z));
       if (getBlock(block).solid) {
         a.dead = true;
-        if (a.owner === 'player') spawnItem(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z), 262, 1);
+        if (a.owner === 'player') {
+          if (a.kind === 'arrow') spawnItem(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z), 262, 1);
+          else {
+            particles.spawnEffect(pos.clone(), { color: a.kind === 'snowball' ? 0xffffff : 0xf2e4c4, life: 0.35, scale: 0.55, vy: 1.4 });
+            if (a.kind === 'egg' && !game.networkRoom && Math.random() < 0.125) mobs.add('chicken', pos.x, Math.floor(pos.y) + 1.05, pos.z);
+          }
+        }
         audio.arrowHit();
         break;
       }
@@ -1401,9 +1478,10 @@ function updateArrows(dt) {
             if (game.networkRoom?.role === 'guest') {
               game.multiplayerClient?.send('mob:attack', { uid: mob.networkId, heldId: null, ranged: true });
             } else {
-              const knockback = a.vel.clone().normalize().multiplyScalar(2);
-              mob.damage(4, audio, { knockback });
+              const knockback = a.vel.clone().normalize().multiplyScalar(a.kind === 'arrow' ? 2 : 1.4);
+              mob.damage(a.kind === 'arrow' ? 4 : 0, audio, { knockback });
             }
+            if (a.kind !== 'arrow') particles.spawnEffect(pos.clone(), { color: a.kind === 'snowball' ? 0xffffff : 0xf2e4c4, life: 0.35, scale: 0.55, vy: 1.4 });
             a.dead = true; audio.arrowHit(); break;
           }
         }
@@ -1523,15 +1601,14 @@ function buildFurnaceUI() {
     panel.innerHTML = `
       <div class="panel furnace-panel">
         <div class="inv-title">Furnace</div>
-        <div class="furnace-row">
-          <div class="slot" id="f-in"></div>
-          <div class="furnace-flame" id="f-flame">🔥</div>
-          <div class="slot" id="f-out"></div>
-        </div>
-        <div class="furnace-row">
-          <div class="slot" id="f-fuel"></div>
+        <div class="furnace-layout">
+          <div class="furnace-col">
+            <div class="slot" id="f-in"></div>
+            <div class="furnace-flame" id="f-flame" aria-hidden="true"></div>
+            <div class="slot" id="f-fuel"></div>
+          </div>
           <div class="furnace-progress" id="f-prog"><div id="f-prog-fill"></div></div>
-          <div></div>
+          <div class="slot craft-out" id="f-out"></div>
         </div>
         <div class="inv-title">Inventory</div>
         <div class="inv-main" id="f-inv-main"></div>
@@ -1539,6 +1616,36 @@ function buildFurnaceUI() {
       </div>
     `;
     document.getElementById('ui').appendChild(panel);
+    ui.bindBackdropDrop(panel);
+
+    const onInvSlot = index => event => {
+      event.preventDefault();
+      const current = game.openFurnaceData?.f;
+      if (event.shiftKey && current) {
+        const stack = player.inventory[index];
+        if (!stack) return;
+        const targetKey = smeltResult(stack.id) != null ? 'input' : FUEL_TIMES[stack.id] ? 'fuel' : null;
+        if (targetKey) {
+          const dest = current[targetKey];
+          const limit = itemStackLimit(stack.id);
+          if (!dest) {
+            current[targetKey] = { ...stack };
+            player.inventory[index] = null;
+          } else if (dest.id === stack.id && (dest.damage || 0) === (stack.damage || 0) && dest.count < limit) {
+            const take = Math.min(stack.count, limit - dest.count);
+            dest.count += take;
+            stack.count -= take;
+            if (stack.count <= 0) player.inventory[index] = null;
+          }
+          refreshFurnace();
+          ui.refresh();
+          game.syncSharedState();
+          return;
+        }
+      }
+      ui.slotClick(event, 'inv', index);
+      refreshFurnace();
+    };
 
     const main = panel.querySelector('#f-inv-main');
     const hot = panel.querySelector('#f-inv-hotbar');
@@ -1546,16 +1653,18 @@ function buildFurnaceUI() {
       const slot = document.createElement('div');
       slot.className = 'slot';
       slot.dataset.inv = i;
-      slot.addEventListener('mousedown', event => { ui.slotClick(event, 'inv', i); refreshFurnace(); });
+      slot.addEventListener('mousedown', onInvSlot(i));
       slot.addEventListener('contextmenu', event => event.preventDefault());
+      ui.bindSlotHover(slot, () => player.inventory[i]);
       main.appendChild(slot);
     }
     for (let i = 0; i < 9; i++) {
       const slot = document.createElement('div');
       slot.className = 'slot';
       slot.dataset.inv = i;
-      slot.addEventListener('mousedown', event => { ui.slotClick(event, 'inv', i); refreshFurnace(); });
+      slot.addEventListener('mousedown', onInvSlot(i));
       slot.addEventListener('contextmenu', event => event.preventDefault());
+      ui.bindSlotHover(slot, () => player.inventory[i]);
       hot.appendChild(slot);
     }
 
@@ -1563,6 +1672,19 @@ function buildFurnaceUI() {
       event.preventDefault();
       const current = game.openFurnaceData?.f;
       if (!current) return;
+      if (event.shiftKey && current[which]) {
+        const src = current[which];
+        const inserted = player.insertItem(src.id, src.count, src.damage || 0);
+        if (inserted > 0) {
+          src.count -= inserted;
+          if (src.count <= 0) current[which] = null;
+          if (which === 'output') audio.pop();
+          refreshFurnace();
+          ui.refresh();
+          game.syncSharedState();
+        }
+        return;
+      }
       const result = interactWithFurnaceSlot(current, which, player.cursorStack, event.button);
       if (!result.changed) return;
       player.cursorStack = result.cursorStack;
@@ -1570,11 +1692,17 @@ function buildFurnaceUI() {
       ui.refresh();
       game.syncSharedState();
     };
-    panel.querySelector('#f-in').addEventListener('mousedown', onFurnaceSlot('input'));
-    panel.querySelector('#f-fuel').addEventListener('mousedown', onFurnaceSlot('fuel'));
-    panel.querySelector('#f-out').addEventListener('mousedown', onFurnaceSlot('output'));
-    for (const id of ['#f-in', '#f-fuel', '#f-out']) {
-      panel.querySelector(id).addEventListener('contextmenu', event => event.preventDefault());
+    const fIn = panel.querySelector('#f-in');
+    const fFuel = panel.querySelector('#f-fuel');
+    const fOut = panel.querySelector('#f-out');
+    fIn.addEventListener('mousedown', onFurnaceSlot('input'));
+    fFuel.addEventListener('mousedown', onFurnaceSlot('fuel'));
+    fOut.addEventListener('mousedown', onFurnaceSlot('output'));
+    ui.bindSlotHover(fIn, () => game.openFurnaceData?.f?.input);
+    ui.bindSlotHover(fFuel, () => game.openFurnaceData?.f?.fuel);
+    ui.bindSlotHover(fOut, () => game.openFurnaceData?.f?.output);
+    for (const el of [fIn, fFuel, fOut]) {
+      el.addEventListener('contextmenu', event => event.preventDefault());
     }
   }
   panel.style.display = 'flex';
@@ -1723,6 +1851,9 @@ document.addEventListener('mousedown', (e) => {
         world.setMeta(hit.x, hit.y, hit.z, world.getMeta(hit.x, hit.y, hit.z) ^ 8);
         player.rightDown = false; audio.click(); return;
       }
+      if (id === JUKEBOX) {
+        player.rightDown = false; audio.jukebox?.(); ui.notify('Now playing: Music Disc'); return;
+      }
       if (id === WOOD_DOOR) {
         const meta = world.getMeta(hit.x, hit.y, hit.z);
         if (!(meta & 16)) setDoorOpen(world, hit.x, hit.y, hit.z, !(meta & 4));
@@ -1772,6 +1903,15 @@ document.addEventListener('mousedown', (e) => {
       return;
     }
     if (held?.id === 346) { player.rightDown = false; useFishingRod(); return; }
+    if (held?.id === 332 || held?.id === 344) {
+      player.rightDown = false;
+      const throwId = held.id;
+      if (player.gameMode !== 'creative' && player.gameMode !== 'classic') player.consumeHeld();
+      shootThrowable(throwId);
+      firstPersonArm.triggerPlaceSwing();
+      ui.refresh();
+      return;
+    }
     if (held?.id === 261) {
       player.rightDown = false;
       if (player.hasItem(262)) {
@@ -1807,6 +1947,8 @@ function updateTNT(dt) {
 let lastT = performance.now();
 let fps = 0, fpsCount = 0, fpsTimer = 0, lastDebugUpdate = 0;
 let prioritizeDirty = false;
+let sprintFovOffset = 0;
+let eatChewTimer = 0;
 
 function frame() {
   requestAnimationFrame(frame);
@@ -1873,7 +2015,22 @@ function frame() {
       }
       const eatingStep = advanceEating(eating, dt, player, audio, ui.mode === 'game');
       eating = eatingStep.eating;
+      if (eating) {
+        eatChewTimer += dt;
+        if (eatChewTimer >= 0.25) { eatChewTimer %= 0.25; audio.chew?.(); }
+      } else {
+        eatChewTimer = 0;
+      }
       if (eatingStep.completed) ui.refresh();
+    }
+
+    // Smooth sprint FOV boost (relaxes cleanly when paused or stopped)
+    const targetSprintFov = !paused && player.sprinting ? 8 : 0;
+    sprintFovOffset += (targetSprintFov - sprintFovOffset) * Math.min(1, dt * 10);
+    const nextFov = game.settings.fov + sprintFovOffset;
+    if (Math.abs(camera.fov - nextFov) > 0.02) {
+      camera.fov = nextFov;
+      camera.updateProjectionMatrix();
     }
 
     // Local menus block input, not the clock and world simulation of a shared room.
@@ -1954,7 +2111,8 @@ function frame() {
       firstPersonArm.root.visible = true;
       firstPersonArm.setHeldItem(player.heldStack);
       const isMoving = player.onGround && Math.hypot(player.vel.x, player.vel.z) > 0.5;
-      firstPersonArm.update(dt, isMoving, player.leftDown && player.controlsActive, 0);
+      const eatingProgress = eating ? Math.min(1, eating.elapsed / EAT_DURATION) : 0;
+      firstPersonArm.update(dt, isMoving, player.leftDown && player.controlsActive, eatingProgress);
       lighting.refreshObject(firstPersonArm.root, world, player.pos, 1.62);
     } else {
       firstPersonArm.root.visible = false;
@@ -1988,12 +2146,16 @@ function frame() {
       lastDebugUpdate = now;
       const p = player.pos;
       const biome = world.gen.columnInfo(Math.floor(p.x), Math.floor(p.z));
+      const dirX = -Math.sin(player.yaw), dirZ = -Math.cos(player.yaw);
+      const cardinal = Math.abs(dirZ) >= Math.abs(dirX)
+        ? (dirZ < 0 ? 'north (-Z)' : 'south (+Z)')
+        : (dirX < 0 ? 'west (-X)' : 'east (+X)');
       ui.updateDebug([
         `AiSlopcraft · 1.7.10-inspired`,
         `${fps} fps  T: ${game.time.toFixed(0)}s  chunks: ${world.chunks.size}  q: ${chunkQueue.length}`,
         `XYZ: ${p.x.toFixed(3)} / ${p.y.toFixed(3)} / ${p.z.toFixed(3)}`,
         `Block: ${Math.floor(p.x)} ${Math.floor(p.y)} ${Math.floor(p.z)}`,
-        `Facing: ${(Math.sin(player.yaw) * -1).toFixed(2)} ${(-Math.cos(player.yaw)).toFixed(2)} (Towards ${player.yaw > 0 ? 'positive' : 'negative'} Z)`,
+        `Facing: ${cardinal} (${dirX.toFixed(2)}, ${dirZ.toFixed(2)})`,
         `Biome: ${biome.biome}  Time: ${(sky.timeOfDay * 24).toFixed(2)}h  Day: ${(dayFactor * 100) | 0}%`,
         `Seed: ${SEED}  Light: ${((world.getLight(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) >> 4))}/${(world.getLight(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) & 15)}`,
         `Mobs: ${mobs.mobs.length}  Items: ${itemEntities.length}`,
@@ -2024,7 +2186,7 @@ function frame() {
     if (!game.started) {
       // pregenerate spawn chunks for the title backdrop
       processChunkQueue();
-      if (chunkQueue.length === 0) updateChunks(true);
+      if (chunkQueue.length === 0) updateChunks(false, 8, 8);
     }
   }
 

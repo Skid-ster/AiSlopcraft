@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import {
   Mob, MobManager, MOB_DEFS, canMobBurnInSun, findSafeGround, isDaylight, mobAttackDamage, rollMobDrops,
 } from '../src/entities/mobs.js';
-import { AIR, LAVA, STONE, WATER } from '../src/world/blocks.js';
+import { AIR, LAVA, STONE, WATER, WATER_FLOW } from '../src/world/blocks.js';
 
 const context = { fillStyle: '', fillRect() {} };
 global.document = {
@@ -220,5 +220,17 @@ cave.getLight = (_x, y) => y >= 7 ? 0xf0 : 8;
 check('block light prevents cave spawns at light level eight', spawnTypes(0.5).length === 0);
 cave.getLight = () => 0xf0;
 check('the same exposed ground supports hostile spawning at night', spawnTypes(0).length === 1);
+
+const flowZombie = new Mob('zombie', 4.5, 1.001, 4.5);
+const flowWorld = new FakeWorld();
+flowWorld.fillFloor();
+flowWorld.setBlock(4, 1, 4, WATER_FLOW);
+check('zombie standing in flowing water does not burn in sunlight', canMobBurnInSun(flowZombie, flowWorld, 0.5) === false);
+const kbTarget = new Mob('pig', 6.5, 1.001, 6.5);
+const startHp = kbTarget.hp;
+check('zero-damage projectile with knockback pushes mob without dealing damage',
+  kbTarget.damage(0, audio, { knockback: new THREE.Vector3(1.4, 0.4, 0) }) === true && kbTarget.hp === startHp && kbTarget.vel.x > 1);
+flowZombie.dispose();
+kbTarget.dispose();
 
 console.log(`\nALL ${checks} MOB TESTS PASSED`);

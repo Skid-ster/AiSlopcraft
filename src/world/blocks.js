@@ -285,6 +285,20 @@ for (let i = 0; i < 16; i++) {
   });
 }
 
+// Flat lookup tables for hot meshing/lighting loops (all block IDs < 256).
+export const BLOCK_OPAQUE = new Uint8Array(256);
+export const BLOCK_SOLID = new Uint8Array(256);
+export const BLOCK_LIGHT = new Uint8Array(256);
+export const BLOCK_HAS_TILES = new Uint8Array(256);
+for (let id = 0; id < 256; id++) {
+  const bd = B[id];
+  if (!bd) continue;
+  BLOCK_OPAQUE[id] = bd.opaque ? 1 : 0;
+  BLOCK_SOLID[id] = bd.solid ? 1 : 0;
+  BLOCK_LIGHT[id] = bd.light || 0;
+  BLOCK_HAS_TILES[id] = bd.tiles ? 1 : 0;
+}
+
 // ---- Items (numeric ids follow beta-ish where handy) ----
 export const ITEMS = {
   256: { name: 'Iron Shovel', tool: 'shovel', tier: 2, durability: 250, speed: 6 },

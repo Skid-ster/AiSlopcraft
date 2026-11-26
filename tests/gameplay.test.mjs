@@ -4,7 +4,7 @@ import { World } from '../src/world/world.js';
 import { Player } from '../src/entities/player.js';
 import { useOnBlock, useOnMob, growCrop, cropDrops } from '../src/interactions.js';
 import { loadSettings, persistSettings, rebindKey, sanitizeSettings } from '../src/settings.js';
-import { AIR, DIRT, FARMLAND, CROPS, WATER, LAVA, CAKE_BLOCK, WOOL_BASE, SAPLING, LOG } from '../src/world/blocks.js';
+import { AIR, DIRT, STONE, STONE_SLAB, FARMLAND, CROPS, WATER, WATER_FLOW, LAVA, CAKE_BLOCK, WOOL_BASE, SAPLING, LOG } from '../src/world/blocks.js';
 
 globalThis.document = { addEventListener() {}, removeEventListener() {} };
 globalThis.window = {};
@@ -152,6 +152,44 @@ restored.generateChunk(0, 0);
 assert.equal(restored.getBlock(5, 100, 2), CAKE_BLOCK);
 assert.equal(restored.getMeta(5, 100, 2), 3, 'edits and metadata survive a fresh world load');
 console.log('ALL GAMEPLAY TESTS PASSED');
+
+// Farmland hydrates when tilled near water and refreshes during crop ticks
+set(6, 100, 2, WATER_FLOW);
+set(8, 100, 2, DIRT); set(8, 101, 2, AIR);
+held(290);
+assert.equal(useOnBlock(world, player, at(8, 100, 2)), true);
+assert.equal(world.getBlock(8, 100, 2), FARMLAND);
+assert.equal(world.getMeta(8, 100, 2), 7, 'tilling near flowing water hydrates farmland immediately');
+set(6, 100, 2, AIR);
+held(295);
+assert.equal(useOnBlock(world, player, at(8, 100, 2)), true);
+assert.equal(growCrop(world, 8, 101, 2, () => 0), true);
+assert.equal(world.getMeta(8, 100, 2), 0, 'farmland dries out when nearby water is removed');
+
+// Slab auto-step lets grounded players walk smoothly onto 0.5-block slabs without jumping
+for (let y = 100; y <= 104; y++) for (let z = 3; z <= 6; z++) set(10, y, z, AIR);
+for (let z = 3; z <= 6; z++) set(10, 99, z, STONE);
+set(10, 100, 4, STONE_SLAB);
+player.gameMode = 'survival';
+player.flying = false;
+player.pos.set(10.5, 100.001, 5.5);
+player.vel.set(0, 0, 0);
+player.onGround = true;
+assert.equal(player.moveAxis(2, -1.0, world), 'ok', 'player auto-steps smoothly onto half-slab');
+assert.ok(player.pos.y >= 100.5, 'auto-step places player atop slab height');
+
+// Double-tap forward sprint activates sprint when hunger > 6
+player.hunger = 10;
+player.inWater = false;
+player.sneaking = false;
+player.doubleTapSprinting = true;
+player.keys[player.bindings.forward] = true;
+player.update(0.05, world, null);
+assert.equal(player.sprinting, true, 'double-tap forward activates sprint');
+player.keys[player.bindings.forward] = false;
+player.update(0.05, world, null);
+assert.equal(player.sprinting, false, 'releasing forward cancels double-tap sprint');
+assert.equal(player.doubleTapSprinting, false);
 
 // Release-era food stacks, with stew remaining a single-serving item.
 const { itemStackLimit, ITEMS } = await import('../src/world/blocks.js');

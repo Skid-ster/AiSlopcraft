@@ -955,8 +955,8 @@ export class UI {
         <div class="hearts" id="hearts"></div>
         <div class="armor-bar" id="armor-bar" style="display:none"></div>
         <div class="hunger-bar" id="hunger-bar" aria-label="Food level"></div>
+        <div class="water-bar" id="water-bar" style="display:none"></div>
       </div>
-      <div class="water-bar" id="water-bar" style="display:none"></div>
       <div class="held-name" id="held-name"></div>
       <div class="toast-msg" id="toast-msg"></div>
       <div class="hint" id="hint">Click to play &nbsp;|&nbsp; WASD move · Space jump · Shift sneak · Q drop · E inventory · F3 debug · Esc pause</div>
@@ -1002,6 +1002,7 @@ export class UI {
       this.setMode('game');
     });
     this.root.appendChild(this.touchPanelReturnEl);
+    this.hudEl = div;
     this.hotbarEl = div.querySelector('#hotbar');
     this.heartsEl = div.querySelector('#hearts');
     this.hungerBarEl = div.querySelector('#hunger-bar');
@@ -1130,6 +1131,7 @@ export class UI {
 
   updateNetworkPanel() {
     const room = this.game.networkRoom;
+    this.hudEl?.classList.toggle('has-network', Boolean(room));
     if (this.networkPanel) {
       this.networkPanel.style.display = room ? 'block' : 'none';
       if (room) {
@@ -1837,7 +1839,11 @@ export class UI {
       const choices = entries.map(({ id, name }) => {
         const choice = document.createElement('button');
         choice.type = 'button';
-        choice.textContent = name;
+        choice.innerHTML = `<span class="creative-item-slot slot"></span><span class="creative-item-name"></span>`;
+        choice.querySelector('.creative-item-name').textContent = name;
+        if (this.game.atlasCanvas && this.game.itemIconsCanvas) {
+          this.renderSlot(choice.querySelector('.creative-item-slot'), { id, count: 1, damage: 0 });
+        }
         choice.addEventListener('click', () => {
           const player = this.game.player;
           if (this.mode !== 'creative' || player.gameMode !== 'creative') return;
@@ -2029,13 +2035,16 @@ export class UI {
     const title = document.getElementById('title-screen');
     const classicBlocks = document.getElementById('classic-block-screen');
 
-    if (title) title.style.display = mode === 'title' ? 'block' : 'none';
+    if (title) title.style.display = mode === 'title' ? 'grid' : 'none';
     hud.style.display = mode === 'title' ? 'none' : (this.showHud ? 'block' : 'none');
     inv.style.display = (mode === 'inventory' || mode === 'crafting') ? 'flex' : 'none';
+    inv.classList.toggle('is-crafting', mode === 'crafting');
     this.creativeScreen.style.display = mode === 'creative' ? 'flex' : 'none';
     inv.querySelector('#btn-creative-catalog').hidden = mode !== 'inventory' || this.game.player.gameMode !== 'creative';
     if (mode === 'creative') this.refreshCreativeCatalog();
     pause.style.display = mode === 'pause' ? 'flex' : 'none';
+    const pauseSaveStatus = pause.querySelector('#pause-save-status');
+    if (pauseSaveStatus && mode === 'game') pauseSaveStatus.textContent = '';
     death.style.display = mode === 'death' ? 'flex' : 'none';
     if (furnace) furnace.style.display = mode === 'furnace' ? 'flex' : 'none';
     if (chest) chest.style.display = mode === 'chest' ? 'flex' : 'none';
@@ -2265,13 +2274,14 @@ export class UI {
 
     let cached = this._iconCache.get(id);
     if (!cached) {
+      const atlas = this.game.atlasCanvas;
+      const itemIcons = this.game.itemIconsCanvas;
+      if (!atlas || !itemIcons) return;
       cached = document.createElement('canvas');
       cached.width = 32;
       cached.height = 32;
       const cctx = cached.getContext('2d');
       cctx.imageSmoothingEnabled = false;
-      const atlas = this.game.atlasCanvas;
-      const itemIcons = this.game.itemIconsCanvas;
 
       if (id === WOOD_DOOR || id === IRON_DOOR) {
         const idx = id === WOOD_DOOR ? 96 : 95;
@@ -2362,6 +2372,7 @@ export class UI {
   }
 
   updateDebug(info) {
+    this.hudEl?.classList.toggle('has-debug', Boolean(this.showDebug));
     if (!this.showDebug) {
       if (this.debugEl.style.display !== 'none') this.debugEl.style.display = 'none';
       return;

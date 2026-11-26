@@ -46,6 +46,11 @@ const vertexShader = /* glsl */ `
   varying float vFogDist;
   void main() {
     vTint = aTint;
+    #ifdef VOXEL_LIGHT
+      // Terrain vertex colors store 1.7.10 perceptual face shading, AO, and biome tint.
+      // Convert them from sRGB to linear before multiplying linear atlas textures.
+      vTint.rgb = pow(max(aTint.rgb, vec3(0.0)), vec3(2.2));
+    #endif
     #ifdef USE_INSTANCING_COLOR
       vTint.rgb *= instanceColor;
     #endif
@@ -96,6 +101,7 @@ const fragmentShader = /* glsl */ `
   uniform float uHasEmissionMap;
   uniform float uEmission;
   uniform float uBrightness;
+  uniform float uEntityShade;
   uniform float uOpacity;
   uniform float uAlphaTest;
   uniform float uShaderStyle;
@@ -149,18 +155,16 @@ const fragmentShader = /* glsl */ `
   vec3 grade(vec3 color) {
     float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
     if (uShaderStyle > 0.5 && uShaderStyle < 1.5) {
-      color = mix(vec3(luminance), color, 1.22);
-      color = (color - 0.18) * 1.05 + 0.18;
+      color = mix(vec3(luminance), color, 1.18);
+      color *= mix(vec3(0.98), vec3(1.06, 1.04, 1.02), smoothstep(0.04, 0.75, luminance));
     } else if (uShaderStyle > 1.5 && uShaderStyle < 2.5) {
-      color = (color - 0.18) * 1.08 + 0.18;
-      float shadow = 1.0 - smoothstep(0.04, 0.35, luminance);
-      float highlight = smoothstep(0.35, 1.0, luminance);
+      float shadow = 1.0 - smoothstep(0.03, 0.32, luminance);
+      float highlight = smoothstep(0.32, 1.0, luminance);
       color *= mix(vec3(1.0), vec3(0.90, 0.97, 1.10), shadow * 0.35);
       color *= mix(vec3(1.0), vec3(1.08, 1.01, 0.90), highlight * 0.30);
     } else if (uShaderStyle > 2.5 && uShaderStyle < 3.5) {
       color = mix(vec3(luminance), color, 1.06);
-      color = (color - 0.18) * 1.03 + 0.18;
-      color = color / (color + vec3(0.65)) * 1.65;
+      color = color / (1.0 + color * 0.14) * 1.14;
     }
     return max(color, vec3(0.0));
   }
@@ -177,30 +181,55 @@ const fragmentShader = /* glsl */ `
     vec3 sunDir = normalize(uSunDirection);
     vec3 base = tex.rgb * vTint.rgb * uTint;
 
-    float skyLevel = pow(clamp(vLight.x / 15.0, 0.0, 1.0), 1.20);
-    float blockLevel = pow(clamp(vLight.y / 15.0, 0.0, 1.0), 1.45);
+    // Minecraft 1.7.10 WorldProvider.generateLightBrightnessTable() curve:
+    // L(i) = (i/15) / (4 - 3 * (i/15)).
+    float nSky = clamp(vLight.x / 15.0, 0.0, 1.0);
+    float nBlk = clamp(vLight.y / 15.0, 0.0, 1.0);
+    float skyLevel = nSky / (4.0 - 3.0 * nSky);
+    float blockLevel = nBlk / (4.0 - 3.0 * nBlk);
     float shadow = sunShadow(normal, sunDir);
     // Keep exposed terrain legible through the full day cycle: Minecraft's
     // classic lightmap has a real night floor, not a hard drop to black.
     float daylight = max(uSky, 0.12);
-    vec3 skyLight = uSkyTint * skyLevel * daylight * (0.58 + 0.12 * max(normal.y, 0.0));
+    float sunBrightness = clamp((daylight - 0.12) / 0.88 * 0.78 + 0.22, 0.22, 1.0);
+    // Classic 1.7.10 terrain bakes directional face shading (1.0/0.8/0.6/0.5) in
+    // mesher.js; entities without baked shading receive standard 1.7.10 box shade.
+    float entityShade = mix(1.0,
+      normal.y > 0.5 ? 1.0 : normal.y < -0.5 ? 0.55 : abs(normal.x) > 0.5 ? 0.68 : 0.84,
+      uEntityShade);
+    vec3 skyLight = uSkyTint * skyLevel * sunBrightness;
     if (uShaderStyle > 1.5 && uShaderStyle < 3.5) {
       skyLight *= mix(1.0, shadow, 0.55);
     }
     vec3 direct = vec3(0.0);
     if (uShaderStyle > 1.5 && uShaderStyle < 3.5) {
-      direct = uSkyTint * skyLevel * uSunIntensity * max(dot(normal, sunDir), 0.0) * shadow * 0.36;
+      direct = uSkyTint * skyLevel * uSunIntensity * max(dot(normal, sunDir), 0.0) * shadow * 0.28;
     }
-    // Add torch light to skylight instead of choosing only the brighter source;
-    // this keeps torches visibly warm in daylight and avoids black face tops.
-    vec3 torchLight = uBlockTint * blockLevel * 0.90;
-    vec3 light = clamp(skyLight + direct + torchLight, vec3(0.025, 0.027, 0.032), vec3(1.0));
+    // Minecraft 1.7.10 EntityRenderer.updateLightmap() warm torch light curve
+    // with subtle flicker, added to skylight so torches stay warm in daylight.
+    float torchFlicker = 1.0 + 0.022 * sin(uTime * 6.8 + vWorldPosition.x * 0.1) * cos(uTime * 11.3 + vWorldPosition.z * 0.1);
+    float blkB = clamp(blockLevel * torchFlicker, 0.0, 1.0);
+    vec3 torchColor = vec3(
+      blkB,
+      blkB * ((blkB * 0.6 + 0.4) * 0.6 + 0.4),
+      blkB * (blkB * blkB * 0.6 + 0.4)
+    );
+    vec3 torchLight = uBlockTint * torchColor;
+    vec3 lightSrgb = clamp((skyLight + direct + torchLight) * 0.96 + vec3(0.03), vec3(0.03), vec3(1.0));
+    // 1.7.10 Brightness/Gamma slider (Moody .. Bright) lifts caves & shadows
+    // via 1 - (1 - c)^4 without overexposing sunlit blocks.
+    float gammaSetting = clamp(uBrightness - 0.5, 0.0, 1.0);
+    vec3 invLight = 1.0 - lightSrgb;
+    vec3 brightLight = 1.0 - invLight * invLight * invLight * invLight;
+    lightSrgb = mix(lightSrgb, brightLight, mix(0.0, 0.85, pow(gammaSetting, 1.4)));
+    vec3 light = pow(clamp(lightSrgb * entityShade, vec3(0.0), vec3(1.0)), vec3(2.2));
     vec3 rgb = base * light;
 
     // Emissive texels (flame, lava, glowstone, lit furnace/lantern faces) keep
     // their own light at night instead of being multiplied by cave darkness.
-    float emissionMask = clamp(uEmission + vInstanceEmission, 0.0, 1.0) * mix(1.0, texture2D(uEmissionMap, vUv).r, uHasEmissionMap);
-    rgb = mix(rgb, base, clamp(emissionMask, 0.0, 1.0));
+    float texEmission = uHasEmissionMap > 0.5 ? texture2D(uEmissionMap, uv).r : 0.0;
+    float emissionMask = clamp(max(uEmission + vInstanceEmission, texEmission), 0.0, 1.0);
+    rgb = mix(rgb, base, emissionMask);
 
     if (uWater > 0.5 && uShaderStyle > 0.5) {
       vec2 p = vWorldPosition.xz;
@@ -227,7 +256,7 @@ const fragmentShader = /* glsl */ `
       alpha = mix(alpha, min(0.94, alpha + 0.12), fresnel);
     }
 
-    rgb = grade(rgb * uBrightness);
+    rgb = grade(rgb);
     float fog = uFogEnabled * smoothstep(uFogNear, uFogFar, vFogDist);
     gl_FragColor = vec4(mix(rgb, uFogColor, fog), alpha);
     #include <colorspace_fragment>
@@ -274,7 +303,7 @@ export class Lighting {
     this.shared = {
       uSky: { value: 1 },
       uSkyTint: { value: new THREE.Color(1, 1, 1) },
-      uBlockTint: { value: new THREE.Color(1.0, 0.80, 0.55) },
+      uBlockTint: { value: new THREE.Color(1.0, 0.96, 0.88) },
       uShaderStyle: { value: 3 },
       uScreenSize: { value: new THREE.Vector2(1, 1) },
       uBrightness: { value: 1 },
@@ -306,6 +335,7 @@ export class Lighting {
         uEmissionMap: { value: this.emissionTexture },
         uHasEmissionMap: { value: opts.emissionMap ? 1 : 0 },
         uEmission: { value: opts.emission ?? 0 },
+        uEntityShade: { value: Number(opts.entityShade ?? (opts.voxel ? 0 : 1)) },
         uOpacity: { value: opts.opacity ?? 1 },
         uPsxSnap: { value: opts.psxSnap ?? (opts.fog === false ? 10 : 15) },
         uAlphaTest: { value: opts.alphaTest ?? (opts.cutout ? 0.45 : 0) },
@@ -334,6 +364,7 @@ export class Lighting {
     root.traverse(object => {
       if (!object.isMesh || object.userData.noLighting) return;
       if (opts.castShadow !== false) object.layers.enable(1);
+      const hasVertexColors = !!object.geometry?.getAttribute?.('color');
       ensureTint(object.geometry);
       const convert = old => {
         if (old?.uniforms?.uObjectLight) return old;
@@ -350,6 +381,7 @@ export class Lighting {
           blending: old?.blending,
           emissionMap: !!opts.emissionMap,
           emission: object.userData.emissive ? 1 : (opts.emission ?? 0),
+          entityShade: opts.entityShade ?? !hasVertexColors,
           fog: opts.fog,
         });
         converted.set(old, material);
@@ -388,10 +420,10 @@ export class Lighting {
     if (day > 0.65) s.uSkyTint.value.setRGB(1, 1, 1);
     else if (day > 0.25) {
       const t = (day - 0.25) / 0.4;
-      s.uSkyTint.value.setRGB(1, 0.62 + 0.38 * t, 0.40 + 0.60 * t);
+      s.uSkyTint.value.setRGB(1, 0.72 + 0.28 * t, 0.50 + 0.50 * t);
     } else {
       const t = day / 0.25;
-      s.uSkyTint.value.setRGB(0.42 + 0.58 * t, 0.52 + 0.10 * t, 0.85 - 0.45 * t);
+      s.uSkyTint.value.setRGB(0.52 + 0.48 * t, 0.66 + 0.06 * t, 1.0 - 0.50 * t);
     }
     if (fog) syncFogUniforms([{ uniforms: s }], fog);
     if (id < 2 || id === 4 || sky.sunDirection.y <= 0.06) s.uShadowStrength.value = 0;

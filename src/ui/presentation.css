@@ -1,5 +1,5 @@
 /* Shared presentation for menus layered over the existing game and HUD. */
-.classic-main-menu .splash { bottom: 60px; }
+.classic-main-menu .splash { bottom: 52px; }
 
 .pause-screen {
   justify-content: flex-start;

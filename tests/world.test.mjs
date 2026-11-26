@@ -172,6 +172,44 @@ for (let i = 0; i < built.solid.normal.length; i += 3) if (built.solid.normal[i 
 check('exposed block tops retain full skylight instead of being baked black', topVertexIndexes.some(i => built.solid.light[i * 2] >= 14)
   && topVertexIndexes.some(i => built.solid.col[i * 4] > 0.5));
 
+// Smooth lighting: 1.7.10 AO levels, no diagonal corner light leaks, and flat toggle
+const aoWorld = new World('ao-test', scene);
+aoWorld.gen.fillChunk = chunk => {
+  chunk.blocks.fill(AIR);
+  for (let z = 0; z < CH; z++) for (let x = 0; x < CH; x++) chunk.set(x, 0, z, STONE);
+  chunk.generated = true;
+};
+aoWorld.gen.decorate = (_w, chunk) => { chunk.decorated = true; };
+const aoChunk = aoWorld.generateChunk(0, 0);
+// Build an enclosed dark stone cell at (4, 21, 4) with a bright diagonal neighbor at (5, 21, 5).
+for (let dy = 20; dy <= 22; dy++) for (let dz = 3; dz <= 5; dz++) for (let dx = 3; dx <= 5; dx++) aoWorld.setBlock(dx, dy, dz, STONE);
+aoWorld.setBlock(4, 21, 4, AIR);
+aoWorld.setBlock(5, 21, 5, AIR);
+aoWorld.setBlock(5, 22, 5, AIR);
+aoWorld.setBlock(5, 20, 5, AIR);
+const smoothBuilt = buildChunkMesh(aoWorld, aoChunk, fakeTex, fakeTex, 2);
+let darkFloorVertexCount = 0, darkFloorAO48Count = 0;
+for (let vi = 0; vi < smoothBuilt.solid.pos.length / 3; vi++) {
+  const vx = smoothBuilt.solid.pos[vi * 3], vy = smoothBuilt.solid.pos[vi * 3 + 1], vz = smoothBuilt.solid.pos[vi * 3 + 2];
+  const ny = smoothBuilt.solid.normal[vi * 3 + 1];
+  if (ny > 0.99 && vy === 21 && vx >= 4 && vx <= 5 && vz >= 4 && vz <= 5) {
+    darkFloorVertexCount++;
+    if (smoothBuilt.solid.light[vi * 2] === 0 && Math.abs(smoothBuilt.solid.col[vi * 4] - 0.48) < 0.01) darkFloorAO48Count++;
+  }
+}
+check('enclosed cave corners block diagonal light leaks and apply 1.7.10 AO (0.48)', darkFloorVertexCount === 4 && darkFloorAO48Count === 4);
+aoWorld.smoothLighting = false;
+const flatBuilt = buildChunkMesh(aoWorld, aoChunk, fakeTex, fakeTex, 2);
+let flatUnoccluded = 0;
+for (let vi = 0; vi < flatBuilt.solid.pos.length / 3; vi++) {
+  const vx = flatBuilt.solid.pos[vi * 3], vy = flatBuilt.solid.pos[vi * 3 + 1], vz = flatBuilt.solid.pos[vi * 3 + 2];
+  const ny = flatBuilt.solid.normal[vi * 3 + 1];
+  if (ny > 0.99 && vy === 21 && vx >= 4 && vx <= 5 && vz >= 4 && vz <= 5) {
+    if (flatBuilt.solid.light[vi * 2] === 0 && Math.abs(flatBuilt.solid.col[vi * 4] - 1.0) < 0.01) flatUnoccluded++;
+  }
+}
+check('disabling smoothLighting turns off AO corner shading and light interpolation', flatUnoccluded === 4);
+
 // mining rules (beta values)
 check('stone by hand ≈ 7.9s', Math.abs(breakTime(STONE, null) - 7.9) < 1.2);
 check('stone w/ wood pick ≈ 1.1s', Math.abs(breakTime(STONE, 270) - 1.1) < 0.3);

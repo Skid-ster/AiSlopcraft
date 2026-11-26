@@ -4,10 +4,20 @@ import { CH, WORLD_H } from './chunk.js';
 import { AIR, WATER, WATER_FLOW, LAVA, LAVA_FLOW, OBSIDIAN, COBBLE, getBlock } from './blocks.js';
 
 const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-const DIRS = [[0,0,0], [0,1,0], [0,-1,0], [1,0,0], [-1,0,0], [0,0,1], [0,0,-1]];
+const NEIGHBORS = [[0,1,0], [0,-1,0], [1,0,0], [-1,0,0], [0,0,1], [0,0,-1]];
+const DIRS = [[0,0,0], ...NEIGHBORS];
 const kind = id => id === WATER || id === WATER_FLOW ? 'water' : id === LAVA || id === LAVA_FLOW ? 'lava' : null;
 const source = k => k === 'water' ? WATER : LAVA;
 const flowing = k => k === 'water' ? WATER_FLOW : LAVA_FLOW;
+
+function hasAdjacentKind(world, x, y, z, targetKind = null) {
+  for (let i = 0; i < 6; i++) {
+    const d = NEIGHBORS[i];
+    const k = kind(world.getBlock(x + d[0], y + d[1], z + d[2]));
+    if (k && (targetKind === null || k === targetKind)) return true;
+  }
+  return false;
+}
 
 export class FluidSimulator {
   constructor(world) {
@@ -18,7 +28,7 @@ export class FluidSimulator {
     this.deferred = new Map();
     this.clock = 0;
     this.unsubscribe = world.onBlockChange((x, y, z, oldId, id) => {
-      if (kind(oldId) || kind(id) || DIRS.slice(1).some(([dx,dy,dz]) => kind(world.getBlock(x+dx,y+dy,z+dz)))) this.scheduleAround(x,y,z);
+      if (kind(oldId) || kind(id) || hasAdjacentKind(world, x, y, z)) this.scheduleAround(x, y, z);
     });
   }
   loaded(x, y, z) {
@@ -53,7 +63,7 @@ export class FluidSimulator {
         const id = this.world.edits.get(key);
         const [x,y,z] = key.split(',').map(Number);
         if (x < cx*CH-1 || x > (cx+1)*CH || z < cz*CH-1 || z > (cz+1)*CH) continue;
-        if (kind(id) || DIRS.slice(1).some(([dx,dy,dz]) => kind(this.world.getBlock(x+dx,y+dy,z+dz)))) this.scheduleAround(x,y,z);
+        if (kind(id) || hasAdjacentKind(this.world, x, y, z)) this.scheduleAround(x, y, z);
       }
     }
   }
@@ -62,16 +72,20 @@ export class FluidSimulator {
     if (!this.loaded(x,y,z)) return;
     const id = w.getBlock(x,y,z), own = kind(id);
     // Water touching lava solidifies the lava, never the water source.
-    if (own === 'lava' && DIRS.slice(1).some(([dx,dy,dz]) => kind(w.getBlock(x+dx,y+dy,z+dz)) === 'water')) {
+    if (own === 'lava' && hasAdjacentKind(w, x, y, z, 'water')) {
       w.setBlock(x,y,z,id === LAVA ? OBSIDIAN : COBBLE); return;
     }
     if (id === WATER || id === LAVA) return;
     if (id !== AIR && !own) return;
     // Two neighboring water sources renew a water cell supported by a solid
     // block or another source. Lava never forms an infinite source.
-    if (own === 'water' && SIDES.filter(([dx,dz]) => w.getBlock(x+dx,y,z+dz) === WATER).length >= 2) {
-      const below = w.getBlock(x,y-1,z);
-      if (getBlock(below).solid || below === WATER) { w.setBlock(x,y,z,WATER); return; }
+    if (own === 'water') {
+      let waterSides = 0;
+      for (let i = 0; i < 4; i++) if (w.getBlock(x + SIDES[i][0], y, z + SIDES[i][1]) === WATER) waterSides++;
+      if (waterSides >= 2) {
+        const below = w.getBlock(x,y-1,z);
+        if (getBlock(below).solid || below === WATER) { w.setBlock(x,y,z,WATER); return; }
+      }
     }
     let desiredKind = null, level = Infinity;
     const above = w.getBlock(x,y+1,z);

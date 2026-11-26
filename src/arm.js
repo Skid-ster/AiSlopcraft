@@ -54,10 +54,11 @@ function makeShadedBox(group, w, h, d, x, y, z, hexColor) {
   const cols = new Float32Array(pos.count * 3);
   for (let i = 0; i < pos.count; i++) {
     const nx = norm.getX(i), ny = norm.getY(i);
-    const s = ny > 0.5 ? 1.0 : ny < -0.5 ? 0.55 : Math.abs(nx) > 0.5 ? 0.68 : 0.85;
-    cols[i * 3] = c.r * s;
-    cols[i * 3 + 1] = c.g * s;
-    cols[i * 3 + 2] = c.b * s;
+    const s = ny > 0.5 ? 1.0 : ny < -0.5 ? 0.50 : Math.abs(nx) > 0.5 ? 0.60 : 0.80;
+    const ls = Math.pow(s, 2.2);
+    cols[i * 3] = c.r * ls;
+    cols[i * 3 + 1] = c.g * ls;
+    cols[i * 3 + 2] = c.b * ls;
   }
   geo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
   const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true }));
@@ -226,10 +227,11 @@ export class FirstPersonArm {
     const cols = new Float32Array(pos.count * 3);
     for (let i = 0; i < pos.count; i++) {
       const nx = norm.getX(i), ny = norm.getY(i);
-      const s = ny > 0.5 ? 1.0 : ny < -0.5 ? 0.55 : Math.abs(nx) > 0.5 ? 0.65 : 0.84;
-      cols[i * 3] = s;
-      cols[i * 3 + 1] = s;
-      cols[i * 3 + 2] = s;
+      const s = ny > 0.5 ? 1.0 : ny < -0.5 ? 0.50 : Math.abs(nx) > 0.5 ? 0.60 : 0.80;
+      const ls = Math.pow(s, 2.2);
+      cols[i * 3] = ls;
+      cols[i * 3 + 1] = ls;
+      cols[i * 3 + 2] = ls;
     }
     geo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
 
