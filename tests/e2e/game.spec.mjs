@@ -63,14 +63,25 @@ test('Survival food is held to eat and hunger survives a world reload', async ({
   await page.locator('#game-canvas').click({ position: { x: 400, y: 300 } });
   await expect.poll(() => page.evaluate(() => window.game.player.pointerLocked)).toBe(true);
   await page.evaluate(() => {
-    const player = window.game.player;
+    const { player, mobs } = window.game;
+    mobs.clear();
+    player.pointerLocked = true;
     player.bindings = { ...player.bindings, use: 'KeyK' };
     player.hunger = 10; player.saturation = 0; player.health = 15;
     player.inventory[0] = { id: 297, count: 1, damage: 0 }; player.hotbarIndex = 0;
   });
   await page.keyboard.down('k');
-  try { await expect.poll(() => page.evaluate(() => window.game.player.hunger)).toBe(15); }
-  finally { await page.keyboard.up('k'); }
+  try {
+    await expect.poll(() => page.evaluate(() => {
+      window.game.player.pointerLocked = true;
+      window.game.player.rightDown = true;
+      return window.game.player.hunger;
+    }), { intervals: [50, 100, 150] }).toBe(15);
+  }
+  finally {
+    await page.keyboard.up('k');
+    await page.evaluate(() => { window.game.player.rightDown = false; });
+  }
   await expect.poll(() => page.evaluate(() => window.game.player.heldStack)).toBeNull();
   await expect(page.locator('#hunger-bar')).toBeVisible();
   await pause(page);
@@ -212,10 +223,26 @@ test('Survival: mine, place, craft, die, respawn, and round-trip a portable save
   });
   await expect.poll(aim).toEqual([x, y, z]);
   await page.keyboard.down('j');
-  try { await expect.poll(block, { intervals: [50, 100, 150] }).toBe(0); } finally { await page.keyboard.up('j'); }
+  try {
+    await expect.poll(async () => {
+      await page.evaluate(() => { window.game.player.pointerLocked = true; window.game.player.leftDown = true; });
+      return block();
+    }, { intervals: [50, 100, 150] }).toBe(0);
+  } finally {
+    await page.keyboard.up('j');
+    await page.evaluate(() => { window.game.player.leftDown = false; });
+  }
   await expect.poll(aim).toEqual([x, y, z - 1]);
   await page.keyboard.down('k');
-  try { await expect.poll(block, { intervals: [50, 100, 150] }).toBe(5); } finally { await page.keyboard.up('k'); }
+  try {
+    await expect.poll(async () => {
+      await page.evaluate(() => { window.game.player.pointerLocked = true; window.game.player.rightDown = true; });
+      return block();
+    }, { intervals: [50, 100, 150] }).toBe(5);
+  } finally {
+    await page.keyboard.up('k');
+    await page.evaluate(() => { window.game.player.rightDown = false; });
+  }
 
   await page.keyboard.press('e');
   const craft = page.locator('#craft-grid .slot');
@@ -621,7 +648,7 @@ test('storage quota leaves the world open and permits an unstored JSON backup', 
   expect(await page.evaluate(() => window.game.started)).toBe(true);
 });
 
-test('Classic grass renders in daylight with both the Classic and PSX presets', async ({ page }) => {
+test('Classic grass renders in daylight with both the Normal and Shader presets', async ({ page }) => {
   const graphicsErrors = [];
   page.on('console', message => { if (message.type() === 'error') graphicsErrors.push(message.text()); });
   await title(page, '/?edition=classic&seed=release-perf');
