@@ -196,7 +196,14 @@ export function normalizeWorldSave(value) {
     ...(nether ? { nether } : {}),
     gameMode: edition === 'classic' ? 'classic' : value.gameMode === 'creative' ? 'creative' : 'survival',
     edits,
-    settings: isObject(value.settings) ? value.settings : {},
+    settings: isObject(value.settings)
+      ? {
+          ...value.settings,
+          ...('shaderStyle' in value.settings
+            ? { shaderStyle: value.settings.shaderStyle === 'shader' ? 'shader' : 'classic' }
+            : {}),
+        }
+      : {},
     spawnBed: isObject(value.spawnBed) && [value.spawnBed.x, value.spawnBed.y, value.spawnBed.z].every(Number.isInteger)
       ? { x: value.spawnBed.x, y: value.spawnBed.y, z: value.spawnBed.z } : null,
     timeOfDay: Number.isFinite(value.timeOfDay) ? ((value.timeOfDay % 1) + 1) % 1 : 0,

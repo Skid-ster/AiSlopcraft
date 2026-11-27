@@ -29,7 +29,7 @@ import { createFurnaceState, tickFurnace, interactWithFurnaceSlot, FUEL_TIMES } 
 import { smeltResult } from './ui/recipes.js';
 import { ParticleManager } from './particles.js';
 import { FirstPersonArm } from './arm.js';
-import { Lighting, PSXPostProcess, SHADER_STYLES, shaderStyleId } from './rendering.js';
+import { Lighting, SHADER_STYLES, shaderStyleId } from './rendering.js';
 import { loadSettings, persistSettings, sensitivityToRadians, keyLabel } from './settings.js';
 import { decodeWorldSave, encodeWorldSave, MAX_WORLD_SAVE_BYTES, WORLD_SAVE_VERSION } from './save.js';
 import { createWorldSaveStore } from './save-manager.js';
@@ -105,7 +105,6 @@ defaultAtlas.getContext('2d').clearRect(waterX, waterY, 16, 16);
 defaultAtlas.getContext('2d').drawImage(waterCanvas, waterX, waterY);
 
 const lighting = new Lighting({ atlasTexture: atlasTex, emissionTexture: buildEmissionAtlas(atlasCanvas) });
-const psxPostProcess = new PSXPostProcess(0.25);
 const renderBufferSize = new THREE.Vector2();
 const browserStorage = getSafeStorage();
 let atlasGeneration = 0;
@@ -1148,6 +1147,7 @@ function processChunkQueue(budget = performance.now() + 4) {
       if (w) { scene.add(w); meshes.water = w; }
       chunk.meshes = meshes;
       chunk.dirty = false;
+      lighting.invalidateShadows();
     }
   }
 }
@@ -1168,6 +1168,7 @@ function rebuildDirtyChunks(budget = performance.now() + 4) {
       // buildChunkMesh already removed/disposed the previous meshes.
       chunk.meshes = meshes;
       chunk.dirty = false;
+      lighting.invalidateShadows();
       n++;
     }
   }
@@ -2851,14 +2852,10 @@ function frame() {
   // the title backdrop and gameplay frames.
   lighting.update({ sky, time: game.time, style: game.shaderStyle, fog: scene.fog });
   renderer.getDrawingBufferSize(renderBufferSize);
-  if (game.shaderStyle === 'psx') psxPostProcess.setSize(renderBufferSize.x, renderBufferSize.y);
-  // Vertex snapping follows the full viewport grid; the later post pass handles
-  // the independent low-resolution image scale.
   lighting.shared.uScreenSize.value.copy(renderBufferSize);
   lighting.updateShadows(renderer, scene, camera, sky, game.shaderStyle, game.time, false, game.settings.graphics !== 'fast');
-  const drawArm = game.started && ui.mode !== 'title' ? targetRenderer => firstPersonArm.render(targetRenderer) : null;
-  if (game.shaderStyle === 'psx') psxPostProcess.render(renderer, scene, camera, drawArm);
-  else { renderer.render(scene, camera); drawArm?.(renderer); }
+  renderer.render(scene, camera);
+  if (game.started && ui.mode !== 'title') firstPersonArm.render(renderer);
 }
 
 frame();

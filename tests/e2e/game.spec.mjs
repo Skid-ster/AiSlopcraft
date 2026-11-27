@@ -639,7 +639,7 @@ test('Classic grass renders in daylight with both the Classic and PSX presets', 
       return new Promise(resolve => {
         renderer.render = function (scene, camera) {
           original.call(this, scene, camera);
-          if (this.getRenderTarget() || (style !== 'psx' && camera !== player.camera)) return;
+          if (this.getRenderTarget() || camera !== player.camera) return;
           gl.readPixels(gl.drawingBufferWidth / 2 - 20, gl.drawingBufferHeight / 2 - 20, 40, 40, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
           let lit = 0;
           for (let i = 0; i < pixels.length; i += 4) {
@@ -653,47 +653,51 @@ test('Classic grass renders in daylight with both the Classic and PSX presets', 
     while ([...world.chunks.values()].filter(chunk => chunk.meshes).length < 21) {
       await new Promise(resolve => requestAnimationFrame(resolve));
     }
-    return { classic: await samplePreset('classic'), psx: await samplePreset('psx') };
+    return { classic: await samplePreset('classic'), shader: await samplePreset('shader') };
   });
   expect(graphicsErrors).toEqual([]);
   expect(sample.classic, JSON.stringify(sample)).toBeGreaterThan(1000);
-  expect(sample.psx, JSON.stringify(sample)).toBeGreaterThan(1000);
+  expect(sample.shader, JSON.stringify(sample)).toBeGreaterThan(1000);
 });
 
-test('PSX post-processing preserves dark colors instead of crushing them to black', async ({ page }) => {
+test('Shader mode renders steady night and daylight terrain without crushing dark colors to black', async ({ page }) => {
   await title(page);
-  await newWorld(page, 'PSX color test');
-  const colors = await page.evaluate(async () => {
-    const { renderer, player } = window.game;
-    window.game.setShaderStyle('psx');
+  await newWorld(page, 'Shader lighting test');
+  const brightness = await page.evaluate(async () => {
+    const { renderer, player, sky, world } = window.game;
+    Object.assign(window.game.settings, { graphics: 'fancy', shaderStyle: 'shader' });
+    window.game.applySettings();
+    player.pitch = -0.85;
+    while ([...world.chunks.values()].filter(chunk => chunk.meshes).length < 21) {
+      await new Promise(resolve => requestAnimationFrame(resolve));
+    }
     const gl = renderer.getContext();
     const original = renderer.render;
-    async function sample(value) {
+    async function sampleAtTime(timeOfDay) {
+      sky.time = timeOfDay;
+      window.game.lighting.invalidateShadows();
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => { renderer.render = original; reject(new Error('PSX frame not rendered')); }, 10000);
+        const timer = setTimeout(() => { renderer.render = original; reject(new Error('Shader frame not rendered')); }, 10000);
+        let skippedWarmup = false;
         renderer.render = function (scene, camera) {
-          const target = this.getRenderTarget();
           original.call(this, scene, camera);
-          if (target && camera === player.camera) {
-            gl.clearColor(value, value, value, 1);
-            gl.clear(gl.COLOR_BUFFER_BIT);
-          } else if (!target && scene.children[0]?.material?.uniforms?.uScene) {
-            const pixels = new Uint8Array(16 * 16 * 4);
-            gl.readPixels(Math.floor(gl.drawingBufferWidth / 2) - 8, Math.floor(gl.drawingBufferHeight / 2) - 8, 16, 16, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-            let sum = 0;
-            for (let i = 0; i < pixels.length; i += 4) sum += pixels[i];
-            clearTimeout(timer);
-            renderer.render = original;
-            resolve(sum / 256);
-          }
+          if (this.getRenderTarget() || camera !== player.camera) return;
+          if (!skippedWarmup) { skippedWarmup = true; return; }
+          const pixels = new Uint8Array(24 * 24 * 4);
+          gl.readPixels(Math.floor(gl.drawingBufferWidth / 2) - 12, Math.floor(gl.drawingBufferHeight / 2) - 12, 24, 24, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+          let sum = 0;
+          for (let i = 0; i < pixels.length; i += 4) sum += Math.max(pixels[i], pixels[i + 1], pixels[i + 2]);
+          clearTimeout(timer);
+          renderer.render = original;
+          resolve(sum / 576);
         };
       });
     }
-    return [await sample(0.04), await sample(0.12), await sample(0.5)];
+    return { night: await sampleAtTime(0.0), sunset: await sampleAtTime(0.27), noon: await sampleAtTime(0.5) };
   });
-  expect(colors[0], JSON.stringify(colors)).toBeGreaterThan(20);
-  expect(colors[1], JSON.stringify(colors)).toBeGreaterThan(colors[0] + 15);
-  expect(colors[2], JSON.stringify(colors)).toBeGreaterThan(colors[1] + 30);
+  expect(brightness.night, JSON.stringify(brightness)).toBeGreaterThan(8);
+  expect(brightness.sunset, JSON.stringify(brightness)).toBeGreaterThan(brightness.night + 12);
+  expect(brightness.noon, JSON.stringify(brightness)).toBeGreaterThan(brightness.sunset + 15);
 });
 
 test('pause actions remain reachable on short screens', async ({ page }) => {

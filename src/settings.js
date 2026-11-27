@@ -41,7 +41,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   fov: 70,
   guiScale: 0,            // 0 = auto
   brightness: 1,          // 0.5 .. 1.5
-  shaderStyle: 'classic', // classic | vibrant | cinematic | shader
+  shaderStyle: 'classic', // classic (Normal) | shader (Shader)
   graphics: 'fancy',      // fast | fancy
   smoothLighting: true,
   viewBobbing: true,
@@ -57,7 +57,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   keys: { ...DEFAULT_KEYS },
 });
 
-const SHADER_STYLES = ['classic', 'vibrant', 'cinematic', 'shader', 'psx'];
+const SHADER_STYLES = ['classic', 'shader'];
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const num = (v, fallback) => Number.isFinite(+v) ? +v : fallback;
 

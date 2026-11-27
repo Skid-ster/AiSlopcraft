@@ -179,6 +179,7 @@ let _centerSky = null;
 let _centerBlk = null;
 let _chunkHeight = 128;
 let _useSmooth = true;
+let _topSkyByte = 0xf0;
 
 function getB(x, y, z) {
   if (y < 0 || y >= _chunkHeight) return AIR;
@@ -195,7 +196,7 @@ function getM(x, y, z) {
   return arr ? arr[(y * CH + (z & 15)) * CH + (x & 15)] : 0;
 }
 function getL(x, y, z) {
-  if (y >= _chunkHeight) return 0xf0;
+  if (y >= _chunkHeight) return _topSkyByte;
   if (y < 0) return 0;
   if (x >= 0 && x < CH && z >= 0 && z < CH) {
     const i = (y * CH + z) * CH + x;
@@ -425,6 +426,7 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
   const wx0 = chunk.cx * CH, wz0 = chunk.cz * CH;
   const height = _chunkHeight = chunk.height;
   _useSmooth = world.smoothLighting !== false;
+  _topSkyByte = world.dimension === 'nether' ? 0 : 0xf0;
 
   // Biomes are seed/coordinate dependent, not affected by block edits.
   // Classic has no climate values; skip climate evaluation entirely there.
@@ -445,7 +447,7 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
     for (let dx = -1; dx <= 1; dx++) {
       const idx9 = (dz + 1) * 3 + (dx + 1);
       const nc = (dx === 0 && dz === 0) ? chunk : world.getChunk(chunk.cx + dx, chunk.cz + dz);
-      if (nc && nc.generated) {
+      if (nc && nc.generated && (dx === 0 && dz === 0 || nc.lightingReady !== false)) {
         _cBlocks[idx9] = nc.blocks;
         _cMeta[idx9] = nc.meta;
         _cSky[idx9] = nc.skyLight;

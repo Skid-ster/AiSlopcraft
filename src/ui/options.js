@@ -2,14 +2,11 @@
 // Every control is wired to game.settings and applied immediately.
 import { DEFAULT_KEYS, KEY_LABELS, keyLabel, rebindKey } from '../settings.js';
 
-const SHADERS = ['classic', 'vibrant', 'cinematic', 'shader', 'psx'];
-const SHADER_NAMES = { classic: 'Classic', vibrant: 'Vibrant', cinematic: 'Cinematic', shader: 'Shader Lite', psx: 'PSX (1.7.10)' };
+const SHADERS = ['classic', 'shader'];
+const SHADER_NAMES = { classic: 'Normal', shader: 'Shader' };
 const SHADER_HINTS = {
-  classic: 'Minecraft 1.7.10-style lightmap, smooth AO, and fog, with no enhanced sun shadows.',
-  vibrant: 'Brighter, more saturated colors. No sun-shadow pass.',
-  cinematic: 'Warm color grading with soft, filtered block shadows.',
-  shader: 'Shader Lite adds real sun-shadow mapping, 3×3 filtered shadows, reflective water, fine animated ripples and sun-lit caustic glints. External OptiFine shaderpacks are not supported by this WebGL renderer.',
-  psx: 'PSX shader: affine textures, depth-scaled vertex snapping, 25% internal resolution, 24-color grading and ordered dithering. Adapted from an open-source pack tested on 1.7.10; not an arbitrary shader ZIP loader.',
+  classic: 'Standard 1.7.10-style voxel lightmap, smooth ambient occlusion, and crisp still water without real-time sun shadows.',
+  shader: 'Enhanced voxel shader: stabilized soft sun shadows, warm sunlight & cool sky shadows, sunlit foliage translucency, reflective caustic water, and ACES filmic tone mapping.',
 };
 const FPS_STEPS = [0, 30, 60, 90, 120, 144, 165, 240, 260];
 const DIFFICULTIES = ['Peaceful', 'Easy', 'Normal', 'Hard'];
@@ -116,15 +113,15 @@ export class OptionsMenu {
         ${this.slider('opt-fps', 'Max Framerate', 0, FPS_STEPS.length - 1, 1, fpsIndex, v => `Max Framerate: ${FPS_STEPS[v] === 0 ? 'Unlimited' : FPS_STEPS[v] + ' fps'}`)}
         ${this.button('opt-graphics', `Graphics: ${s.graphics === 'fast' ? 'Fast' : 'Fancy'}`)}
         ${this.button('opt-smooth', `Smooth Lighting: ${onOff(s.smoothLighting !== false)}`)}
-        <p class="performance-hint">Fast lowers render resolution and skips real-time sun shadows. Fancy uses your selected render scale and enables shadows in Cinematic and Shader Lite.</p>
+        <p class="performance-hint">Fast lowers render resolution and skips real-time sun shadows. Fancy uses your selected render scale and enables sun shadows in Shader mode.</p>
         ${this.button('opt-particles', `Particles: ${s.particles === 'all' ? 'All' : s.particles === 'decreased' ? 'Decreased' : 'Minimal'}`)}
         ${this.button('opt-clouds', `Clouds: ${onOff(s.clouds)}`)}
         ${this.button('opt-bob', `View Bobbing: ${onOff(s.viewBobbing)}`)}
         ${this.slider('opt-fov', 'FOV', 30, 110, 1, s.fov, v => `FOV: ${v}`)}
         ${this.slider('opt-brightness', 'Brightness', 50, 150, 1, pct(s.brightness), brightnessLabel)}
         ${this.slider('opt-scale', 'Render Scale', 50, 100, 5, pct(s.renderScale), v => `Render Scale: ${v}%`)}
-        ${this.button('opt-shader', `Shaders: ${SHADER_NAMES[shownShaderStyle]}${forcedVisuals ? ' (Server)' : ''}`, 'opt-shader-wide', !!forcedVisuals)}
-        <p class="shader-hint" id="shader-hint">${forcedVisuals ? 'The host enforces this shader for the multiplayer room.' : SHADER_HINTS[shownShaderStyle]}</p>
+        ${this.button('opt-shader', `Shaders: ${SHADER_NAMES[shownShaderStyle] || SHADER_NAMES.classic}${forcedVisuals ? ' (Server)' : ''}`, 'opt-shader-wide', !!forcedVisuals)}
+        <p class="shader-hint" id="shader-hint">${forcedVisuals ? 'The host enforces this shader for the multiplayer room.' : (SHADER_HINTS[shownShaderStyle] || SHADER_HINTS.classic)}</p>
       </div>
       <div class="mc-done-row">${this.button('opt-done', 'Done')}</div>`;
     } else if (this.page === 'controls') {

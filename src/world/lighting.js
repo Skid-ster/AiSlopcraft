@@ -343,12 +343,16 @@ export class WorldLighting {
 
   finish() {
     if (this.depth) return;
-    // Rebuild a mesh when its own light OR a sampled border cell changed.
+    // Rebuild a mesh when its own light OR a sampled border/corner cell changed.
+    // Smooth AO/light in mesher.js samples all 8 surrounding chunks (including diagonals).
     const dirty = new Set(this.touched);
     for (const chunk of this.touched) {
-      for (const [dx, dz] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
-        const n = this.world.getChunk(chunk.cx + dx, chunk.cz + dz);
-        if (n?.meshes) dirty.add(n);
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dz === 0) continue;
+          const n = this.world.getChunk(chunk.cx + dx, chunk.cz + dz);
+          if (n?.meshes) dirty.add(n);
+        }
       }
     }
     for (const chunk of dirty) chunk.dirty = true;

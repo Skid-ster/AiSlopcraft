@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import * as THREE from 'three';
 import { JSDOM } from 'jsdom';
-import { Lighting, PSXPostProcess, SHADER_STYLES, shaderStyleId, syncFogUniforms } from '../src/rendering.js';
+import { Lighting, SHADER_STYLES, shaderStyleId, syncFogUniforms } from '../src/rendering.js';
+import { World } from '../src/world/world.js';
+import { STONE, TORCH } from '../src/world/blocks.js';
 import { ParticleManager } from '../src/particles.js';
 
 const fog = new THREE.Fog(0x446688, 12, 90);
@@ -19,8 +21,11 @@ assert.equal(syncFogUniforms(materials, null), false);
 
 const lighting = new Lighting({});
 const solid = lighting.createMaterial({ voxel: true });
+const cutout = lighting.createMaterial({ voxel: true, cutout: true });
 const water = lighting.createMaterial({ voxel: true, water: true, transparent: true, opacity: 0.78, depthWrite: false });
 assert.equal(solid.uniforms.uSky, lighting.shared.uSky, 'materials share live sky uniforms');
+assert.equal(solid.uniforms.uFoliage.value, 0, 'opaque terrain blocks do not sway');
+assert.equal(cutout.uniforms.uFoliage.value, 1, 'cutout foliage receives Shader wind sway and translucency');
 assert.equal(water.uniforms.uWater.value, 1);
 assert.equal(water.uniforms.uOpacity.value, 0.78, 'water opacity has a single owner');
 assert.equal(water.depthWrite, false);
@@ -28,20 +33,17 @@ assert.equal(lighting.shared.uBrightness.value, 1);
 const overlay = lighting.createMaterial({ fog: false });
 assert.equal(overlay.uniforms.uShadowStrength.value, 0, 'hand overlay does not inherit world shadows');
 assert.notEqual(overlay.uniforms.uShadowStrength, lighting.shared.uShadowStrength);
-assert.deepEqual(SHADER_STYLES, ['classic', 'vibrant', 'cinematic', 'shader', 'psx']);
-assert.equal(shaderStyleId('psx'), 4);
-const psxPost = new PSXPostProcess(0.25);
-psxPost.setSize(800, 600);
-assert.equal(psxPost.target.width, 200, 'PSX output renders at one-quarter internal width');
-assert.equal(psxPost.target.height, 150, 'PSX output renders at one-quarter internal height');
-assert.match(psxPost.material.fragmentShader, /bayer4/);
-assert.match(psxPost.material.fragmentShader, /#include <colorspace_fragment>/, 'post-process output converts back to the renderer output color space');
-psxPost.dispose();
-assert.equal(shaderStyleId('cinematic'), 2);
+
+// Only the two useful presets ('classic' = Normal, 'shader' = Shader) exist; legacy names safely fall back to 0.
+assert.deepEqual(SHADER_STYLES, ['classic', 'shader']);
+assert.equal(shaderStyleId('classic'), 0);
+assert.equal(shaderStyleId('shader'), 1);
+assert.equal(shaderStyleId('cinematic'), 0);
+assert.equal(shaderStyleId('psx'), 0);
 
 const sky = { dayFactor: 1, sunDirection: new THREE.Vector3(0, 1, 0) };
 lighting.update({ sky, time: 4, style: 'shader', fog });
-assert.equal(lighting.shared.uShaderStyle.value, 3);
+assert.equal(lighting.shared.uShaderStyle.value, 1);
 assert.equal(lighting.shared.uTime.value, 4);
 assert.equal(lighting.shared.uFogFar.value, 90);
 sky.dayFactor = 0;
@@ -66,6 +68,16 @@ assert.equal(mesh.material.uniforms.uEntityShade.value, 0, 'pre-shaded vertex-co
 assert.ok(mesh.material.uniforms.uTint.value.r > 0.9, 'base tint survives conversion');
 lighting.setObjectLight(mesh, 0, 14);
 assert.deepEqual(mesh.material.uniforms.uObjectLight.value.toArray(), [0, 14]);
+
+// Trilinear non-opaque refreshObject avoids flashing pitch-black (0/0) when an entity or hand grazes a solid wall.
+const fakeWallWorld = {
+  getBlock(x) { return x >= 1 ? STONE : 0; },
+  getLight(x) { return x >= 1 ? 0 : ((15 << 4) | 12); },
+};
+lighting.refreshObject(mesh, fakeWallWorld, new THREE.Vector3(0.95, 64.2, 0.5), 0.9);
+assert.ok(mesh.material.uniforms.uObjectLight.value.x >= 14.5, 'entity next to opaque wall samples adjacent open air instead of flashing 0');
+assert.ok(mesh.material.uniforms.uObjectLight.value.y >= 11.5, 'entity next to opaque wall keeps steady block light');
+
 lighting.forget(mesh);
 assert.equal(lighting.materials.has(mesh.material), false);
 const caster = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial());
@@ -82,7 +94,13 @@ assert.match(vertex, /pow\(max\(aTint\.rgb, vec3\(0\.0\)\), vec3\(2\.2\)\)/, 'vo
 assert.match(fragment, /nSky \/ \(4\.0 - 3\.0 \* nSky\)/, 'fragment shader uses 1.7.10 hyperbolic lightBrightnessTable');
 assert.match(fragment, /1\.0 - invLight \* invLight \* invLight \* invLight/, 'fragment shader applies 1.7.10 gamma curve for brightness');
 assert.match(fragment, /uHasEmissionMap > 0\.5 \? texture2D\(uEmissionMap, uv\)\.r : 0\.0/, 'emissive atlas pixels glow even when uEmission is 0');
-assert.doesNotMatch(fragment, /0\.58 \+ 0\.12 \* max\(normal\.y, 0\.0\)/, 'terrain does not double-darken baked directional face shading');
+assert.doesNotMatch(fragment, /torchFlicker/, 'emitted torch/lava/glowstone light does not oscillate or flicker over time');
+assert.doesNotMatch(vertex, /uPsxSnap/, 'removed PSX vertex-snapping jitter is absent');
+assert.doesNotMatch(fragment, /vAffineUv/, 'removed PSX affine texture warping is absent');
+assert.match(fragment, /acesFilmic/, 'Shader mode applies ACES filmic tone mapping');
+assert.match(fragment, /coolAmbient/, 'Shader mode contrasts cool sky shadows with warm sunlight');
+assert.match(fragment, /backScatter/, 'Shader mode adds subsurface translucency on sunlit foliage');
+assert.match(fragment, /sunAlign/, 'Shader mode adds directional Mie sun-haze');
 assert.match(water.fragmentShader, /causticPattern/, 'water shader adds moving, sun-lit caustic glints');
 assert.match(water.fragmentShader, /cos\(\(p\.x - p\.y\) \* 4\.1/, 'water surface uses finer secondary ripples');
 assert.match(vertex, /attribute vec2 aLight/);
@@ -92,19 +110,29 @@ assert.match(fragment, /uShadowMap/);
 assert.match(fragment, /fresnel/);
 assert.match(fragment, /uEmissionMap/);
 assert.match(fragment, /#include <colorspace_fragment>/);
-assert.match(fragment, /uTime \* 0\.006/, 'cinematic water UV animation is consumed by the shader');
-assert.match(fragment, /uWater > 0\.5 && uShaderStyle > 0\.5/, 'Classic water stays still and pixelated');
-assert.match(vertex, /uWater > 0\.5 && uShaderStyle > 0\.5/, 'Classic water geometry is not artificially wavy');
+assert.match(fragment, /uWater > 0\.5 && uShaderStyle > 0\.5/, 'Normal water stays still and pixelated');
+assert.match(vertex, /uWater > 0\.5 && uShaderStyle > 0\.5/, 'Normal water geometry is not artificially wavy');
 assert.match(fragment, /float daylight = max\(uSky, 0\.12\)/, 'night lighting retains a visible classic sky floor');
 assert.match(fragment, /skyLight \+ direct \+ torchLight/, 'warm torch light adds to skylight instead of disappearing in daylight');
-assert.match(vertex, /uPsxSnap/, 'PSX vertex snapping scales with depth');
-assert.match(vertex, /snapGrid/, 'PSX snapping uses the active internal resolution');
-assert.match(fragment, /vAffineUv/, 'PSX preset enables affine texture mapping');
-
-
 assert.match(fragment, /coord\.z <= 0\.0/, 'points before the shadow frustum remain lit');
 assert.match(fragment, /0\.00072/, 'shadow bias is small enough to avoid detached shadows');
 assert.match(lighting.updateShadows.toString(), /texelWorldSize/, 'shadow projection is texel-snapped to reduce shimmer');
+assert.match(lighting.updateShadows.toString(), /_quantizedSun/, 'shadow sun direction is quantized to stop sub-pixel swimming');
+
+// Diagonal chunk corner lighting changes mark diagonal neighbor meshes dirty to prevent corner seam flicker.
+{
+  const w = new World('corner-light-test', null, 'beta', 'overworld-v1');
+  for (let cx = 0; cx <= 1; cx++) {
+    for (let cz = 0; cz <= 1; cz++) {
+      const c = w.generateChunk(cx, cz);
+      c.meshes = { solid: {} };
+      c.dirty = false;
+    }
+  }
+  const y = w.heightAt(15, 15) + 2;
+  w.setBlock(15, y, 15, TORCH);
+  assert.equal(w.getChunk(1, 1).dirty, true, 'diagonal chunk mesh is marked dirty when corner light changes');
+}
 
 // A failed shadow pass must not poison the renderer state for the main frame.
 const shadowScene = new THREE.Scene();
@@ -129,6 +157,7 @@ assert.equal(fakeRenderer.currentTarget, priorTarget, 'render target restored af
 assert.equal(fakeRenderer.autoClear, false, 'autoClear restored after shadow failure');
 assert.equal(shadowScene.overrideMaterial, priorOverride, 'override material restored after shadow failure');
 assert.equal(fakeRenderer.clearAlpha, 0.25, 'clear alpha restored after shadow failure');
+
 const cachedLighting = new Lighting({ shadowSize: 64 });
 const cachedScene = new THREE.Scene();
 const cachedCamera = new THREE.PerspectiveCamera();
@@ -144,17 +173,17 @@ const cacheSky = { sunDirection: new THREE.Vector3(0.4, 0.8, 0.2) };
 cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'shader', 10);
 cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'shader', 10.3);
 assert.equal(cacheRenderer.renders, 1, 'unchanged shadow maps are cached instead of rendered every frame');
+cachedLighting.invalidateShadows();
+cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'shader', 10.35);
+assert.equal(cacheRenderer.renders, 2, 'invalidating shadows on chunk remesh refreshes the shadow map immediately');
 cachedCamera.position.x = 1;
-cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'shader', 10.4);
-assert.equal(cacheRenderer.renders, 2, 'moving the view refreshes the shadow map promptly');
+cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'shader', 10.5);
+assert.equal(cacheRenderer.renders, 3, 'moving the view refreshes the shadow map promptly');
 cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'shader', 10.6, false, false);
-assert.equal(cacheRenderer.renders, 2, 'Fast graphics skips the expensive dynamic shadow pass');
+assert.equal(cacheRenderer.renders, 3, 'Fast graphics skips the expensive dynamic shadow pass');
 assert.equal(cachedLighting.shared.uShadowStrength.value, 0, 'Fast graphics disables shadow sampling in the visible shader');
-cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'cinematic', 10.7);
+cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'shader', 10.7);
 assert.ok(cachedLighting.shared.uShadowStrength.value > 0, 'sun shadows resume immediately after returning to Fancy graphics');
-const cinematicStrength = cachedLighting.shared.uShadowStrength.value;
-cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'shader', 10.71);
-assert.ok(cachedLighting.shared.uShadowStrength.value > cinematicStrength, 'switching presets updates shadow strength even with a cached map');
 const rendersBeforeTurn = cacheRenderer.renders;
 cachedCamera.rotation.y = Math.PI / 2;
 cachedLighting.updateShadows(cacheRenderer, cachedScene, cachedCamera, cacheSky, 'shader', 10.9);
@@ -186,6 +215,7 @@ assert.equal(skyObj.sun.material.depthTest, true, 'sun cannot draw through terra
 assert.equal(skyObj.sun.material.blending, THREE.AdditiveBlending, 'sun uses additive sky blending');
 assert.equal(skyObj.moon.material.depthTest, true, 'moon cannot draw through terrain');
 assert.equal(skyObj.stars.material.depthTest, true, 'stars cannot draw through terrain');
+assert.notEqual(skyObj.clouds.position.y % 1, 0, 'clouds sit at a non-integer height so they never Z-fight with block tops');
 skyObj.time = 0.25;
 skyObj.update(0, new THREE.Vector3(), 6);
 assert.ok(skyObj.skyUniforms.uHorizon.value.r > skyObj.skyUniforms.uHorizon.value.b, 'dawn/sunset horizon carries warm glow');
@@ -207,4 +237,5 @@ assert.match(main, /const effectiveScale = Math\.max\(0\.35, s\.renderScale \* \
 assert.match(main, /particles\.setQuality\(s\.particles\)/);
 assert.match(main, /camera\.layers\.enable\(1\)/);
 assert.match(main, /s\.layers\.enable\(1\)/);
+assert.doesNotMatch(main, /PSXPostProcess/, 'removed PSX post-process pass is absent from main loop');
 console.log('ALL RENDERING TESTS PASSED');

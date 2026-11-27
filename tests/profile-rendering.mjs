@@ -32,7 +32,7 @@ try {
         return info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
       });
       console.log(`Distance ${distance}, ${chunks} meshed chunks, renderer: ${gl}`);
-      for (const style of ['classic', 'cinematic', 'psx']) {
+      for (const style of ['classic', 'shader']) {
         const result = await page.evaluate(async style => {
           const { renderer, lighting } = window.game;
           window.game.setShaderStyle(style);
@@ -46,13 +46,12 @@ try {
             requestAnimationFrame(frame);
           });
           await animationFrames(15);
-          const passes = { world: [], shadow: [], psxPresent: [] };
+          const passes = { world: [], shadow: [] };
           const original = renderer.render;
           renderer.render = function (scene, camera) {
             const target = this.getRenderTarget();
             const pass = target === lighting.shadowTarget ? 'shadow'
-              : camera === window.game.player.camera ? 'world'
-                : style === 'psx' && !target ? 'psxPresent' : null;
+              : camera === window.game.player.camera ? 'world' : null;
             const start = performance.now();
             original.call(this, scene, camera);
             if (pass) passes[pass].push(performance.now() - start);
@@ -63,14 +62,13 @@ try {
             return {
               fps: 90_000 / (stamps.at(-1) - stamps[0]),
               frameP95Ms: p95(stamps.slice(1).map((s, i) => s - stamps[i])),
-              worldP95Ms: p95(passes.world), shadowP95Ms: p95(passes.shadow), psxPresentP95Ms: p95(passes.psxPresent),
+              worldP95Ms: p95(passes.world), shadowP95Ms: p95(passes.shadow),
             };
           } finally { renderer.render = original; }
         }, style);
         table.push({ distance, style, ...result });
         assert.ok(result.worldP95Ms !== null, 'profile must record draws of the world');
-        if (style === 'cinematic') assert.ok(result.shadowP95Ms !== null, 'cinematic profile must draw shadows');
-        if (style === 'psx') assert.ok(result.psxPresentP95Ms !== null, 'PSX profile must present its low-resolution image');
+        if (style === 'shader') assert.ok(result.shadowP95Ms !== null, 'Shader profile must draw sun shadows');
         if (native && !/swiftshader|software/i.test(gl)) assert.ok(result.fps >= 30, `${distance}/${style} falls below the 30 FPS reference floor`);
       }
       if (process.env.AISLOPCRAFT_PROFILE_SCREENSHOT) await page.screenshot({ path: `${process.env.AISLOPCRAFT_PROFILE_SCREENSHOT}-${distance}.png` });

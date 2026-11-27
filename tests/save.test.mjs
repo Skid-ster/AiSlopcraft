@@ -22,6 +22,7 @@ const world = {
 const text = encodeWorldSave(world);
 const decoded = decodeWorldSave(text);
 assert.equal(decoded.seed, 'portable-test-world');
+assert.equal(decoded.settings.shaderStyle, 'classic', 'legacy removed shader styles in old saves sanitize cleanly to Normal (classic)');
 assert.equal(decoded.edition, 'beta', 'older world saves remain in the Beta edition by default');
 const classicSave = normalizeWorldSave({ ...world, edition: 'classic', gameMode: 'classic' });
 assert.equal(classicSave.edition, 'classic');

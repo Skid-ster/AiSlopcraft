@@ -1,11 +1,14 @@
 // Shared native WebGL lighting for chunks, entities, drops, particles and the
-// first-person hand. Everything uses the same sky/torch curves, fog, color space
-// and preset uniforms; Shader Lite/Cinematic additionally sample a real sun
-// shadow map rendered from the voxel geometry.
+// first-person hand. Supports two clean modes:
+//   - 'classic' ("Normal"): crisp, steady 1.7.10 voxel lightmap, smooth AO, still water.
+//   - 'shader'  ("Shader"): stabilized 1536px Poisson sun shadows, warm sun / cool sky
+//     hemispheric lighting, foliage subsurface translucency + gentle breeze, reflective
+//     caustic water, atmospheric Mie sun-haze, and ACES filmic tone mapping.
 import * as THREE from 'three';
+import { BLOCK_OPAQUE } from './world/blocks.js';
 
-export const SHADER_STYLES = ['classic', 'vibrant', 'cinematic', 'shader', 'psx'];
-export const shaderStyleId = style => Math.max(0, SHADER_STYLES.indexOf(style));
+export const SHADER_STYLES = ['classic', 'shader'];
+export const shaderStyleId = style => (style === 'shader' ? 1 : 0);
 
 export function syncFogUniforms(materials, fog) {
   if (!fog?.color) return false;
@@ -23,9 +26,8 @@ const vertexShader = /* glsl */ `
   attribute vec4 aTint;
   uniform float uTime;
   uniform float uWater;
+  uniform float uFoliage;
   uniform float uShaderStyle;
-  uniform vec2 uScreenSize;
-  uniform float uPsxSnap;
   #ifdef VOXEL_LIGHT
     attribute vec2 aLight;
     attribute vec3 aNormal;
@@ -39,7 +41,6 @@ const vertexShader = /* glsl */ `
   varying float vInstanceEmission;
   varying vec4 vTint;
   varying vec2 vUv;
-  varying vec3 vAffineUv;
   varying vec2 vLight;
   varying vec3 vWorldNormal;
   varying vec3 vWorldPosition;
@@ -55,7 +56,6 @@ const vertexShader = /* glsl */ `
       vTint.rgb *= instanceColor;
     #endif
     vUv = uv;
-    vAffineUv = vec3(uv, 1.0);
     vInstanceEmission = 0.0;
     vec3 objectNormal = normal;
     #ifdef VOXEL_LIGHT
@@ -72,25 +72,25 @@ const vertexShader = /* glsl */ `
       vInstanceEmission = aInstanceEmission;
     #endif
     vec4 world = modelMatrix * local;
-    // Classic keeps the original still, pixelated water surface. The optional
-    // cinematic presets animate it without changing collision/selection geometry.
+    // Normal mode keeps still, pixelated water and static foliage.
+    // Shader mode adds subtle water waves and gentle wind sway on outdoor foliage.
     if (uWater > 0.5 && uShaderStyle > 0.5) {
       float surface = 1.0 - step(0.02, abs(fract(position.y) - 0.88));
-      world.y += surface * (sin(world.x * 1.35 + uTime * 1.4) + cos(world.z * 1.1 - uTime * 1.1)) * 0.018;
+      world.y += surface * (
+        sin(world.x * 1.45 + uTime * 1.6) * 0.016 +
+        cos(world.z * 1.25 - uTime * 1.25) * 0.014
+      );
+    } else if (uFoliage > 0.5 && uShaderStyle > 0.5) {
+      float outdoor = smoothstep(4.0, 13.0, vLight.x);
+      float phase = world.x * 0.85 + world.z * 0.65 + world.y * 0.35;
+      world.x += sin(uTime * 1.85 + phase) * 0.018 * outdoor;
+      world.z += cos(uTime * 1.45 + phase * 1.1) * 0.014 * outdoor;
     }
     vWorldPosition = world.xyz;
     vWorldNormal = normalize(mat3(modelMatrix) * objectNormal);
     vec4 mv = viewMatrix * world;
     vFogDist = length(mv.xyz);
-    vec4 clip = projectionMatrix * mv;
-    if (uShaderStyle > 3.5) {
-      float inaccuracy = uPsxSnap / sqrt(max(clip.w, 0.001)) + 0.1;
-      vec2 snapGrid = max(uScreenSize * 0.75, vec2(1.0));
-      vec2 ndc = floor((clip.xy / clip.w) * snapGrid / inaccuracy) * inaccuracy / snapGrid;
-      clip.xy = ndc * clip.w;
-      vAffineUv = vec3(uv * clip.w, clip.w);
-    }
-    gl_Position = clip;
+    gl_Position = projectionMatrix * mv;
   }
 `;
 
@@ -114,6 +114,7 @@ const fragmentShader = /* glsl */ `
   uniform float uSunIntensity;
   uniform float uTime;
   uniform float uWater;
+  uniform float uFoliage;
   uniform vec3 uFogColor;
   uniform float uFogNear;
   uniform float uFogFar;
@@ -124,7 +125,6 @@ const fragmentShader = /* glsl */ `
   uniform float uShadowTexel;
   varying vec4 vTint;
   varying vec2 vUv;
-  varying vec3 vAffineUv;
   varying vec2 vLight;
   varying vec3 vWorldNormal;
   varying vec3 vWorldPosition;
@@ -133,46 +133,48 @@ const fragmentShader = /* glsl */ `
 
   float sunShadow(vec3 normal, vec3 sunDir) {
     if (uShadowStrength <= 0.0) return 1.0;
-    vec4 projected = uShadowMatrix * vec4(vWorldPosition, 1.0);
+    // Normal-offset bias prevents striped self-shadowing (shadow acne flicker)
+    // on sunlit voxel faces while keeping contact shadows tight at block bases.
+    float ndotl = max(dot(normal, sunDir), 0.0);
+    vec3 sampleWorld = vWorldPosition + normal * (0.042 * (1.0 - ndotl * 0.55));
+    vec4 projected = uShadowMatrix * vec4(sampleWorld, 1.0);
     vec3 coord = projected.xyz / projected.w;
-    // Outside the light frustum there is no shadow data. Treat it as lit rather
-    // than comparing against the depth texture's clamped border texels.
-    if (coord.x <= 0.001 || coord.x >= 0.999 || coord.y <= 0.001 || coord.y >= 0.999 || coord.z <= 0.0 || coord.z >= 1.0) return 1.0;
-    // Depth is normalized over a 189-block light range: a large fixed bias
-    // visibly detaches shadows from the blocks that cast them.
-    float bias = max(0.00018, 0.00072 * (1.0 - max(dot(normal, sunDir), 0.0)));
+    // Points outside or before the shadow frustum remain cleanly lit.
+    if (coord.x <= 0.002 || coord.x >= 0.998 || coord.y <= 0.002 || coord.y >= 0.998 || coord.z <= 0.0 || coord.z >= 1.0) return 1.0;
+    float bias = max(0.00020, 0.00072 * (1.0 - ndotl));
+    float radius = uShadowTexel * 1.35;
     float visibility = 0.0;
-    for (int x = -1; x <= 1; x++) {
-      for (int y = -1; y <= 1; y++) {
-        float depth = texture2D(uShadowMap, coord.xy + vec2(float(x), float(y)) * uShadowTexel).r;
-        visibility += coord.z - bias <= depth ? 1.0 : 0.0;
-      }
-    }
+    visibility += coord.z - bias <= texture2D(uShadowMap, coord.xy + vec2(-0.9420, -0.3991) * radius).r ? 1.0 : 0.0;
+    visibility += coord.z - bias <= texture2D(uShadowMap, coord.xy + vec2( 0.9456, -0.7689) * radius).r ? 1.0 : 0.0;
+    visibility += coord.z - bias <= texture2D(uShadowMap, coord.xy + vec2(-0.0942, -0.9294) * radius).r ? 1.0 : 0.0;
+    visibility += coord.z - bias <= texture2D(uShadowMap, coord.xy + vec2( 0.3450,  0.2939) * radius).r ? 1.0 : 0.0;
+    visibility += coord.z - bias <= texture2D(uShadowMap, coord.xy + vec2(-0.9159,  0.4577) * radius).r ? 1.0 : 0.0;
+    visibility += coord.z - bias <= texture2D(uShadowMap, coord.xy + vec2(-0.8154, -0.8791) * radius).r ? 1.0 : 0.0;
+    visibility += coord.z - bias <= texture2D(uShadowMap, coord.xy + vec2( 0.9748,  0.7565) * radius).r ? 1.0 : 0.0;
+    visibility += coord.z - bias <= texture2D(uShadowMap, coord.xy + vec2( 0.1998,  0.9612) * radius).r ? 1.0 : 0.0;
+    visibility += coord.z - bias <= texture2D(uShadowMap, coord.xy).r ? 1.0 : 0.0;
     visibility /= 9.0;
-    float edge = smoothstep(0.0, 0.08, min(min(coord.x, 1.0 - coord.x), min(coord.y, 1.0 - coord.y)));
+    float edge = smoothstep(0.0, 0.09, min(min(coord.x, 1.0 - coord.x), min(coord.y, 1.0 - coord.y)));
     return 1.0 - (1.0 - visibility) * uShadowStrength * edge;
   }
 
+  vec3 acesFilmic(vec3 x) {
+    // Narkowicz ACES fitted curve, scaled so neutral diffuse albedos keep crisp exposure
+    // while bright sun highlights, clouds, sand, and emissives roll off smoothly.
+    vec3 v = x * 1.16;
+    return clamp((v * (2.51 * v + 0.03)) / (v * (2.43 * v + 0.59) + 0.14), 0.0, 1.0);
+  }
+
   vec3 grade(vec3 color) {
+    if (uShaderStyle < 0.5) return max(color, vec3(0.0));
+    color = acesFilmic(max(color, vec3(0.0)));
     float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
-    if (uShaderStyle > 0.5 && uShaderStyle < 1.5) {
-      color = mix(vec3(luminance), color, 1.18);
-      color *= mix(vec3(0.98), vec3(1.06, 1.04, 1.02), smoothstep(0.04, 0.75, luminance));
-    } else if (uShaderStyle > 1.5 && uShaderStyle < 2.5) {
-      float shadow = 1.0 - smoothstep(0.03, 0.32, luminance);
-      float highlight = smoothstep(0.32, 1.0, luminance);
-      color *= mix(vec3(1.0), vec3(0.90, 0.97, 1.10), shadow * 0.35);
-      color *= mix(vec3(1.0), vec3(1.08, 1.01, 0.90), highlight * 0.30);
-    } else if (uShaderStyle > 2.5 && uShaderStyle < 3.5) {
-      color = mix(vec3(luminance), color, 1.06);
-      color = color / (1.0 + color * 0.14) * 1.14;
-    }
+    color = mix(vec3(luminance), color, 1.12);
     return max(color, vec3(0.0));
   }
 
   void main() {
     vec2 uv = vUv;
-    if (uShaderStyle > 3.5) uv = vAffineUv.xy / max(vAffineUv.z, 0.0001);
     if (uWater > 0.5 && uShaderStyle > 0.5) uv += vec2(uTime * 0.006, uTime * 0.014);
     vec4 tex = mix(vec4(1.0), texture2D(map, uv), uHasMap);
     float alpha = tex.a * vTint.a * uOpacity;
@@ -180,6 +182,7 @@ const fragmentShader = /* glsl */ `
     vec3 normal = normalize(vWorldNormal);
     if (!gl_FrontFacing) normal = -normal;
     vec3 sunDir = normalize(uSunDirection);
+    vec3 viewDir = normalize(cameraPosition - vWorldPosition);
     vec3 base = tex.rgb * vTint.rgb * uTint;
 
     // Minecraft 1.7.10 WorldProvider.generateLightBrightnessTable() curve:
@@ -189,77 +192,101 @@ const fragmentShader = /* glsl */ `
     float skyLevel = nSky / (4.0 - 3.0 * nSky);
     float blockLevel = nBlk / (4.0 - 3.0 * nBlk);
     float shadow = sunShadow(normal, sunDir);
+
     // Keep exposed terrain legible through the full day cycle: Minecraft's
     // classic lightmap has a real night floor, not a hard drop to black.
     float daylight = max(uSky, 0.12);
     float sunBrightness = clamp((daylight - 0.12) / 0.88 * 0.78 + 0.22, 0.22, 1.0);
+
     // Classic 1.7.10 terrain bakes directional face shading (1.0/0.8/0.6/0.5) in
     // mesher.js; entities without baked shading receive standard 1.7.10 box shade.
     float entityShade = mix(1.0,
       normal.y > 0.5 ? 1.0 : normal.y < -0.5 ? 0.55 : abs(normal.x) > 0.5 ? 0.68 : 0.84,
       uEntityShade);
+
     vec3 skyLight = uSkyTint * skyLevel * sunBrightness;
-    if (uShaderStyle > 1.5 && uShaderStyle < 3.5) {
-      skyLight *= mix(1.0, shadow, 0.55);
-    }
     vec3 direct = vec3(0.0);
-    if (uShaderStyle > 1.5 && uShaderStyle < 3.5) {
-      direct = uSkyTint * skyLevel * uSunIntensity * max(dot(normal, sunDir), 0.0) * shadow * 0.28;
+    if (uShaderStyle > 0.5) {
+      // Hemispheric cool sky dome in shadows + warm golden sunlight on direct faces.
+      float skyUp = normal.y * 0.5 + 0.5;
+      vec3 coolAmbient = mix(vec3(0.84, 0.79, 0.74), vec3(0.76, 0.89, 1.08), skyUp);
+      skyLight *= mix(coolAmbient * 0.74, vec3(0.96), shadow);
+      float sunElev = clamp(sunDir.y, 0.0, 1.0);
+      vec3 sunColor = mix(vec3(1.0, 0.56, 0.28), vec3(1.0, 0.95, 0.85), smoothstep(0.04, 0.48, sunElev));
+      float ndotl = max(dot(normal, sunDir), 0.0);
+      direct = sunColor * skyLevel * uSunIntensity * ndotl * shadow * 0.46;
+      // Subsurface translucency for backlit leaves, grass, saplings, and crops.
+      if (uFoliage > 0.5) {
+        float backScatter = pow(max(dot(-viewDir, sunDir), 0.0), 3.0) * 0.55 + 0.25 * max(sunDir.y, 0.0);
+        direct += sunColor * skyLevel * uSunIntensity * shadow * backScatter * 0.34;
+      }
     }
-    // Minecraft 1.7.10 EntityRenderer.updateLightmap() warm torch light curve
-    // with subtle flicker, added to skylight so torches stay warm in daylight.
-    float torchFlicker = 1.0 + 0.022 * sin(uTime * 6.8 + vWorldPosition.x * 0.1) * cos(uTime * 11.3 + vWorldPosition.z * 0.1);
-    float blkB = clamp(blockLevel * torchFlicker, 0.0, 1.0);
+
+    // Steady warm torch/lava/glowstone curve (no sinusoidal time flicker).
+    float blkB = blockLevel;
     vec3 torchColor = vec3(
       blkB,
       blkB * ((blkB * 0.6 + 0.4) * 0.6 + 0.4),
       blkB * (blkB * blkB * 0.6 + 0.4)
     );
-    vec3 torchLight = uBlockTint * torchColor;
-    vec3 lightSrgb = clamp((skyLight + direct + torchLight) * 0.96 + uAmbientFloor, uAmbientFloor, vec3(1.0));
+    vec3 torchTint = uShaderStyle > 0.5 ? vec3(1.06, 0.84, 0.62) : uBlockTint;
+    vec3 torchLight = torchTint * torchColor;
+    vec3 lightSrgb = clamp((skyLight + direct + torchLight) * 0.96 + uAmbientFloor, uAmbientFloor, vec3(1.28));
+
     // 1.7.10 Brightness/Gamma slider (Moody .. Bright) lifts caves & shadows
     // via 1 - (1 - c)^4 without overexposing sunlit blocks.
     float gammaSetting = clamp(uBrightness - 0.5, 0.0, 1.0);
-    vec3 invLight = 1.0 - lightSrgb;
+    vec3 clampedSrgb = clamp(lightSrgb, vec3(0.0), vec3(1.0));
+    vec3 invLight = 1.0 - clampedSrgb;
     vec3 brightLight = 1.0 - invLight * invLight * invLight * invLight;
-    lightSrgb = mix(lightSrgb, brightLight, mix(0.0, 0.85, pow(gammaSetting, 1.4)));
-    vec3 light = pow(clamp(lightSrgb * entityShade, vec3(0.0), vec3(1.0)), vec3(2.2));
+    vec3 liftedSrgb = mix(clampedSrgb, brightLight, mix(0.0, 0.85, pow(gammaSetting, 1.4))) + max(lightSrgb - vec3(1.0), vec3(0.0));
+    vec3 light = pow(max(liftedSrgb * entityShade, vec3(0.0)), vec3(2.2));
     vec3 rgb = base * light;
 
-    // Emissive texels (flame, lava, glowstone, lit furnace/lantern faces) keep
-    // their own light at night instead of being multiplied by cave darkness.
+    // Emissive texels (flame, lava, glowstone, lit furnace/lantern/portal faces)
+    // keep crisp self-illumination at night instead of being darkened by cave light.
     float texEmission = uHasEmissionMap > 0.5 ? texture2D(uEmissionMap, uv).r : 0.0;
     float emissionMask = clamp(max(uEmission + vInstanceEmission, texEmission), 0.0, 1.0);
-    rgb = mix(rgb, base, emissionMask);
+    vec3 emissiveBoost = uShaderStyle > 0.5 ? base * 1.24 : base;
+    rgb = mix(rgb, emissiveBoost, emissionMask);
 
     if (uWater > 0.5 && uShaderStyle > 0.5) {
       vec2 p = vWorldPosition.xz;
       vec3 ripple = vec3(
-        cos(p.x * 1.7 + uTime * 1.3) * 0.055 + sin((p.x + p.y) * 0.8 - uTime) * 0.035
+        cos(p.x * 1.7 + uTime * 1.35) * 0.052 + sin((p.x + p.y) * 0.85 - uTime * 1.05) * 0.034
           + cos((p.x - p.y) * 4.1 + uTime * 2.0) * 0.018,
         0.0,
-        sin(p.y * 1.5 - uTime * 1.1) * 0.055 + cos((p.x - p.y) * 0.9 + uTime * 0.7) * 0.035
+        sin(p.y * 1.5 - uTime * 1.15) * 0.052 + cos((p.x - p.y) * 0.9 + uTime * 0.75) * 0.034
           + sin((p.x + p.y) * 3.7 - uTime * 1.8) * 0.018
       );
       vec3 waterNormal = normalize(normal + ripple);
-      vec3 viewDir = normalize(cameraPosition - vWorldPosition);
-      float fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(waterNormal, viewDir), 0.0), 5.0);
+      float fresnel = 0.03 + 0.97 * pow(1.0 - max(dot(waterNormal, viewDir), 0.0), 4.5);
       vec3 reflected = reflect(-viewDir, waterNormal);
-      vec3 reflection = mix(uFogColor, uSkyTint, clamp(reflected.y * 0.7 + 0.3, 0.0, 1.0));
-      float strength = uShaderStyle > 2.5 ? 0.54 : 0.18;
-      rgb = mix(rgb, reflection * (0.35 + 0.65 * uSky), fresnel * strength);
-      float specular = pow(max(dot(waterNormal, normalize(sunDir + viewDir)), 0.0), 96.0);
-      rgb += vec3(1.0, 0.90, 0.70) * specular * uSunIntensity * shadow * (uShaderStyle > 2.5 ? 0.65 : 0.08);
+      vec3 skyReflect = mix(uFogColor, uSkyTint * vec3(0.68, 0.86, 1.12), clamp(reflected.y * 0.75 + 0.25, 0.0, 1.0));
+      // Subtle teal-azure absorption tint before blending sky reflection.
+      rgb = mix(rgb * vec3(0.72, 0.95, 1.08), skyReflect * (0.32 + 0.68 * uSky), fresnel * 0.58);
+      vec3 halfVec = normalize(sunDir + viewDir);
+      float specTight = pow(max(dot(waterNormal, halfVec), 0.0), 128.0);
+      float specBroad = pow(max(dot(waterNormal, halfVec), 0.0), 24.0) * 0.14;
+      rgb += vec3(1.0, 0.90, 0.72) * (specTight * 0.85 + specBroad) * uSunIntensity * shadow;
       float causticPattern = sin((p.x + p.y) * 3.2 + uTime * 1.7) * sin((p.x - p.y) * 2.4 - uTime * 1.1);
-      float caustic = pow(max(causticPattern * 0.5 + 0.5, 0.0), 10.0)
+      float caustic = pow(max(causticPattern * 0.5 + 0.5, 0.0), 9.0)
         * max(dot(waterNormal, viewDir), 0.0) * uSunIntensity * shadow;
-      rgb += vec3(0.10, 0.24, 0.28) * caustic * (uShaderStyle > 2.5 ? 0.50 : 0.10);
-      alpha = mix(alpha, min(0.94, alpha + 0.12), fresnel);
+      rgb += vec3(0.10, 0.26, 0.32) * caustic * 0.52;
+      alpha = mix(alpha, min(0.95, alpha + 0.14), fresnel);
     }
 
     rgb = grade(rgb);
+
     float fog = uFogEnabled * smoothstep(uFogNear, uFogFar, vFogDist);
-    gl_FragColor = vec4(mix(rgb, uFogColor, fog), alpha);
+    vec3 fogTarget = uFogColor;
+    if (uShaderStyle > 0.5 && uSunIntensity > 0.01) {
+      // Forward Mie sun-haze warms distant horizon fog when looking toward the sun.
+      float sunAlign = pow(max(dot(-viewDir, sunDir), 0.0), 6.0);
+      vec3 mieTint = mix(vec3(1.0, 0.62, 0.34), vec3(1.0, 0.94, 0.82), clamp(sunDir.y * 2.0, 0.0, 1.0));
+      fogTarget = mix(uFogColor, mieTint, sunAlign * uSunIntensity * 0.32);
+    }
+    gl_FragColor = vec4(mix(rgb, fogTarget, fog), alpha);
     #include <colorspace_fragment>
   }
 `;
@@ -285,7 +312,7 @@ function ensureTint(geometry) {
 }
 
 export class Lighting {
-  constructor({ atlasTexture, emissionTexture, shadowSize = 1024 } = {}) {
+  constructor({ atlasTexture, emissionTexture, shadowSize = 1536 } = {}) {
     this.white = whiteTexture();
     this.emissionTexture = emissionTexture || this.white;
     this.shadowSize = shadowSize;
@@ -293,11 +320,12 @@ export class Lighting {
       minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
       depthTexture: new THREE.DepthTexture(shadowSize, shadowSize, THREE.UnsignedIntType),
     });
-    this.shadowCamera = new THREE.OrthographicCamera(-42, 42, 42, -42, 1, 190);
+    this.shadowCamera = new THREE.OrthographicCamera(-44, 44, 44, -44, 1, 192);
     this.shadowCamera.layers.set(1);
     this.shadowMatrix = new THREE.Matrix4();
     this.depthMaterial = new THREE.MeshDepthMaterial({ map: atlasTexture || null, alphaTest: 0.45, side: THREE.DoubleSide });
     this.lastShadowTime = -Infinity;
+    this.shadowDirty = true;
     this.lastShadowPosition = new THREE.Vector3(Infinity, Infinity, Infinity);
     this.lastShadowSunDirection = new THREE.Vector3(Infinity, Infinity, Infinity);
     this.lastShadowForward = new THREE.Vector3(Infinity, Infinity, Infinity);
@@ -306,7 +334,7 @@ export class Lighting {
       uSkyTint: { value: new THREE.Color(1, 1, 1) },
       uBlockTint: { value: new THREE.Color(1.0, 0.96, 0.88) },
       uAmbientFloor: { value: new THREE.Color(0.03, 0.03, 0.03) },
-      uShaderStyle: { value: 3 },
+      uShaderStyle: { value: 0 },
       uScreenSize: { value: new THREE.Vector2(1, 1) },
       uBrightness: { value: 1 },
       uSunDirection: { value: new THREE.Vector3(0, 1, 0) },
@@ -323,9 +351,15 @@ export class Lighting {
     this.materials = new Set();
     this._forward = new THREE.Vector3();
     this._center = new THREE.Vector3();
+    this._quantizedSun = new THREE.Vector3();
+  }
+
+  invalidateShadows() {
+    this.shadowDirty = true;
   }
 
   createMaterial(opts = {}) {
+    const isCutoutVoxel = Boolean(opts.voxel && (opts.cutout || (opts.alphaTest ?? 0) > 0.1));
     const material = new THREE.ShaderMaterial({
       name: opts.name || 'VoxelLighting',
       vertexShader, fragmentShader,
@@ -339,11 +373,11 @@ export class Lighting {
         uEmission: { value: opts.emission ?? 0 },
         uEntityShade: { value: Number(opts.entityShade ?? (opts.voxel ? 0 : 1)) },
         uOpacity: { value: opts.opacity ?? 1 },
-        uPsxSnap: { value: opts.psxSnap ?? (opts.fog === false ? 10 : 15) },
         uAlphaTest: { value: opts.alphaTest ?? (opts.cutout ? 0.45 : 0) },
         uTint: { value: opts.tint?.isColor ? opts.tint.clone() : new THREE.Color(opts.tint ?? 0xffffff) },
         uObjectLight: { value: new THREE.Vector2(15, 0) },
         uWater: { value: opts.water ? 1 : 0 },
+        uFoliage: { value: opts.foliage ?? (isCutoutVoxel ? 1 : 0) },
         uFogEnabled: { value: opts.fog === false ? 0 : 1 },
         // The hand is an overlay: it must not inherit world shadow coordinates.
         ...(opts.fog === false ? { uShadowStrength: { value: 0 } } : {}),
@@ -384,6 +418,7 @@ export class Lighting {
           emissionMap: !!opts.emissionMap,
           emission: object.userData.emissive ? 1 : (opts.emission ?? 0),
           entityShade: opts.entityShade ?? !hasVertexColors,
+          foliage: 0,
           fog: opts.fog,
         });
         converted.set(old, material);
@@ -403,9 +438,56 @@ export class Lighting {
     });
   }
 
+  // Smooth trilinear non-opaque light sampling prevents entities, drops, and the
+  // first-person hand from snapping across voxel grid lines or flashing black next to walls.
   refreshObject(root, world, position, yOffset = 0.9) {
-    const packed = world.getLight(Math.floor(position.x), Math.floor(position.y + yOffset), Math.floor(position.z));
-    this.setObjectLight(root, packed >> 4, packed & 15);
+    const sx = position.x - 0.5;
+    const sy = position.y + yOffset - 0.5;
+    const sz = position.z - 0.5;
+    const x0 = Math.floor(sx), y0 = Math.floor(sy), z0 = Math.floor(sz);
+    const fx = sx - x0, fy = sy - y0, fz = sz - z0;
+    const hasBlock = typeof world.getBlock === 'function';
+
+    let sumSky = 0, sumBlk = 0, sumW = 0;
+    let maxSky = 0, maxBlk = 0;
+    for (let dz = 0; dz <= 1; dz++) {
+      const wz = dz ? fz : 1 - fz;
+      for (let dy = 0; dy <= 1; dy++) {
+        const wy = dy ? fy : 1 - fy;
+        for (let dx = 0; dx <= 1; dx++) {
+          const cx = x0 + dx, cy = y0 + dy, cz = z0 + dz;
+          const packed = world.getLight(cx, cy, cz);
+          const s = packed >> 4, b = packed & 15;
+          if (s > maxSky) maxSky = s;
+          if (b > maxBlk) maxBlk = b;
+          if (hasBlock && BLOCK_OPAQUE[world.getBlock(cx, cy, cz)]) continue;
+          const w = (dx ? fx : 1 - fx) * wy * wz;
+          sumSky += s * w;
+          sumBlk += b * w;
+          sumW += w;
+        }
+      }
+    }
+
+    let targetSky, targetBlk;
+    if (sumW > 1e-4) {
+      targetSky = sumSky / sumW;
+      targetBlk = sumBlk / sumW;
+    } else {
+      const packed = world.getLight(Math.floor(position.x), Math.floor(position.y + yOffset), Math.floor(position.z));
+      targetSky = Math.max(packed >> 4, maxSky);
+      targetBlk = Math.max(packed & 15, maxBlk);
+    }
+
+    let state = root.userData?._smoothLight;
+    if (!state) {
+      state = { sky: targetSky, blk: targetBlk };
+      if (root.userData) root.userData._smoothLight = state;
+    } else {
+      state.sky += (targetSky - state.sky) * 0.32;
+      state.blk += (targetBlk - state.blk) * 0.32;
+    }
+    this.setObjectLight(root, state.sky, state.blk);
   }
 
   update({ sky, time, style, fog }) {
@@ -413,8 +495,6 @@ export class Lighting {
     const id = shaderStyleId(style);
     s.uShaderStyle.value = id;
     s.uTime.value = time;
-    // Minecraft keeps an exposed-sky night light level; avoid the near-black
-    // collapse that made block tops disappear at dusk and in shader presets.
     s.uSky.value = 0.12 + 0.88 * sky.dayFactor;
     s.uSunIntensity.value = sky.dayFactor;
     s.uSunDirection.value.copy(sky.sunDirection);
@@ -430,35 +510,54 @@ export class Lighting {
     const isNether = sky.dimension === 'nether';
     s.uAmbientFloor.value.setRGB(isNether ? 0.26 : 0.03, isNether ? 0.16 : 0.03, isNether ? 0.14 : 0.03);
     if (fog) syncFogUniforms([{ uniforms: s }], fog);
-    if (isNether || id < 2 || id === 4 || sky.sunDirection.y <= 0.06) s.uShadowStrength.value = 0;
+    if (isNether || id < 1 || sky.sunDirection.y <= 0.06) s.uShadowStrength.value = 0;
   }
 
   updateShadows(renderer, scene, camera, sky, style, time, force = false, enabled = true) {
     const id = shaderStyleId(style);
-    if (!enabled || sky.dimension === 'nether' || id < 2 || id === 4 || sky.sunDirection.y <= 0.06) { this.shared.uShadowStrength.value = 0; return; }
+    if (!enabled || sky.dimension === 'nether' || id < 1 || sky.sunDirection.y <= 0.06) {
+      this.shared.uShadowStrength.value = 0;
+      return;
+    }
     const wasDisabled = this.shared.uShadowStrength.value === 0;
-    this.shared.uShadowStrength.value = id === 3 ? 0.78 : 0.50;
-    if (!force && !wasDisabled && time - this.lastShadowTime < 0.12) return;
+    // Smoothly fade shadow strength near dawn/dusk horizon so shadows never pop on or off abruptly.
+    const horizonFade = Math.min(1, Math.max(0, (sky.sunDirection.y - 0.06) / 0.12));
+    this.shared.uShadowStrength.value = 0.76 * horizonFade;
+
+    // Quantize shadow sun direction into small discrete steps so the light-space
+    // texel basis does not rotate sub-pixel every frame (eliminates shadow swimming).
+    const step = 0.004;
+    this._quantizedSun.set(
+      Math.round(sky.sunDirection.x / step) * step,
+      Math.round(sky.sunDirection.y / step) * step,
+      Math.round(sky.sunDirection.z / step) * step,
+    ).normalize();
+
+    const dirty = this.shadowDirty;
+    if (!force && !wasDisabled && !dirty && time - this.lastShadowTime < 0.08) return;
     camera.getWorldDirection(this._forward);
     const cameraMoved = this.lastShadowPosition.distanceToSquared(camera.position) > 0.25;
-    const cameraTurned = this.lastShadowForward.distanceToSquared(this._forward) > 0.0004;
-    const sunMoved = this.lastShadowSunDirection.distanceToSquared(sky.sunDirection) > 0.000004;
-    if (!force && !wasDisabled && !cameraMoved && !cameraTurned && !sunMoved && time - this.lastShadowTime < 1.0) return;
+    const cameraTurned = this.lastShadowForward.distanceToSquared(this._forward) > 0.015;
+    const sunMoved = this.lastShadowSunDirection.distanceToSquared(this._quantizedSun) > 1e-7;
+    if (!force && !wasDisabled && !dirty && !cameraMoved && !cameraTurned && !sunMoved && time - this.lastShadowTime < 1.0) return;
+
+    this.shadowDirty = false;
     this.lastShadowTime = time;
     this.lastShadowPosition.copy(camera.position);
     this.lastShadowForward.copy(this._forward);
-    this.lastShadowSunDirection.copy(sky.sunDirection);
-    this._center.copy(camera.position).addScaledVector(this._forward, 18);
-    this.shadowCamera.position.copy(this._center).addScaledVector(sky.sunDirection, 95);
+    this.lastShadowSunDirection.copy(this._quantizedSun);
+
+    this._center.copy(camera.position).addScaledVector(this._forward, 14);
+    this.shadowCamera.position.copy(this._center).addScaledVector(this._quantizedSun, 96);
     this.shadowCamera.lookAt(this._center);
     this.shadowCamera.updateMatrixWorld(true);
-    // Snap the light-space camera to shadow texels. This prevents block edges
-    // and contact shadows from crawling when the player moves by tiny amounts.
+
+    // Snap the light-space camera to exact shadow texels to prevent edge crawl when moving.
     const texelWorldSize = (this.shadowCamera.right - this.shadowCamera.left) / this.shadowSize;
     const matrix = this.shadowCamera.matrixWorld.elements;
     const right = new THREE.Vector3(matrix[0], matrix[1], matrix[2]);
     const up = new THREE.Vector3(matrix[4], matrix[5], matrix[6]);
-    const snapAxis = (axis) => {
+    const snapAxis = axis => {
       const offset = this._center.dot(axis);
       return Math.round(offset / texelWorldSize) * texelWorldSize - offset;
     };
@@ -467,8 +566,10 @@ export class Lighting {
     this.shadowCamera.position.addScaledVector(right, shiftRight).addScaledVector(up, shiftUp);
     this.shadowCamera.lookAt(this._center);
     this.shadowCamera.updateMatrixWorld(true);
+
     this.shadowMatrix.set(0.5, 0, 0, 0.5, 0, 0.5, 0, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0, 1);
     this.shadowMatrix.multiply(this.shadowCamera.projectionMatrix).multiply(this.shadowCamera.matrixWorldInverse);
+
     const target = renderer.getRenderTarget();
     const override = scene.overrideMaterial;
     const autoClear = renderer.autoClear;
@@ -503,114 +604,5 @@ export class Lighting {
     this.white.dispose();
     for (const material of this.materials) material.dispose();
     this.materials.clear();
-  }
-}
-
-// Downsampled final pass adapted from the PSX shaderpack workflow: low internal
-// resolution, a 24-step palette, and a 4x4 ordered dither. The world/material
-// shader above also supplies affine UV interpolation and depth-scaled vertex
-// snapping. This is a native Three.js pass, not a runtime OptiFine loader.
-export class PSXPostProcess {
-  constructor(scale = 0.25) {
-    this.scale = Math.max(0.1, Math.min(1, scale));
-    this.target = new THREE.WebGLRenderTarget(1, 1, {
-      minFilter: THREE.NearestFilter,
-      magFilter: THREE.NearestFilter,
-      depthBuffer: true,
-      stencilBuffer: false,
-    });
-    this.target.texture.generateMipmaps = false;
-    this.material = new THREE.ShaderMaterial({
-      uniforms: {
-        uScene: { value: this.target.texture },
-        uResolution: { value: new THREE.Vector2(1, 1) },
-      },
-      vertexShader: /* glsl */ `
-        varying vec2 vUv;
-        void main() {
-          vUv = uv;
-          gl_Position = vec4(position.xy, 0.0, 1.0);
-        }
-      `,
-      fragmentShader: /* glsl */ `
-        uniform sampler2D uScene;
-        uniform vec2 uResolution;
-        varying vec2 vUv;
-        float bayer4(vec2 p) {
-          float x = mod(floor(p.x), 4.0);
-          float y = mod(floor(p.y), 4.0);
-          if (y < 1.0) {
-            if (x < 1.0) return 0.0; if (x < 2.0) return 8.0;
-            if (x < 3.0) return 2.0; return 10.0;
-          }
-          if (y < 2.0) {
-            if (x < 1.0) return 12.0; if (x < 2.0) return 4.0;
-            if (x < 3.0) return 14.0; return 6.0;
-          }
-          if (y < 3.0) {
-            if (x < 1.0) return 3.0; if (x < 2.0) return 11.0;
-            if (x < 3.0) return 1.0; return 9.0;
-          }
-          if (x < 1.0) return 15.0; if (x < 2.0) return 7.0;
-          if (x < 3.0) return 13.0; return 5.0;
-        }
-        void main() {
-          vec2 pixel = floor(vUv * uResolution) + 0.5;
-          vec2 sampleUv = pixel / uResolution;
-          vec3 color = texture2D(uScene, sampleUv).rgb;
-          // Quantize linear light without a contrast offset that erases night colors.
-          float dither = (bayer4(pixel) + 0.5) / 16.0 - 0.5;
-          color = floor(clamp(color * 23.0 + 0.5 + dither, 0.0, 23.0)) / 23.0;
-          gl_FragColor = vec4(color, 1.0);
-          #include <colorspace_fragment>
-        }
-      `,
-      depthTest: false,
-      depthWrite: false,
-      toneMapped: false,
-    });
-    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.material);
-    quad.frustumCulled = false;
-    this.scene = new THREE.Scene();
-    this.scene.add(quad);
-    this.camera = new THREE.Camera();
-    this._bufferSize = new THREE.Vector2();
-    this._previousTarget = null;
-  }
-
-  setSize(width, height) {
-    const w = Math.max(1, Math.round(width * this.scale));
-    const h = Math.max(1, Math.round(height * this.scale));
-    if (this.target.width !== w || this.target.height !== h) this.target.setSize(w, h);
-    this.material.uniforms.uResolution.value.set(w, h);
-    return this.material.uniforms.uResolution.value;
-  }
-
-  render(renderer, scene, camera, overlays) {
-    renderer.getDrawingBufferSize(this._bufferSize);
-    const resolution = this.setSize(this._bufferSize.x, this._bufferSize.y);
-    this._previousTarget = renderer.getRenderTarget();
-    const previousAutoClear = renderer.autoClear;
-    try {
-      renderer.setRenderTarget(this.target);
-      renderer.autoClear = true;
-      renderer.clear(true, true, true);
-      renderer.render(scene, camera);
-      overlays?.(renderer);
-      renderer.setRenderTarget(this._previousTarget);
-      renderer.autoClear = true;
-      this.material.uniforms.uScene.value = this.target.texture;
-      renderer.render(this.scene, this.camera);
-    } finally {
-      renderer.setRenderTarget(this._previousTarget);
-      renderer.autoClear = previousAutoClear;
-    }
-    return resolution;
-  }
-
-  dispose() {
-    this.target.dispose();
-    this.material.dispose();
-    this.scene.traverse(object => object.geometry?.dispose());
   }
 }

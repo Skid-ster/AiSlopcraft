@@ -406,8 +406,8 @@ try {
     await request(wrongEditionGuest, 'room:leave');
     await request(individualHost, 'room:close');
   }
-  const psxRoom = await request(individualHost, 'room:create', { playerName: 'Solo', visuals: { mode: 'forced', shaderStyle: 'psx' } });
-  assert.equal(psxRoom.visuals.shaderStyle, 'psx', 'relay accepts the 1.7.10 PSX shader preset');
+  const legacyShaderRoom = await request(individualHost, 'room:create', { playerName: 'Solo', visuals: { mode: 'forced', shaderStyle: 'psx' } });
+  assert.equal(legacyShaderRoom.visuals.shaderStyle, 'classic', 'relay maps removed legacy shader styles cleanly to Normal (classic)');
   await request(individualHost, 'room:close');
   const invalidVisuals = await request(individualHost, 'room:create', {
     playerName: 'Solo', visuals: { mode: 'forced', shaderStyle: 'shader', resourcePack: { name: 'Bad pack', atlasData: 'data:image/png;base64,AAAA' } },

@@ -474,7 +474,7 @@ export class UI {
               </label>
               <label>Shader
                 <select id="mp-host-shader" data-forced-visual disabled>
-                  <option value="classic">Classic</option><option value="vibrant">Vibrant</option><option value="cinematic">Cinematic</option><option value="shader">Shader Lite</option><option value="psx">PSX (1.7.10)</option>
+                  <option value="classic">Normal</option><option value="shader">Shader</option>
                 </select>
               </label>
               <label>Texture pack
