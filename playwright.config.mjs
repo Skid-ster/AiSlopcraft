@@ -11,6 +11,7 @@ export default defineConfig({
   globalTimeout: 12 * 60_000,
   expect: { timeout: 15_000 },
   workers: 1,
+  reporter: process.env.CI ? [['github'], ['list']] : 'list',
   forbidOnly: Boolean(process.env.CI),
   use: {
     baseURL,

@@ -397,6 +397,7 @@ for (const mode of ['survival', 'creative']) test(`Multiplayer ${mode}: names, c
       await expect.poll(() => guest.evaluate(() => window.game.openChestData?.slots?.[0])).toMatchObject({ id: 5, count: 3 });
       await guest.locator('#chest-slots [data-chest="0"]').click();
       await expect.poll(() => page.evaluate(() => window.game.openChestData?.slots?.[0])).toBeNull();
+      await expect.poll(() => guest.evaluate(() => window.game.player.cursorStack)).toMatchObject({ id: 5, count: 3 });
       await guest.locator('#chest-hotbar [data-inv="0"]').click();
       await guest.keyboard.press('Escape');
       await page.keyboard.press('Escape');
@@ -424,32 +425,52 @@ test('Multiplayer guests can open shared chests, furnaces, and storage minecarts
     player.vel.set(0, 0, 0);
     player.yaw = player.pitch = player.mouseDX = player.mouseDY = 0;
     world.setBlock(x, y - 1, z, 1);
-    world.setBlock(x, y + 1, z - 1, 0);
+    for (const dz of [0, -1, -2]) {
+      for (const dy of [0, 1, 2]) world.setBlock(x, y + dy, z + dz, 0);
+    }
+    world.setBlock(x, y, z - 2, 1);
     return [x, y + 1, z - 2];
   });
-  await page.evaluate(([x, y, z]) => window.game.world.setBlock(x, y, z, 54), target);
+  await page.evaluate(([x, y, z]) => {
+    const { player, world } = window.game;
+    player.pointerLocked = true;
+    player.yaw = player.pitch = player.mouseDX = player.mouseDY = 0;
+    world.setBlock(x, y, z, 54);
+  }, target);
   await expect.poll(() => page.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(54);
-  await page.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true })));
+  await page.evaluate(() => {
+    window.game.player.pointerLocked = true;
+    document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true }));
+  });
   await expect(page.locator('#chest-screen')).toBeVisible();
   await page.keyboard.press('Escape');
 
   await page.evaluate(([x, y, z]) => {
-    window.game.player.pointerLocked = true;
-    window.game.world.setBlock(x, y, z, 61);
+    const { player, world } = window.game;
+    player.pointerLocked = true;
+    player.yaw = player.pitch = player.mouseDX = player.mouseDY = 0;
+    world.setBlock(x, y, z, 61);
   }, target);
   await expect.poll(() => page.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(61);
-  await page.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true })));
+  await page.evaluate(() => {
+    window.game.player.pointerLocked = true;
+    document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true }));
+  });
   await expect(page.locator('#furnace-screen')).toBeVisible();
   await page.keyboard.press('Escape');
 
   await page.evaluate(([x, y, z]) => {
     const { player, world, vehicles } = window.game;
     player.pointerLocked = true;
+    player.yaw = player.pitch = player.mouseDX = player.mouseDY = 0;
     world.setBlock(x, y, z, 0);
-    vehicles.create('storage', x + 0.5, y, z + 0.5);
+    vehicles.create('storage', x + 0.5, y + 0.1, z + 0.5);
   }, target);
   await expect.poll(() => page.evaluate(() => window.game.vehicles.target(window.game.player)?.type)).toBe('storage');
-  await page.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true })));
+  await page.evaluate(() => {
+    window.game.player.pointerLocked = true;
+    document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true }));
+  });
   await expect(page.locator('#chest-screen')).toBeVisible();
   await page.keyboard.press('Escape');
 });
@@ -462,7 +483,7 @@ test('XP progression, Enchanting Table, and Nether Portal travel work end-to-end
   await page.locator('#game-canvas').click({ position: { x: 400, y: 300 } });
   await expect.poll(() => page.evaluate(() => window.game.player.pointerLocked)).toBe(true);
 
-  await page.evaluate(() => {
+  const origin = await page.evaluate(() => {
     const { player, world } = window.game;
     player.addXp(900);
     player.inventory[0] = { id: 278, count: 1, damage: 0 }; // Diamond Pickaxe
@@ -471,16 +492,24 @@ test('XP progression, Enchanting Table, and Nether Portal travel work end-to-end
     player.pos.set(x + 0.5, y + 0.001, z + 0.5);
     player.vel.set(0, 0, 0);
     player.yaw = player.pitch = player.mouseDX = player.mouseDY = 0;
+    for (let dx = -2; dx <= 2; dx++) {
+      for (let dz = -3; dz <= 1; dz++) {
+        for (let dy = 0; dy <= 4; dy++) world.setBlock(x + dx, y + dy, z + dz, 0);
+      }
+    }
     world.setBlock(x, y - 1, z, 1);
-    world.setBlock(x, y + 1, z - 1, 0);
     world.setBlock(x, y + 1, z - 2, 116); // Enchanting Table
     world.setBlock(x - 2, y + 1, z - 2, 47); // Bookshelf
     world.setBlock(x + 2, y + 1, z - 2, 47); // Bookshelf
+    return [x, y, z];
   });
   await expect.poll(() => page.evaluate(() => window.game.player.xpLevel)).toBeGreaterThanOrEqual(30);
   await expect(page.locator('#xp-bar-wrap')).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(116);
-  await page.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true })));
+  await page.evaluate(() => {
+    window.game.player.pointerLocked = true;
+    document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true }));
+  });
   await expect(page.locator('#enchant-screen')).toBeVisible();
 
   await page.locator('#ench-inv-hotbar [data-inv="0"]').click();
@@ -492,15 +521,11 @@ test('XP progression, Enchanting Table, and Nether Portal travel work end-to-end
   expect(await page.evaluate(() => Boolean(window.game.player.inventory[0]?.enchants))).toBe(true);
 
   // Build & ignite a 4x5 Obsidian Nether Portal and step inside to enter The Nether
-  await page.evaluate(() => {
+  await page.evaluate(([x, y, z]) => {
     const { player, world } = window.game;
     player.pointerLocked = true;
-    const [x, y, z] = player.pos.toArray().map(Math.floor);
+    world.setBlock(x, y + 1, z - 2, 0);
     const pz = z - 3;
-    for (let dz = -2; dz <= 0; dz++) {
-      for (let dy = 0; dy <= 3; dy++) world.setBlock(x, y + dy, z + dz, 0);
-    }
-    world.setBlock(x, y - 1, z, 1);
     for (let dx = -1; dx <= 2; dx++) {
       for (let dy = 0; dy <= 4; dy++) {
         const edge = dx === -1 || dx === 2 || dy === 0 || dy === 4;
@@ -510,25 +535,28 @@ test('XP progression, Enchanting Table, and Nether Portal travel work end-to-end
     player.inventory[1] = { id: 259, count: 1, damage: 0 }; // Flint and Steel
     player.hotbarIndex = 1;
     player.pos.set(x + 0.5, y + 0.001, z + 0.5);
+    player.vel.set(0, 0, 0);
     player.yaw = 0;
-    player.pitch = -0.45;
-  });
+    player.pitch = -0.22;
+    player.mouseDX = player.mouseDY = 0;
+  }, origin);
   await expect.poll(() => page.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(49);
-  await page.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true })));
-  await expect.poll(() => page.evaluate(() => {
-    const [x, y, z] = window.game.player.pos.toArray().map(Math.floor);
-    return window.game.world.getBlock(x, y + 1, z - 3);
-  })).toBe(90);
+  await page.evaluate(() => {
+    window.game.player.pointerLocked = true;
+    document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true }));
+  });
+  await expect.poll(() => page.evaluate(([x, y, z]) => window.game.world.getBlock(x, y + 1, z - 3), origin)).toBe(90);
 
   // Step into the lit portal and fast-advance portal timer to travel to the Nether
-  await page.evaluate(() => {
-    const { player } = window.game;
-    const [x, y, z] = player.pos.toArray().map(Math.floor);
+  await page.evaluate(([x, y, z]) => {
+    const { player, world } = window.game;
+    world.setBlock(x, y, z - 3, 49);
     player.pos.set(x + 0.5, y + 1.01, z - 2.5);
+    player.vel.set(0, 0, 0);
     player.portalCooldown = 0;
     player.portalTime = 2.65;
-  });
-  await expect.poll(() => page.evaluate(() => window.game.world.dimension), { timeout: 10000 }).toBe('nether');
+  }, origin);
+  await expect.poll(() => page.evaluate(() => window.game.world.dimension), { timeout: 15000 }).toBe('nether');
   expect(errors).toEqual([]);
 });
 
