@@ -184,8 +184,10 @@ test('Survival: mine, place, craft, die, respawn, and round-trip a portable save
   // Pin the target and supplies; use keybindings so headless pointer-lock mouse
   // coordinate events do not move the camera between setting up and mining.
   const [x, y, z] = await page.evaluate(() => {
-    const { world, player } = window.game;
+    const { world, player, mobs } = window.game;
+    mobs.clear();
     const [x, y, z] = player.pos.toArray().map(Math.floor);
+    player.pointerLocked = true;
     player.yaw = player.pitch = player.mouseDX = player.mouseDY = 0;
     player.pos.set(x + 0.5, y + 0.001, z + 0.5);
     player.vel.set(0, 0, 0);
@@ -195,7 +197,8 @@ test('Survival: mine, place, craft, die, respawn, and round-trip a portable save
     world.setBlock(x, y + 1, z, 0);
     world.setBlock(x, y + 1, z - 1, 0);
     world.setBlock(x, y + 1, z - 2, 3);
-    world.setBlock(x, y + 1, z - 3, 3);
+    // Use unbreakable bedrock as the backstop so holding attack cannot mine through it before keyup.
+    world.setBlock(x, y + 1, z - 3, 7);
     player.inventory[0] = { id: 5, count: 3, damage: 0 };
     player.inventory[1] = { id: 17, count: 1, damage: 0 };
     return [x, y + 1, z - 2];
@@ -203,15 +206,16 @@ test('Survival: mine, place, craft, die, respawn, and round-trip a portable save
   const block = () => page.evaluate(([x, y, z]) => window.game.world.getBlock(x, y, z), [x, y, z]);
   const aim = () => page.evaluate(() => {
     const { player, world } = window.game;
+    player.pointerLocked = true;
     const hit = player.raycast(world, 5);
     return hit && [hit.x, hit.y, hit.z];
   });
   await expect.poll(aim).toEqual([x, y, z]);
   await page.keyboard.down('j');
-  try { await expect.poll(block).toBe(0); } finally { await page.keyboard.up('j'); }
+  try { await expect.poll(block, { intervals: [50, 100, 150] }).toBe(0); } finally { await page.keyboard.up('j'); }
   await expect.poll(aim).toEqual([x, y, z - 1]);
   await page.keyboard.down('k');
-  try { await expect.poll(block).toBe(5); } finally { await page.keyboard.up('k'); }
+  try { await expect.poll(block, { intervals: [50, 100, 150] }).toBe(5); } finally { await page.keyboard.up('k'); }
 
   await page.keyboard.press('e');
   const craft = page.locator('#craft-grid .slot');
