@@ -109,6 +109,7 @@ const fragmentShader = /* glsl */ `
   uniform float uSky;
   uniform vec3 uSkyTint;
   uniform vec3 uBlockTint;
+  uniform vec3 uAmbientFloor;
   uniform vec3 uSunDirection;
   uniform float uSunIntensity;
   uniform float uTime;
@@ -215,7 +216,7 @@ const fragmentShader = /* glsl */ `
       blkB * (blkB * blkB * 0.6 + 0.4)
     );
     vec3 torchLight = uBlockTint * torchColor;
-    vec3 lightSrgb = clamp((skyLight + direct + torchLight) * 0.96 + vec3(0.03), vec3(0.03), vec3(1.0));
+    vec3 lightSrgb = clamp((skyLight + direct + torchLight) * 0.96 + uAmbientFloor, uAmbientFloor, vec3(1.0));
     // 1.7.10 Brightness/Gamma slider (Moody .. Bright) lifts caves & shadows
     // via 1 - (1 - c)^4 without overexposing sunlit blocks.
     float gammaSetting = clamp(uBrightness - 0.5, 0.0, 1.0);
@@ -304,6 +305,7 @@ export class Lighting {
       uSky: { value: 1 },
       uSkyTint: { value: new THREE.Color(1, 1, 1) },
       uBlockTint: { value: new THREE.Color(1.0, 0.96, 0.88) },
+      uAmbientFloor: { value: new THREE.Color(0.03, 0.03, 0.03) },
       uShaderStyle: { value: 3 },
       uScreenSize: { value: new THREE.Vector2(1, 1) },
       uBrightness: { value: 1 },
@@ -425,13 +427,15 @@ export class Lighting {
       const t = day / 0.25;
       s.uSkyTint.value.setRGB(0.52 + 0.48 * t, 0.66 + 0.06 * t, 1.0 - 0.50 * t);
     }
+    const isNether = sky.dimension === 'nether';
+    s.uAmbientFloor.value.setRGB(isNether ? 0.26 : 0.03, isNether ? 0.16 : 0.03, isNether ? 0.14 : 0.03);
     if (fog) syncFogUniforms([{ uniforms: s }], fog);
-    if (id < 2 || id === 4 || sky.sunDirection.y <= 0.06) s.uShadowStrength.value = 0;
+    if (isNether || id < 2 || id === 4 || sky.sunDirection.y <= 0.06) s.uShadowStrength.value = 0;
   }
 
   updateShadows(renderer, scene, camera, sky, style, time, force = false, enabled = true) {
     const id = shaderStyleId(style);
-    if (!enabled || id < 2 || id === 4 || sky.sunDirection.y <= 0.06) { this.shared.uShadowStrength.value = 0; return; }
+    if (!enabled || sky.dimension === 'nether' || id < 2 || id === 4 || sky.sunDirection.y <= 0.06) { this.shared.uShadowStrength.value = 0; return; }
     const wasDisabled = this.shared.uShadowStrength.value === 0;
     this.shared.uShadowStrength.value = id === 3 ? 0.78 : 0.50;
     if (!force && !wasDisabled && time - this.lastShadowTime < 0.12) return;

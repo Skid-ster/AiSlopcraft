@@ -40,6 +40,7 @@ export const BOOKSHELF = 47;
 export const MOSSY_COBBLE = 48;
 export const OBSIDIAN = 49;
 export const TORCH = 50;
+export const OAK_STAIRS = 53;
 export const CHEST = 54;
 export const REDSTONE_WIRE = 55;
 export const DIAMOND_ORE = 56;
@@ -52,6 +53,7 @@ export const FURNACE_LIT = 62;
 export const WOOD_DOOR = 64;
 export const LADDER = 65;
 export const RAIL = 66;
+export const COBBLESTONE_STAIRS = 67;
 export const LEVER = 69;
 export const IRON_DOOR = 71;
 export const REDSTONE_ORE = 73;
@@ -63,14 +65,22 @@ export const CACTUS = 81;
 export const CLAY = 82;
 export const SUGARCANE = 83;
 export const JUKEBOX = 84;
+export const FENCE = 85;
 export const PUMPKIN = 86;
 export const NETHERRACK = 87;
 export const SLOW_SAND = 88; // soul sand
 export const GLOWSTONE = 89;
+export const NETHER_PORTAL = 90;
 export const JACK_O_LANTERN = 91;
 export const CAKE_BLOCK = 92;
 export const REDSTONE_REPEATER = 93;
 export const STONE_BRICK = 98;
+export const NETHER_BRICK = 112;
+export const NETHER_BRICK_FENCE = 113;
+export const NETHER_BRICK_STAIRS = 114;
+export const ENCHANTING_TABLE = 116;
+export const QUARTZ_ORE = 120;
+export const QUARTZ_BLOCK = 121;
 export const WOOL_BASE = 150; // +0..15 (kept clear of classic block ids)
 
 export const TILES = {
@@ -102,6 +112,7 @@ export const TILES = {
   bed_top: 107, bed_side: 108, bed_end: 109,
   farmland_wet: 110, jack_o_lantern: 111,
   cake_top: 112, cake_side: 113, cake_bottom: 114, redstone_wire: 115, lever: 116, repeater: 117, bed_foot: 118, redstone_torch_off: 119, door_wood_bottom: 120, door_iron_bottom: 121, sponge: 122,
+  portal: 123, nether_brick: 124, enchant_top: 125, enchant_side: 126, quartz_ore: 127, quartz_top: 128, quartz_side: 129,
 };
 
 // Face order: +Y, -Y, +Z, -Z, +X, -X
@@ -187,7 +198,7 @@ def(MUSHROOM_RED, 'Red Mushroom', {
 def(GOLD_BLOCK, 'Gold Block', { tiles: faces(TILES.gold_block, TILES.gold_block, TILES.gold_block), hardness: 3, tool: 'pickaxe', minTier: 2 });
 def(IRON_BLOCK, 'Iron Block', { tiles: faces(TILES.iron_block, TILES.iron_block, TILES.iron_block), hardness: 5, tool: 'pickaxe', minTier: 1 });
 def(DOUBLE_STONE_SLAB, 'Double Stone Slab', { tiles: faces(TILES.stone, TILES.stone, TILES.stone), hardness: 2, tool: 'pickaxe' });
-def(STONE_SLAB, 'Stone Slab', { tiles: faces(TILES.stone, TILES.stone, TILES.stone), hardness: 2, tool: 'pickaxe', render: 'slab', bounds: [0, 0, 0, 1, 0.5, 1] });
+def(STONE_SLAB, 'Stone Slab', { opaque: false, tiles: faces(TILES.stone, TILES.stone, TILES.stone), hardness: 2, tool: 'pickaxe', render: 'slab', bounds: [0, 0, 0, 1, 0.5, 1] });
 def(BRICK, 'Bricks', { tiles: faces(TILES.brick, TILES.brick, TILES.brick), hardness: 2, tool: 'pickaxe' });
 def(TNT, 'TNT', { tiles: faces(TILES.tnt_top, TILES.tnt_bottom, TILES.tnt_side), hardness: 0 });
 def(BOOKSHELF, 'Bookshelf', { tiles: faces(TILES.planks, TILES.planks, TILES.bookshelf), hardness: 1.5, tool: 'axe', drops: 340, dropCount: 3 });
@@ -199,7 +210,11 @@ def(TORCH, 'Torch', {
   hardness: 0, render: 'torch', drops: 50,
   bounds: [0.35, 0.0, 0.35, 0.65, 0.65, 0.65],
 });
-def(CHEST, 'Chest', { tiles: faces(TILES.chest_top, TILES.chest_top, TILES.chest_side, TILES.chest_front), hardness: 2.5, tool: 'axe' });
+def(OAK_STAIRS, 'Oak Wood Stairs', {
+  opaque: false, tiles: faces(TILES.planks, TILES.planks, TILES.planks),
+  hardness: 2.0, tool: 'axe', render: 'stairs', bounds: [0, 0, 0, 1, 1, 1],
+});
+def(CHEST, 'Chest', { opaque: false, tiles: faces(TILES.chest_top, TILES.chest_top, TILES.chest_side, TILES.chest_front), hardness: 2.5, tool: 'axe' });
 def(REDSTONE_WIRE, 'Redstone Wire', { solid: false, opaque: false, tiles: faces(TILES.redstone_wire, TILES.redstone_wire, TILES.redstone_wire), hardness: 0, render: 'flat', drops: 331, bounds: [0, 0, 0, 1, 0.08, 1] });
 def(DIAMOND_ORE, 'Diamond Ore', { tiles: faces(TILES.diamond_ore, TILES.diamond_ore, TILES.diamond_ore), hardness: 3.0, tool: 'pickaxe', minTier: 2, drops: 264 });
 def(DIAMOND_BLOCK, 'Diamond Block', { tiles: faces(TILES.diamond_block, TILES.diamond_block, TILES.diamond_block), hardness: 5, tool: 'pickaxe', minTier: 2 });
@@ -210,7 +225,7 @@ def(CROPS, 'Wheat Crops', {
   hardness: 0, render: 'cross', drops: 295,
   bounds: [0.05, 0, 0.05, 0.95, 0.65, 0.95],
 });
-def(FARMLAND, 'Farmland', { opaque: true, tiles: faces(TILES.farmland, TILES.dirt, TILES.dirt), hardness: 0.6, tool: 'shovel', drops: DIRT });
+def(FARMLAND, 'Farmland', { opaque: false, tiles: faces(TILES.farmland, TILES.dirt, TILES.dirt), hardness: 0.6, tool: 'shovel', drops: DIRT });
 def(FURNACE, 'Furnace', { tiles: faces(TILES.furnace_top, TILES.furnace_top, TILES.furnace_side, TILES.furnace_front), hardness: 3.5, tool: 'pickaxe' });
 def(FURNACE_LIT, 'Lit Furnace', { tiles: faces(TILES.furnace_top, TILES.furnace_top, TILES.furnace_side, TILES.furnace_front_lit), hardness: 3.5, tool: 'pickaxe', drops: FURNACE, light: 13 });
 def(WOOD_DOOR, 'Wooden Door', {
@@ -228,6 +243,10 @@ def(RAIL, 'Rail', {
   tiles: faces(TILES.rail, TILES.rail, TILES.rail),
   hardness: 0.7, tool: 'pickaxe', render: 'flat',
   bounds: [0.0, 0.0, 0.0, 1.0, 0.125, 1.0],
+});
+def(COBBLESTONE_STAIRS, 'Cobblestone Stairs', {
+  opaque: false, tiles: faces(TILES.cobble, TILES.cobble, TILES.cobble),
+  hardness: 2.0, tool: 'pickaxe', render: 'stairs', bounds: [0, 0, 0, 1, 1, 1],
 });
 def(LEVER, 'Lever', { solid: false, opaque: false, tiles: faces(TILES.lever, TILES.lever, TILES.lever), hardness: 0.5, render: 'torch', bounds: [0.3, 0, 0.3, 0.7, 0.65, 0.7] });
 def(IRON_DOOR, 'Iron Door', {
@@ -258,10 +277,20 @@ def(SUGARCANE, 'Sugar Canes', {
   bounds: [0.15, 0, 0.15, 0.85, 1.0, 0.85],
 });
 def(JUKEBOX, 'Jukebox', { tiles: faces(TILES.jukebox_top, TILES.planks, TILES.jukebox_side), hardness: 2, tool: 'axe' });
+def(FENCE, 'Oak Fence', {
+  opaque: false, tiles: faces(TILES.planks, TILES.planks, TILES.planks),
+  hardness: 2.0, tool: 'axe', render: 'fence', bounds: [0.3125, 0, 0.3125, 0.6875, 1, 0.6875],
+});
 def(PUMPKIN, 'Pumpkin', { tiles: faces(TILES.pumpkin_top, TILES.pumpkin_top, TILES.pumpkin_side, TILES.pumpkin_face), hardness: 1, tool: 'axe' });
 def(NETHERRACK, 'Netherrack', { tiles: faces(TILES.netherrack, TILES.netherrack, TILES.netherrack), hardness: 0.4, tool: 'pickaxe' });
 def(SLOW_SAND, 'Soul Sand', { tiles: faces(TILES.slow_sand, TILES.slow_sand, TILES.slow_sand), hardness: 0.5, tool: 'shovel' });
 def(GLOWSTONE, 'Glowstone', { tiles: faces(TILES.glowstone, TILES.glowstone, TILES.glowstone), light: 15, hardness: 0.3, drops: 348, dropCount: 3 });
+def(NETHER_PORTAL, 'Nether Portal', {
+  solid: false, opaque: false, light: 11,
+  tiles: faces(TILES.portal, TILES.portal, TILES.portal),
+  hardness: 0.4, render: 'portal', drops: 0,
+  bounds: [0.0, 0.0, 0.375, 1.0, 1.0, 0.625],
+});
 def(JACK_O_LANTERN, "Jack o'Lantern", { tiles: faces(TILES.pumpkin_top, TILES.pumpkin_top, TILES.pumpkin_side, TILES.jack_o_lantern), light: 15, hardness: 1, tool: 'axe' });
 def(CAKE_BLOCK, 'Cake', {
   opaque: false, tiles: faces(TILES.cake_top, TILES.cake_bottom, TILES.cake_side),
@@ -269,6 +298,28 @@ def(CAKE_BLOCK, 'Cake', {
 });
 def(REDSTONE_REPEATER, 'Redstone Repeater', { solid: false, opaque: false, tiles: faces(TILES.repeater, TILES.repeater, TILES.repeater), hardness: 0, render: 'flat', drops: 356, bounds: [0, 0, 0, 1, 0.125, 1] });
 def(STONE_BRICK, 'Stone Bricks', { tiles: faces(TILES.stone_brick, TILES.stone_brick, TILES.stone_brick), hardness: 2, tool: 'pickaxe' });
+def(NETHER_BRICK, 'Nether Bricks', { tiles: faces(TILES.nether_brick, TILES.nether_brick, TILES.nether_brick), hardness: 2.0, tool: 'pickaxe' });
+def(NETHER_BRICK_FENCE, 'Nether Brick Fence', {
+  opaque: false, tiles: faces(TILES.nether_brick, TILES.nether_brick, TILES.nether_brick),
+  hardness: 2.0, tool: 'pickaxe', render: 'fence', bounds: [0.3125, 0, 0.3125, 0.6875, 1, 0.6875],
+});
+def(NETHER_BRICK_STAIRS, 'Nether Brick Stairs', {
+  opaque: false, tiles: faces(TILES.nether_brick, TILES.nether_brick, TILES.nether_brick),
+  hardness: 2.0, tool: 'pickaxe', render: 'stairs', bounds: [0, 0, 0, 1, 1, 1],
+});
+def(ENCHANTING_TABLE, 'Enchanting Table', {
+  opaque: false, light: 12,
+  tiles: faces(TILES.enchant_top, TILES.obsidian, TILES.enchant_side),
+  hardness: 5.0, tool: 'pickaxe', minTier: 0, render: 'slab', bounds: [0, 0, 0, 1, 0.75, 1],
+});
+def(QUARTZ_ORE, 'Nether Quartz Ore', {
+  tiles: faces(TILES.quartz_ore, TILES.quartz_ore, TILES.quartz_ore),
+  hardness: 3.0, tool: 'pickaxe', minTier: 0, drops: 406,
+});
+def(QUARTZ_BLOCK, 'Block of Quartz', {
+  tiles: faces(TILES.quartz_top, TILES.quartz_top, TILES.quartz_side),
+  hardness: 0.8, tool: 'pickaxe',
+});
 
 const WOOL_COLORS = [
   'white', 'orange', 'yellow', 'lime', 'green', 'cyan', 'lightblue', 'blue',
@@ -402,6 +453,14 @@ export const ITEMS = {
   360: { name: 'Melon', food: 2, saturation: 1.2 },
   367: { name: 'Rotten Flesh', food: 4, saturation: 0.8 },
   368: { name: 'Bone Meal' },
+  369: { name: 'Blaze Rod' },
+  370: { name: 'Ghast Tear' },
+  371: { name: 'Gold Nugget' },
+  377: { name: 'Blaze Powder' },
+  384: { name: "Bottle o' Enchanting", maxStack: 16, throwable: true },
+  403: { name: 'Enchanted Book', maxStack: 1 },
+  405: { name: 'Nether Brick' },
+  406: { name: 'Nether Quartz' },
 };
 
 export const ITEM_COAL = 263, ITEM_CHARCOAL_DYE = 263;
@@ -426,7 +485,7 @@ export function itemName(id) {
 
 // Mining: returns seconds to break with given held item (null = hand)
 // Beta values: dirt 0.75s by hand, stone 7.5s by hand, 1.15s w/ wooden pick.
-export function breakTime(blockId, heldId) {
+export function breakTime(blockId, heldId, enchants = null) {
   const b = getBlock(blockId);
   if (b.hardness < 0) return Infinity;
   if (b.hardness === 0) return 0;
@@ -437,9 +496,38 @@ export function breakTime(blockId, heldId) {
     if (it.tool === b.tool) speed = it.speed || 2;
     if (it.tool === 'sword' && blockId === COBWEB) speed = 15;
     if (it.tool === 'shears' && (blockId === LEAVES || blockId === COBWEB || (blockId >= WOOL_BASE && blockId < WOOL_BASE + 16))) speed = 5;
+    if (speed > 1 && enchants?.efficiency > 0) {
+      speed += enchants.efficiency * enchants.efficiency + 1;
+    }
   }
   const base = b.hardness * 1.5;
   return harvest ? Math.max(0.05, base / speed) : Math.max(0.05, base * 3.5 / speed);
+}
+
+// Local-space collision boxes [minX, minY, minZ, maxX, maxY, maxZ] for non-full solid shapes.
+const STAIR_BASE_BOX = [0, 0, 0, 1, 0.5, 1];
+const STAIR_TOP_BOXES = [
+  [0, 0.5, 0, 1, 1, 0.5], // meta 0: ascends toward -Z
+  [0, 0.5, 0.5, 1, 1, 1], // meta 1: ascends toward +Z
+  [0, 0.5, 0, 0.5, 1, 1], // meta 2: ascends toward -X
+  [0.5, 0.5, 0, 1, 1, 1], // meta 3: ascends toward +X
+];
+const FENCE_BOX = [0.3125, 0, 0.3125, 0.6875, 1.5, 0.6875];
+const FULL_CUBE_BOX = [0, 0, 0, 1, 1, 1];
+
+export function blockCollisionBoxes(blockId, meta = 0) {
+  const bd = getBlock(blockId);
+  if (!bd.solid) return null;
+  if (bd.render === 'stairs') {
+    return [STAIR_BASE_BOX, STAIR_TOP_BOXES[meta & 3]];
+  }
+  if (bd.render === 'fence') {
+    return [FENCE_BOX];
+  }
+  if (bd.bounds) {
+    return [bd.bounds];
+  }
+  return [FULL_CUBE_BOX];
 }
 
 // Beta 1.7.3: only pickaxe-tier blocks are tool-gated for drops.

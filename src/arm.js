@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { isBlock, getBlock, ITEMS, TILES, TORCH, REDSTONE_TORCH, GLOWSTONE, JACK_O_LANTERN } from './world/blocks.js';
 import { ITEM_ICON_INDEX } from './ui/ui.js';
+import { getFirstPersonArmTextures, skinLayout } from './entities/entity-textures.js';
 
 const TOOL_COLORS = {
   wood: 0x9c6b36,
@@ -104,25 +105,33 @@ export class FirstPersonArm {
 
   buildArmMesh() {
     const arm = new THREE.Group();
-    // Adjoining segments use one pixelated skin texture; their geometry does
-    // not overlap, preventing seams or z-fighting in the overlay pass.
-    let skinTexture = null;
-    if (typeof document !== 'undefined') {
-      const skin = document.createElement('canvas');
-      skin.width = skin.height = 16;
-      const ctx = skin.getContext('2d');
-      ctx.fillStyle = '#b98b76'; ctx.fillRect(0, 0, 16, 16);
-      for (const [x,y,w,h,c] of [[1,1,4,3,'#c79880'],[8,1,3,5,'#ac7c68'],[3,6,3,4,'#b2806c'],[11,9,4,4,'#c2937b'],[5,12,3,3,'#a87864']]) {
-        ctx.fillStyle = c; ctx.fillRect(x,y,w,h);
+    const armTex = getFirstPersonArmTextures();
+    const applySkinUVs = (geo, u, v, pw, ph, pd, tw, th) => {
+      const faces = skinLayout(u, v, pw, ph, pd);
+      const order = [faces.right, faces.left, faces.top, faces.bottom, faces.back, faces.front];
+      const uv = geo.getAttribute('uv');
+      const eps = 0.002;
+      for (let f = 0; f < 6; f++) {
+        const [x, y, rw, rh] = order[f];
+        const flipU = f === 0 || f === 5;
+        const uL = (x + eps) / tw, uR = (x + rw - eps) / tw;
+        const u0 = flipU ? uR : uL, u1 = flipU ? uL : uR;
+        const v1 = 1 - (y + eps) / th, v0 = 1 - (y + rh - eps) / th;
+        const base = f * 6;
+        for (let k = 0; k < 6; k++) {
+          const ou = uv.getX(base + k), ov = uv.getY(base + k);
+          uv.setXY(base + k, ou < 0.5 ? u0 : u1, ov < 0.5 ? v0 : v1);
+        }
       }
-      skinTexture = new THREE.CanvasTexture(skin);
-      skinTexture.magFilter = skinTexture.minFilter = THREE.NearestFilter;
-      skinTexture.generateMipmaps = false; skinTexture.colorSpace = THREE.SRGBColorSpace;
-    }
+      uv.needsUpdate = true;
+    };
     const sleeve = makeShadedBox(arm, 0.19, 0.22, 0.19, 0, -0.09, 0, 0xffffff);
     const cuff = makeShadedBox(arm, 0.192, 0.025, 0.192, 0, -0.1875, 0, 0xffffff);
     const hand = makeShadedBox(arm, 0.17, 0.33, 0.17, 0, -0.365, 0, 0xffffff);
-    for (const part of [sleeve, cuff, hand]) part.material.map = skinTexture;
+    applySkinUVs(sleeve.geometry, 0, 0, 4, 5, 4, 32, 32);
+    applySkinUVs(cuff.geometry, 0, 3, 4, 2, 4, 32, 32);
+    applySkinUVs(hand.geometry, 0, 12, 4, 8, 4, 32, 32);
+    for (const part of [sleeve, cuff, hand]) part.material.map = armTex;
     hand.name = 'hand';
     sleeve.name = 'sleeve';
     cuff.name = 'cuff';

@@ -381,7 +381,7 @@ for (const mode of ['survival', 'creative']) test(`Multiplayer ${mode}: names, c
       await expect(page.locator('#chest-screen')).toBeVisible();
       await page.locator('#chest-hotbar [data-inv="0"]').click();
       await page.locator('#chest-slots [data-chest="0"]').click();
-      expect(await page.evaluate(() => window.game.openChestData.slots[0])).toMatchObject({ id: 5, count: 3 });
+      await expect.poll(() => page.evaluate(() => window.game.openChestData.slots[0])).toMatchObject({ id: 5, count: 3 });
 
       await expect.poll(() => guest.evaluate(([x, y, z]) => window.game.world.getBlock(x, y + 1, z - 2), chest)).toBe(54);
       await guest.evaluate(([x, y, z]) => {
@@ -393,12 +393,12 @@ for (const mode of ['survival', 'creative']) test(`Multiplayer ${mode}: names, c
       }, chest);
       await expect.poll(() => guest.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(54);
       await guest.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true })));
-      await expect(guest.locator('#toast-msg')).toContainText(/host.*chest/i);
-      expect(await guest.evaluate(() => window.game.ui.mode)).toBe('game');
-      await guest.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true })));
-      await expect.poll(() => guest.evaluate(() => window.game.player.leftDown)).toBe(false);
-      expect(await page.evaluate(() => window.game.openChestData.slots[0])).toMatchObject({ id: 5, count: 3 });
-      expect(await page.evaluate(([x, y, z]) => window.game.world.getBlock(x, y + 1, z - 2), chest)).toBe(54);
+      await expect(guest.locator('#chest-screen')).toBeVisible();
+      await expect.poll(() => guest.evaluate(() => window.game.openChestData?.slots?.[0])).toMatchObject({ id: 5, count: 3 });
+      await guest.locator('#chest-slots [data-chest="0"]').click();
+      await expect.poll(() => page.evaluate(() => window.game.openChestData?.slots?.[0])).toBeNull();
+      await guest.locator('#chest-hotbar [data-inv="0"]').click();
+      await guest.keyboard.press('Escape');
       await page.keyboard.press('Escape');
     }
     await pause(guest);
@@ -411,9 +411,9 @@ for (const mode of ['survival', 'creative']) test(`Multiplayer ${mode}: names, c
   } finally { await guestContext.close(); }
 });
 
-test('Multiplayer guests cannot open or mine host-owned chests or furnaces', async ({ page }) => {
+test('Multiplayer guests can open shared chests, furnaces, and storage minecarts', async ({ page }) => {
   await title(page);
-  await newWorld(page, 'Storage safety');
+  await newWorld(page, 'Shared containers');
   await page.locator('#game-canvas').click({ position: { x: 400, y: 300 } });
   await expect.poll(() => page.evaluate(() => window.game.player.pointerLocked)).toBe(true);
   const target = await page.evaluate(() => {
@@ -427,67 +427,109 @@ test('Multiplayer guests cannot open or mine host-owned chests or furnaces', asy
     world.setBlock(x, y + 1, z - 1, 0);
     return [x, y + 1, z - 2];
   });
-  for (const id of [54, 61, 62]) {
-    await page.evaluate(([x, y, z, id]) => window.game.world.setBlock(x, y, z, id), [...target, id]);
-    await expect.poll(() => page.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(id);
-    await page.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true })));
-    await expect(page.locator('#toast-msg')).toContainText(/host.*(chest|furnace)/i);
-    expect(await page.evaluate(() => window.game.ui.mode)).toBe('game');
-    await page.evaluate(() => {
-      document.querySelector('#toast-msg').textContent = '';
-      document.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
-    });
-    await expect(page.locator('#toast-msg')).toContainText(/host.*(chest|furnace)/i, { timeout: 5000 });
-    expect(await page.evaluate(([x, y, z]) => window.game.world.getBlock(x, y, z), target)).toBe(id);
-    expect(await page.evaluate(() => window.game.player.leftDown)).toBe(false);
-  }
+  await page.evaluate(([x, y, z]) => window.game.world.setBlock(x, y, z, 54), target);
+  await expect.poll(() => page.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(54);
+  await page.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true })));
+  await expect(page.locator('#chest-screen')).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await page.evaluate(([x, y, z]) => {
+    window.game.player.pointerLocked = true;
+    window.game.world.setBlock(x, y, z, 61);
+  }, target);
+  await expect.poll(() => page.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(61);
+  await page.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true })));
+  await expect(page.locator('#furnace-screen')).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await page.evaluate(([x, y, z]) => {
+    const { player, world, vehicles } = window.game;
+    player.pointerLocked = true;
+    world.setBlock(x, y, z, 0);
+    vehicles.create('storage', x + 0.5, y, z + 0.5);
+  }, target);
+  await expect.poll(() => page.evaluate(() => window.game.vehicles.target(window.game.player)?.type)).toBe('storage');
+  await page.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true })));
+  await expect(page.locator('#chest-screen')).toBeVisible();
+  await page.keyboard.press('Escape');
 });
 
-test('Storage minecarts cannot be opened or destroyed in multiplayer', async ({ page }) => {
+test('XP progression, Enchanting Table, and Nether Portal travel work end-to-end', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', err => errors.push(String(err)));
   await title(page);
-  await newWorld(page, 'Cart safety');
+  await newWorld(page, 'Nether and Enchanting');
   await page.locator('#game-canvas').click({ position: { x: 400, y: 300 } });
   await expect.poll(() => page.evaluate(() => window.game.player.pointerLocked)).toBe(true);
+
   await page.evaluate(() => {
-    const { player, world, vehicles } = window.game;
+    const { player, world } = window.game;
+    player.addXp(900);
+    player.inventory[0] = { id: 278, count: 1, damage: 0 }; // Diamond Pickaxe
+    player.hotbarIndex = 0;
     const [x, y, z] = player.pos.toArray().map(Math.floor);
     player.pos.set(x + 0.5, y + 0.001, z + 0.5);
     player.vel.set(0, 0, 0);
     player.yaw = player.pitch = player.mouseDX = player.mouseDY = 0;
     world.setBlock(x, y - 1, z, 1);
-    for (const dz of [-1, -2]) for (const dy of [1, 2]) world.setBlock(x, y + dy, z + dz, 0);
-    vehicles.create('storage', x + 0.5, y + 1.1, z - 1.5);
+    world.setBlock(x, y + 1, z - 1, 0);
+    world.setBlock(x, y + 1, z - 2, 116); // Enchanting Table
+    world.setBlock(x - 2, y + 1, z - 2, 47); // Bookshelf
+    world.setBlock(x + 2, y + 1, z - 2, 47); // Bookshelf
   });
-  await expect.poll(() => page.evaluate(() => window.game.vehicles.target(window.game.player)?.type)).toBe('storage');
-  for (const role of ['host', 'guest']) {
-    await page.evaluate(role => { window.game.networkRoom = { role, players: [] }; }, role);
-    for (const button of [2, 0]) {
-      await page.evaluate(button => {
-        document.querySelector('#toast-msg').textContent = '';
-        document.dispatchEvent(new MouseEvent('mousedown', { button, bubbles: true }));
-      }, button);
-      await expect(page.locator('#toast-msg')).toContainText(/storage minecart.*multiplayer/i, { timeout: 5000 });
-      expect(await page.evaluate(() => window.game.ui.mode)).toBe('game');
-      expect(await page.evaluate(() => window.game.vehicles.vehicles.filter(v => v.type === 'storage').length)).toBe(1);
-    }
-  }
-  await page.evaluate(() => {
-    const { player, world, vehicles } = window.game;
-    vehicles.remove(vehicles.vehicles.find(v => v.type === 'storage'));
-    const [x, y, z] = player.pos.toArray().map(Math.floor);
-    world.setBlock(x, y, z - 2, 1);
-    world.setBlock(x, y + 1, z - 2, 66);
-    player.yaw = player.mouseDX = player.mouseDY = 0;
-    player.pitch = -0.35;
-    player.inventory[0] = { id: 342, count: 1, damage: 0 };
-    player.hotbarIndex = 0;
-    document.querySelector('#toast-msg').textContent = '';
-  });
-  await expect.poll(() => page.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(66);
+  await expect.poll(() => page.evaluate(() => window.game.player.xpLevel)).toBeGreaterThanOrEqual(30);
+  await expect(page.locator('#xp-bar-wrap')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(116);
   await page.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true })));
-  await expect(page.locator('#toast-msg')).toContainText(/storage minecart.*multiplayer/i, { timeout: 5000 });
-  expect(await page.evaluate(() => window.game.player.heldStack?.count)).toBe(1);
-  expect(await page.evaluate(() => window.game.vehicles.vehicles.filter(v => v.type === 'storage').length)).toBe(0);
+  await expect(page.locator('#enchant-screen')).toBeVisible();
+
+  await page.locator('#ench-inv-hotbar [data-inv="0"]').click();
+  await page.locator('#enchant-item-slot').click();
+  await expect(page.locator('#enchant-offers .enchant-offer-btn:not([disabled])').first()).toBeVisible();
+  await page.locator('#enchant-offers .enchant-offer-btn:not([disabled])').first().click();
+  expect(await page.evaluate(() => Boolean(window.game.ui.enchantItem?.enchants))).toBe(true);
+  await page.keyboard.press('Escape');
+  expect(await page.evaluate(() => Boolean(window.game.player.inventory[0]?.enchants))).toBe(true);
+
+  // Build & ignite a 4x5 Obsidian Nether Portal and step inside to enter The Nether
+  await page.evaluate(() => {
+    const { player, world } = window.game;
+    player.pointerLocked = true;
+    const [x, y, z] = player.pos.toArray().map(Math.floor);
+    const pz = z - 3;
+    for (let dz = -2; dz <= 0; dz++) {
+      for (let dy = 0; dy <= 3; dy++) world.setBlock(x, y + dy, z + dz, 0);
+    }
+    world.setBlock(x, y - 1, z, 1);
+    for (let dx = -1; dx <= 2; dx++) {
+      for (let dy = 0; dy <= 4; dy++) {
+        const edge = dx === -1 || dx === 2 || dy === 0 || dy === 4;
+        world.setBlock(x + dx, y + dy, pz, edge ? 49 : 0);
+      }
+    }
+    player.inventory[1] = { id: 259, count: 1, damage: 0 }; // Flint and Steel
+    player.hotbarIndex = 1;
+    player.pos.set(x + 0.5, y + 0.001, z + 0.5);
+    player.yaw = 0;
+    player.pitch = -0.45;
+  });
+  await expect.poll(() => page.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(49);
+  await page.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true })));
+  await expect.poll(() => page.evaluate(() => {
+    const [x, y, z] = window.game.player.pos.toArray().map(Math.floor);
+    return window.game.world.getBlock(x, y + 1, z - 3);
+  })).toBe(90);
+
+  // Step into the lit portal and fast-advance portal timer to travel to the Nether
+  await page.evaluate(() => {
+    const { player } = window.game;
+    const [x, y, z] = player.pos.toArray().map(Math.floor);
+    player.pos.set(x + 0.5, y + 1.01, z - 2.5);
+    player.portalCooldown = 0;
+    player.portalTime = 2.65;
+  });
+  await expect.poll(() => page.evaluate(() => window.game.world.dimension), { timeout: 10000 }).toBe('nether');
+  expect(errors).toEqual([]);
 });
 
 test('WebGL startup failure presents a reload action that can recover', async ({ page }) => {

@@ -1,6 +1,6 @@
 export const MAX_MESSAGE = 1024 * 1024;
 const MAX_SMALL_MESSAGE = 64 * 1024;
-const LARGE_MESSAGE_TYPES = new Set(['room:create', 'world:snapshot', 'game:state', 'item:snapshot']);
+const LARGE_MESSAGE_TYPES = new Set(['room:create', 'world:snapshot', 'container:snapshot', 'game:state', 'item:snapshot']);
 
 export function parseRelayMessage(text) {
   try {

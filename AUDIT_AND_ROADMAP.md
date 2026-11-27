@@ -1,8 +1,8 @@
 # AiSlopcraft audit and roadmap
 
-**Release-pass snapshot:** 2026-11-24 · v1.0.2 · [PR #30](https://github.com/Skid-ster/AiSlopcraft/pull/30)
+**Release-pass snapshot:** 2026-11-26 · v1.1.0 (`arena/b2755a2d-aislopcraft`)
 
-AiSlopcraft remains a procedural browser game: Beta survival/creative is local, Classic creative can also use the no-account room relay. There are at most five rooms and five players per room per process. GitHub Pages serves static singleplayer; Render (primary) and Azure can serve the built app plus same-origin `/ws` from one instance. `dist/` is generated, not committed. Node 22 is the only supported major.
+AiSlopcraft is a procedural browser sandbox with singleplayer and up-to-5-player relay multiplayer across Survival, Creative, and legacy Classic worlds. There are at most five rooms and five players per room per process. GitHub Pages serves static singleplayer; Render (primary) and Azure can serve the built app plus same-origin `/ws` from one instance. `dist/` is generated, not committed. Node 22 is the only supported major.
 
 ## Phase 0 — portability, authority, and release hygiene
 
@@ -32,6 +32,14 @@ AiSlopcraft remains a procedural browser game: Beta survival/creative is local, 
 - [x] Extract local save storage, seeded world/spawn loading, and touch input in separate regression-tested commits. The remaining UI and main loop still own orchestration; they were not rewritten.
 - [x] Add a seeded reference scene, CPU chunk/lighting/mesh budget, and repeatable [frame, shadow, and PSX measurements](docs/performance.md).
 - [ ] Repeat the reference profile on lower-end hardware and physical phones. Expand conservation/property tests and audit detailed Beta-era parity without advertising an exact recreation.
+
+## Phase 4 — core resilience, shared multiplayer containers, enchanting, Nether, and entity art (v1.1.0)
+
+- [x] **Storage & runtime resilience:** Centralize browser `localStorage` access in `src/storage.js` with safe in-memory fallback when storage is denied or quota-limited. Harden WebSocket backpressure dropping for transient state updates and expand mob snapshot capacity (`MAX_MOBS_SNAPSHOT = 64`). Fix touch control bindings so custom key remaps flow to touch controls dynamically.
+- [x] **Shared multiplayer containers & reconnect:** Add atomic `container:tx` (`click`, `take`, `insert`), `container:snapshot`, `container:state`, and `container:remove` across **chests**, **furnaces** (ticked server-side every 250 ms across Overworld & Nether with `FURNACE_LIT` updates and stored smelting XP), and **storage minecarts**, spilling items via `srv:` drops when broken. Add token-authenticated `session:resume` with client auto-reconnect backoff.
+- [x] **1.7.10 XP & Enchanting:** Implement XP orbs, level curve, HUD XP bar, ore/smelting/mob XP drops, Bottle o' Enchanting, Enchanted Books, bookshelf power scanning (0–15), deterministic 3-slot Enchanting Table offers, and 19 classic enchantments affecting mining speed, Silk Touch, Fortune, Unbreaking, melee/ranged combat, Looting, and armor damage mitigation.
+- [x] **The Nether (`nether-v1`) & Portals:** Add deterministic 128-block Nether caverns, `y<=31` lava seas, Soul Sand basins, Glowstone clusters, Nether Quartz veins, and Nether Fortresses (`NETHER_BRICK`, stairs, and fences). Support Obsidian portal validation/ignition, flood collapse, 1:8 / 8:1 coordinate travel, crimson Nether sky/fog, water evaporation, explosive Nether beds, and v2 multi-dimension world saves.
+- [x] **Entity & asset pixel-art overhaul:** Replace flat-colored entity boxes with pure-JS RGBA `THREE.DataTexture` (`NearestFilter`) non-overlapping UV skin sheets (`src/entities/entity-textures.js`) across all 11 Overworld/Nether mobs, 6 player outfits & remote avatars, inventory 3D character preview, first-person arm, boats/minecarts, projectiles/XP orbs, and new block/item sprites.
 
 ## Verification evidence
 

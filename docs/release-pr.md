@@ -1,21 +1,15 @@
-# AiSlopcraft v1.0.2 — Render readiness and browser reliability
+# AiSlopcraft v1.1.0 — Shared Multiplayer Containers, XP & Enchanting, The Nether, and Entity Pixel Art
 
-**Base:** `main` · **Head:** `production-readiness` · [PR #30](https://github.com/Skid-ster/AiSlopcraft/pull/30)
+**Base:** `main` · **Head:** `arena/b2755a2d-aislopcraft`
 
 ## Summary
 
-- Make the Windows test suite portable without removing symlink protection. Add a relay authority matrix and enforce room/entity permissions and payload boundaries.
-- Run the built game in Chromium and exercise Beta gameplay, portable saves, emulated touch, and a separate-browser Classic multiplayer lobby. Keep unsaved progress available when browser storage is full and let WebGL recover without simulating blind.
-- Fix black grass and leaves caused by the Classic mesher using Beta-only climate inputs. Verify daylight grass pixels using both the Classic and PSX presets.
-- Extract save storage, spawn/load logic, and touch input separately. Add a repeatable CPU and browser performance profile. Preserve the single-instance Render Blueprint, Azure compatibility, and static Pages build.
-- Keep first-party rights reserved and preserve the upstream PSX attribution as published.
+- **Audit & Core Resilience:** Centralize safe browser storage handling (`src/storage.js`) so blocked/quota-exhausted storage never crashes startup, saves, settings, or texture packs. Add transient WebSocket backpressure dropping, raise shared mob snapshot capacity to 64, orient stairs and chests on placement, and make touch control bindings update dynamically when keys are remapped.
+- **Full Multiplayer Container Sync & Reconnect:** Replace host-only container restrictions with authoritative relay transactions (`container:tx`, `container:snapshot`, `container:state`, `container:remove`) across **chests**, **furnaces** (ticked server-side across Overworld and Nether with `FURNACE_LIT` updates and smelting XP), and **storage minecarts**, spilling items when broken. Add token-based `session:resume` with automatic client reconnect backoff.
+- **1.7.10 XP & Enchanting System:** Add glowing XP orbs, 1.7.10 level curve and HUD XP bar, Enchanting Table (`116`), Enchanted Books (`403`), Bottle o' Enchanting (`384`), bookshelf power ring (`0..15`), deterministic 3-slot offers, and 19 classic enchantments (Efficiency, Unbreaking, Fortune, Silk Touch, Sharpness, Smite, Bane of Arthropods, Knockback, Fire Aspect, Looting, Power, Punch, Flame, Infinity, Protection, Fire/Blast/Projectile Protection, Feather Falling).
+- **The Nether (`nether-v1`) & Portals:** Add deterministic 128-block Nether generation (bedrock ceiling/floor, `y<=31` lava seas, Soul Sand basins, Glowstone clusters, Nether Quartz veins, and Nether Fortresses with Nether Brick, Fences, and Stairs), Obsidian portal frame ignition/collapse and 1:8 / 8:1 travel, crimson Nether sky/fog, water evaporation, explosive Nether beds, Zombie Pigmen, Ghasts (with deflectable fireballs), Blazes, and v2 multi-dimension saves.
+- **Entity & Asset Pixel-Art Overhaul:** Build a pure-JS RGBA `THREE.DataTexture` (`NearestFilter`) pixel-art skin and non-overlapping UV cuboid system (`src/entities/entity-textures.js`) across all 11 Overworld/Nether mobs, 6 player outfits & remote avatars, inventory character preview, first-person arm, boats/minecarts, projectiles, and block/item atlases with emissive glow maps.
 
 ## Verification
 
-Node 22 on Windows passed the clean install, unit/jsdom suite, production build and smoke, CPU budget, all seven Chromium cases, and dependency audit (zero findings). Details: [roadmap](../AUDIT_AND_ROADMAP.md) and [performance notes](performance.md). GitHub Actions is configured for the Linux release gate and the Windows Node suite. The [existing Render deployment](https://aislopcraft-online.onrender.com/) also passed live smoke, but it is not yet serving the v1.0.2 branch.
-
-## External steps
-
-The repository About section now points to **https://aislopcraft-online.onrender.com/** and lists the voxel, browser-game, sandbox, Three.js, WebGL, and multiplayer topics.
-
-After CI passes and the PR is merged, deploy the merged commit to the existing one-instance Render service and rerun `BASE_URL=https://aislopcraft-online.onrender.com npm run smoke:deploy`. Publish a GitHub release at `v1.0.2` on the merged commit without moving `v1.0.1`. Do not infer a trusted proxy hop count from a successful smoke. Full authority, durable rooms, and live-host proxy/restart checks are not provided by this PR.
+Node 22 passed the full 27-file unit/integration suite (`npm test`), Vite production build (`npm run build`), built-server HTTP/WebSocket deployment smoke (`npm run smoke:production`), CPU generation/lighting/meshing budgets across Classic, Overworld, and Nether (`npm run smoke:perf`), and `npm audit --audit-level=low` (0 vulnerabilities). GitHub Actions runs the full Linux release gate (including Playwright Chromium E2E) and Windows test suite on PR.

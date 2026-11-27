@@ -1,6 +1,7 @@
 // Small deterministic furnace simulation, separated for headless regression tests.
-import { itemStackLimit, LOG, PLANKS, SAPLING, CHEST, WOOD_DOOR, LADDER } from '../world/blocks.js';
+import { itemStackLimit, LOG, PLANKS, SAPLING, CHEST, WOOD_DOOR, LADDER, OAK_STAIRS, FENCE } from '../world/blocks.js';
 import { smeltResult } from './recipes.js';
+import { sameEnchants } from '../enchanting.js';
 
 export const FUEL_TIMES = Object.freeze({
   [LOG]: 15,
@@ -9,17 +10,34 @@ export const FUEL_TIMES = Object.freeze({
   [CHEST]: 15,
   [WOOD_DOOR]: 10,
   [LADDER]: 15,
+  [OAK_STAIRS]: 15,
+  [FENCE]: 15,
   280: 5,    // stick
   281: 5,    // wooden bowl
   263: 80,   // coal / charcoal
   327: 1000, // lava bucket
+  369: 120,  // blaze rod
   47: 15,    // bookshelf
   58: 15,    // crafting table
   268: 10, 269: 10, 270: 10, 271: 10, 290: 10, // wooden tools
 });
 
+export const SMELT_XP = Object.freeze({
+  264: 1.0,  // diamond
+  266: 1.0,  // gold ingot
+  265: 0.7,  // iron ingot
+  320: 0.35, // cooked porkchop
+  350: 0.35, // cooked fish
+  336: 0.3,  // brick
+  406: 0.2,  // nether quartz
+  405: 0.1,  // nether brick
+  263: 0.15, // charcoal / coal
+  20: 0.1,   // glass
+  1: 0.1,    // stone
+});
+
 export function createFurnaceState() {
-  return { input: null, output: null, fuel: null, burn: 0, burnMax: 0, cook: 0, soundTimer: 0 };
+  return { input: null, output: null, fuel: null, burn: 0, burnMax: 0, cook: 0, storedXp: 0, soundTimer: 0 };
 }
 
 export function furnaceStackLimit(stack) {
@@ -27,23 +45,31 @@ export function furnaceStackLimit(stack) {
 }
 
 function canMergeStacks(a, b) {
-  return !!a && !!b && a.id === b.id && (a.damage || 0) === (b.damage || 0) && furnaceStackLimit(a) > 1;
+  return !!a && !!b && a.id === b.id && (a.damage || 0) === (b.damage || 0)
+    && sameEnchants(a.enchants, b.enchants) && furnaceStackLimit(a) > 1;
 }
 
 export function interactWithFurnaceSlot(furnace, slot, cursorStack, button = 0) {
-  if (!furnace || !['input', 'fuel', 'output'].includes(slot)) return { cursorStack, changed: false };
+  if (!furnace || !['input', 'fuel', 'output'].includes(slot)) return { cursorStack, changed: false, xpEarned: 0 };
   const source = furnace[slot];
   const rightClick = button === 2;
   let changed = false;
+  let xpEarned = 0;
 
   if (slot === 'output') {
-    if (!source) return { cursorStack, changed };
+    if (!source) return { cursorStack, changed, xpEarned };
     if (!cursorStack) {
       const amount = rightClick ? 1 : source.count;
       cursorStack = { ...source, count: amount };
       source.count -= amount;
       if (source.count <= 0) furnace.output = null;
       changed = true;
+      if (furnace.storedXp > 0) {
+        const whole = Math.floor(furnace.storedXp);
+        const frac = furnace.storedXp - whole;
+        xpEarned = whole + (Math.random() < frac ? 1 : 0);
+        furnace.storedXp = 0;
+      }
     } else if (canMergeStacks(cursorStack, source)) {
       const amount = Math.min(rightClick ? 1 : source.count, furnaceStackLimit(cursorStack) - cursorStack.count);
       if (amount > 0) {
@@ -51,6 +77,12 @@ export function interactWithFurnaceSlot(furnace, slot, cursorStack, button = 0) 
         source.count -= amount;
         if (source.count <= 0) furnace.output = null;
         changed = true;
+        if (furnace.storedXp > 0) {
+          const whole = Math.floor(furnace.storedXp);
+          const frac = furnace.storedXp - whole;
+          xpEarned = whole + (Math.random() < frac ? 1 : 0);
+          furnace.storedXp = 0;
+        }
       }
     }
   } else if (!cursorStack && source) {
@@ -79,7 +111,7 @@ export function interactWithFurnaceSlot(furnace, slot, cursorStack, button = 0) 
     changed = true;
   }
 
-  return { cursorStack, changed };
+      return { cursorStack, changed, xpEarned };
 }
 
 function getSmeltableResult(furnace) {
@@ -120,6 +152,7 @@ export function tickFurnace(furnace, dt) {
         furnace.cook = Math.max(0, furnace.cook - 6);
         if (furnace.output) furnace.output.count++;
         else furnace.output = { id: result, count: 1, damage: 0 };
+        furnace.storedXp = (furnace.storedXp || 0) + (SMELT_XP[result] || 0.1);
         furnace.input.count--;
         cooked++;
         if (furnace.input.count <= 0) furnace.input = null;

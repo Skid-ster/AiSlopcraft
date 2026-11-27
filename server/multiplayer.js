@@ -13,7 +13,12 @@
  *                                        shared proxy address would count as one client)
  */
 import { createServer } from 'node:http';
-import { OVERWORLD_TERRAIN, worldHeight } from '../src/world/world-profile.js';
+import { OVERWORLD_TERRAIN, NETHER_TERRAIN, worldHeight } from '../src/world/world-profile.js';
+import { itemStackLimit } from '../src/world/blocks.js';
+import { createFurnaceState, interactWithFurnaceSlot, tickFurnace, FUEL_TIMES } from '../src/ui/furnace.js';
+import { smeltResult } from '../src/ui/recipes.js';
+import { cleanStack } from '../src/save.js';
+import { normalizeEnchants, sameEnchants } from '../src/enchanting.js';
 import { createReadStream, realpathSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
@@ -61,6 +66,9 @@ const MAX_COMPRESS_CACHE_BYTES = 32 * 1024 * 1024;
 const MAX_ROOMS = 5;
 const MAX_PLAYERS = 5;
 const MAX_EDITS = 50_000;
+const MAX_CONTAINERS = 4_096;
+const MAX_MOBS_SNAPSHOT = 64;
+const SOFT_SOCKET_BUFFER_BYTES = 512 * 1024;
 const MAX_SOCKET_BUFFER_BYTES = 4 * 1024 * 1024;
 const MESSAGE_RATE_LIMIT = 600; // messages per second per socket before the socket is dropped
 // Memory guard only. Set above MESSAGE_RATE_LIMIT because ws delivers every frame of a TCP chunk
@@ -101,9 +109,104 @@ const safeDirection = value => Array.isArray(value) && value.length === 2
   && DIRECTIONS.some(([x, z]) => x === value[0] && z === value[1]);
 
 const validRoomBlockEdit = (room, x, y, z, id, meta) => [x, y, z, id, meta].every(Number.isInteger)
-  && y >= 0 && y < worldHeight(room.edition, room.terrain) && id >= 0 && id <= 255 && meta >= 0 && meta <= 255
+  && y >= 0 && y < worldHeight(room.edition, room.dimension === 'nether' ? NETHER_TERRAIN : room.terrain, room.dimension || 'overworld')
+  && id >= 0 && id <= 255 && meta >= 0 && meta <= 255
   && Math.abs(x) <= COORD_LIMIT && Math.abs(z) <= COORD_LIMIT
   && (room.edition !== 'classic' || (x >= -128 && x <= 127 && z >= -128 && z <= 127));
+
+const validContainerCoordKey = (room, key) => {
+  if (typeof key !== 'string' || !/^-?\d{1,9},\d{1,3},-?\d{1,9}$/.test(key)) return false;
+  const [x, y, z] = key.split(',').map(Number);
+  return validRoomBlockEdit(room, x, y, z, 0, 0);
+};
+
+function canStackMerge(a, b) {
+  return !!a && !!b && a.id === b.id && (a.damage || 0) === (b.damage || 0)
+    && sameEnchants(a.enchants, b.enchants) && itemStackLimit(a.id) > 1;
+}
+
+function interactWithSlotArray(slots, index, cursorStack, button = 0) {
+  if (!Array.isArray(slots) || !Number.isInteger(index) || index < 0 || index >= slots.length) {
+    return { cursorStack, changed: false };
+  }
+  const source = slots[index];
+  const rightClick = button === 2;
+  let changed = false;
+
+  if (!cursorStack && source) {
+    const amount = rightClick ? Math.ceil(source.count / 2) : source.count;
+    cursorStack = { ...source, count: amount };
+    source.count -= amount;
+    if (source.count <= 0) slots[index] = null;
+    changed = true;
+  } else if (cursorStack && !source) {
+    const amount = rightClick ? 1 : Math.min(itemStackLimit(cursorStack.id), cursorStack.count);
+    slots[index] = { ...cursorStack, count: amount };
+    cursorStack.count -= amount;
+    if (cursorStack.count <= 0) cursorStack = null;
+    changed = true;
+  } else if (cursorStack && source && canStackMerge(cursorStack, source)) {
+    const limit = itemStackLimit(source.id);
+    const amount = Math.min(rightClick ? 1 : cursorStack.count, limit - source.count);
+    if (amount > 0) {
+      source.count += amount;
+      cursorStack.count -= amount;
+      if (cursorStack.count <= 0) cursorStack = null;
+      changed = true;
+    }
+  } else if (cursorStack && source && !rightClick) {
+    slots[index] = cursorStack;
+    cursorStack = source;
+    changed = true;
+  }
+  return { cursorStack, changed };
+}
+
+function insertIntoSlotArray(slots, incoming) {
+  let rem = cleanStack(incoming);
+  if (!rem) return { remainder: null, changed: false };
+  const limit = itemStackLimit(rem.id);
+  let changed = false;
+  if (limit > 1) {
+    for (let i = 0; i < slots.length && rem.count > 0; i++) {
+      const s = slots[i];
+      if (!s || !canStackMerge(s, rem) || s.count >= limit) continue;
+      const move = Math.min(limit - s.count, rem.count);
+      s.count += move;
+      rem.count -= move;
+      changed = true;
+    }
+  }
+  for (let i = 0; i < slots.length && rem.count > 0; i++) {
+    if (slots[i]) continue;
+    const move = Math.min(limit, rem.count);
+    slots[i] = { ...rem, count: move };
+    rem.count -= move;
+    changed = true;
+  }
+  return { remainder: rem.count > 0 ? rem : null, changed };
+}
+
+function insertIntoFurnace(furnace, incoming) {
+  let rem = cleanStack(incoming);
+  if (!rem) return { remainder: null, changed: false };
+  const targetSlot = smeltResult(rem.id) != null ? 'input' : (FUEL_TIMES[rem.id] ? 'fuel' : 'input');
+  const existing = furnace[targetSlot];
+  const limit = itemStackLimit(rem.id);
+  if (!existing) {
+    const move = Math.min(limit, rem.count);
+    furnace[targetSlot] = { ...rem, count: move };
+    rem.count -= move;
+    return { remainder: rem.count > 0 ? rem : null, changed: true };
+  }
+  if (canStackMerge(existing, rem) && existing.count < limit) {
+    const move = Math.min(limit - existing.count, rem.count);
+    existing.count += move;
+    rem.count -= move;
+    return { remainder: rem.count > 0 ? rem : null, changed: true };
+  }
+  return { remainder: rem, changed: false };
+}
 
 function envInt(name, fallback) {
   const value = Number.parseInt(process.env[name] ?? '', 10);
@@ -150,21 +253,29 @@ function sanitizeVisualSettings(value) {
 function sanitizeItem(source, uid = source?.uid, sourceIdLimit = 120) {
   if (!validEntityId(source?.uid, sourceIdLimit)) return null;
   if (!isInt(source.id, 0, 4095) || !isInt(source.count, 1, 999) || !isVec3(source.pos)) return null;
+  const enchants = normalizeEnchants(source.enchants);
   return {
     uid, id: source.id, count: source.count,
     damage: Number.isInteger(source.damage) ? Math.min(65_535, Math.max(0, source.damage)) : 0,
+    ...(enchants ? { enchants } : {}),
     pos: [...source.pos], vy: clamp(source.vy, -80, 80, 0), age: clamp(source.age, 0, 300, 0),
   };
 }
+
+const PROJECTILE_KINDS = new Set(['arrow', 'snowball', 'egg', 'xp_bottle', 'fireball', 'ghast_fireball', 'blaze_bolt']);
 
 function sanitizeProjectile(shot, isHost) {
   if (!validEntityId(shot?.uid, 100) || !['player', 'mob'].includes(shot.owner)) return null;
   if (!isVec3(shot.pos) || !isVec3(shot.vel, 80)) return null;
   if (shot.owner === 'mob' && !isHost) return null; // mobs are host-simulated
+  const kind = PROJECTILE_KINDS.has(shot.kind) ? shot.kind : 'arrow';
   return {
-    uid: shot.uid, owner: shot.owner, pos: [...shot.pos], vel: [...shot.vel], age: clamp(shot.age, 0, 6, 0),
+    uid: shot.uid, owner: shot.owner, kind,
+    pos: [...shot.pos], vel: [...shot.vel], age: clamp(shot.age, 0, 8, 0),
     targetId: typeof shot.targetId === 'string' ? shot.targetId.slice(0, 80) : null,
-    damage: clamp(shot.damage, 0, 40, 2),
+    damage: clamp(shot.damage, 0, 60, 2),
+    ...(shot.flame ? { flame: true } : {}),
+    ...(Number.isInteger(shot.punch) && shot.punch > 0 ? { punch: Math.min(2, shot.punch) } : {}),
   };
 }
 const publicProjectile = ({ sourceId, lastUpdate, ...shot }) => shot;
@@ -217,18 +328,21 @@ function closeSocket(socket, code, reason) {
   socket.once('close', () => clearTimeout(timer));
 }
 
-function sendEncoded(socket, payload, { force = false } = {}) {
+function sendEncoded(socket, payload, { force = false, transient = false } = {}) {
   if (socket.readyState !== WebSocket.OPEN) return;
+  if (!force && transient && socket.bufferedAmount > SOFT_SOCKET_BUFFER_BYTES) return;
   if (!force && socket.bufferedAmount > MAX_SOCKET_BUFFER_BYTES) {
     closeSocket(socket, 1013, 'Connection too slow; please rejoin.');
     return;
   }
   try { socket.send(payload); } catch { /* socket is closing */ }
 }
-const send = (socket, message) => sendEncoded(socket, JSON.stringify(message));
+const TRANSIENT_TYPES = new Set(['player:state', 'mob:snapshot', 'projectile:update']);
+const send = (socket, message) => sendEncoded(socket, JSON.stringify(message), { transient: TRANSIENT_TYPES.has(message?.type) });
 function broadcast(peers, message, exclude = null) {
   const payload = JSON.stringify(message); // encode once for every recipient
-  for (const peer of peers) if (peer !== exclude) sendEncoded(peer, payload);
+  const transient = TRANSIENT_TYPES.has(message?.type);
+  for (const peer of peers) if (peer !== exclude) sendEncoded(peer, payload, { transient });
 }
 
 function allowRate(socket, key, limit, windowMs) {
@@ -477,6 +591,7 @@ export function createMultiplayerServer({
   maxConnections = envInt('AISLOPCRAFT_MAX_CONNECTIONS', 200),
   maxConnectionsPerAddress = envInt('AISLOPCRAFT_MAX_CONNECTIONS_PER_IP', 0),
   allowedOrigins = String(process.env.AISLOPCRAFT_ALLOWED_ORIGINS || '').split(','),
+  resumeGraceMs = 15_000,
 } = {}) {
   const startedAt = Date.now();
   const rooms = new Map();
@@ -573,20 +688,34 @@ export function createMultiplayerServer({
   }
 
   const roomSummary = room => ({
-    code: room.code, name: room.name, players: room.clients.size, maxPlayers, seed: room.seed,
-    edition: room.edition || 'beta', ...(room.terrain ? { terrain: room.terrain } : {}), gameMode: room.gameMode, access: room.access, passwordProtected: Boolean(room.password), visualMode: room.visuals?.mode || 'individual',
+    code: room.code, name: room.name, players: room.clients.size + (room.suspended?.size || 0), maxPlayers, seed: room.seed,
+    edition: room.edition || 'beta', ...(room.terrain ? { terrain: room.terrain } : {}),
+    dimension: room.dimension || 'overworld',
+    gameMode: room.gameMode, access: room.access, passwordProtected: Boolean(room.password), visualMode: room.visuals?.mode || 'individual',
   });
 
   function resetRoomState(socket) {
     socket.room = null;
+    socket.resumeToken = null;
     socket.lastState = null; // never reuse a position from a previous room
     socket.vehicleTimes.clear();
     socket.projectileTimes.clear();
   }
 
+  function clearSuspended(room) {
+    if (!room.suspended) return;
+    for (const entry of room.suspended.values()) {
+      clearTimeout(entry.timer);
+      const nameKey = entry.playerName?.toLowerCase();
+      if (nameKey && claimedNames.get(nameKey)?.token === entry.token) claimedNames.delete(nameKey);
+    }
+    room.suspended.clear();
+  }
+
   /** Tears a room down. `keep` stays connected (host-initiated close); everyone else is disconnected. */
   function closeRoom(room, reason, closeReason, keep = null) {
     rooms.delete(room.code);
+    clearSuspended(room);
     for (const peer of room.clients) {
       send(peer, { type: 'room:closed', reason });
       resetRoomState(peer);
@@ -595,15 +724,8 @@ export function createMultiplayerServer({
     room.clients.clear();
   }
 
-  function leave(socket, announce = true) {
-    const room = socket.room;
-    if (!room) return;
-    const wasHost = room.host === socket;
-    const clientId = socket.clientId;
-    room.clients.delete(socket);
-    resetRoomState(socket);
-    if (!wasHost && clientId) {
-      // Hand the leaver's vehicles to the host and drop their projectiles.
+  function finalizePlayerDeparture(room, clientId, playerName, wasHost, announce = true) {
+    if (!wasHost && clientId && room.host) {
       for (const record of room.vehicles.values()) {
         if (record.owner !== clientId) continue;
         record.riding = false;
@@ -616,39 +738,98 @@ export function createMultiplayerServer({
         broadcast(room.clients, { type: 'projectile:remove', uid });
       }
     }
-    if (announce && room.clients.size) broadcast(room.clients, { type: 'player:left', id: clientId, name: socket.playerName });
-    if (!room.clients.size || wasHost) closeRoom(room, 'The host left.', 'Host left');
+    if (announce && room.clients.size) broadcast(room.clients, { type: 'player:left', id: clientId, name: playerName });
+    if ((!room.clients.size && !(room.suspended?.size)) || wasHost) closeRoom(room, 'The host left.', 'Host left');
   }
 
-  function join(socket, room, name, requestId) {
+  function leave(socket, announce = true) {
+    const room = socket.room;
+    if (!room) return;
+    const wasHost = room.host === socket;
+    const clientId = socket.clientId;
+    const playerName = socket.playerName;
+    room.clients.delete(socket);
+    resetRoomState(socket);
+    finalizePlayerDeparture(room, clientId, playerName, wasHost, announce);
+  }
+
+  function suspendSocket(socket) {
+    const room = socket.room;
+    const token = socket.resumeToken;
+    if (!room || !token || !rooms.has(room.code) || resumeGraceMs <= 0) {
+      leave(socket);
+      releaseName(socket);
+      return;
+    }
+    const wasHost = room.host === socket;
+    const clientId = socket.clientId;
+    const playerName = socket.playerName;
+    const lastState = socket.lastState;
+    room.clients.delete(socket);
+    resetRoomState(socket);
+    socket.playerName = null;
+
+    const entry = {
+      token, clientId, playerName, wasHost, lastState,
+      timer: setTimeout(() => {
+        room.suspended.delete(token);
+        const key = playerName.toLowerCase();
+        if (claimedNames.get(key)?.token === token) {
+          claimedNames.delete(key);
+          broadcastOnlinePlayers();
+        }
+        if (rooms.has(room.code)) {
+          finalizePlayerDeparture(room, clientId, playerName, wasHost, true);
+        }
+      }, resumeGraceMs),
+    };
+    entry.timer.unref?.();
+    room.suspended.set(token, entry);
+    claimedNames.set(playerName.toLowerCase(), { suspended: true, token, playerName });
+  }
+
+  function pushFullRoomState(socket, room) {
+    const push = message => sendEncoded(socket, JSON.stringify(message), { force: true });
+    const edits = [...room.edits.entries()];
+    for (let index = 0; index < edits.length; index += 160) {
+      push({ type: 'world:snapshot', dimension: room.dimension, entries: edits.slice(index, index + 160), done: index + 160 >= edits.length });
+    }
+    if (!edits.length) push({ type: 'world:snapshot', dimension: room.dimension, entries: [], done: true });
+    push({
+      type: 'container:snapshot',
+      dimension: room.dimension,
+      chests: [...room.chests.entries()],
+      furnaces: [...room.furnaces.entries()],
+    });
+    push({ type: 'item:snapshot', items: [...room.items.values()], done: true });
+    if (room.gameState) push({ type: 'game:state', state: room.gameState });
+    push({ type: 'mob:snapshot', mobs: room.mobs });
+    push({ type: 'vehicle:snapshot', vehicles: [...room.vehicles.values()] });
+    push({ type: 'projectile:snapshot', projectiles: [...room.projectiles.values()].map(publicProjectile) });
+  }
+
+  function join(socket, room, name, requestId, wantResume = false) {
     if (socket.room === room) return fail(socket, requestId, 'You are already in that room.');
-    if (room.clients.size >= maxPlayers) return fail(socket, requestId, 'That room is full.');
+    if (room.clients.size + (room.suspended?.size || 0) >= maxPlayers) return fail(socket, requestId, 'That room is full.');
     if (socket.room) leave(socket);
     const id = randomBytes(8).toString('hex');
     socket.room = room;
     socket.clientId = id;
     socket.playerName = name;
     socket.lastState = null;
+    socket.resumeToken = wantResume ? randomBytes(18).toString('hex') : null;
     room.clients.add(socket);
     send(socket, {
       type: 'room:joined', requestId, id, code: room.code, name: room.name,
       playerName: name, role: socket === room.host ? 'host' : 'guest',
-      edition: room.edition || 'beta', ...(room.terrain ? { terrain: room.terrain } : {}), gameMode: room.gameMode, seed: room.seed, access: room.access, visuals: room.visuals,
+      edition: room.edition || 'beta', ...(room.terrain ? { terrain: room.terrain } : {}),
+      dimension: room.dimension || 'overworld',
+      ...(socket.resumeToken ? { resumeToken: socket.resumeToken } : {}),
+      gameMode: room.gameMode, seed: room.seed, access: room.access, visuals: room.visuals,
       players: [...room.clients].map(peer => ({ id: peer.clientId, name: peer.playerName, role: peer === room.host ? 'host' : 'player' })),
     });
     if (socket !== room.host) {
-      // Snapshots bypass the slow-client check: a large world legitimately queues a few MB at once.
-      const push = message => sendEncoded(socket, JSON.stringify(message), { force: true });
-      const edits = [...room.edits.entries()];
-      for (let index = 0; index < edits.length; index += 160) {
-        push({ type: 'world:snapshot', entries: edits.slice(index, index + 160), done: index + 160 >= edits.length });
-      }
-      if (!edits.length) push({ type: 'world:snapshot', entries: [], done: true });
-      push({ type: 'item:snapshot', items: [...room.items.values()], done: true });
-      if (room.gameState) push({ type: 'game:state', state: room.gameState });
-      push({ type: 'mob:snapshot', mobs: room.mobs });
-      push({ type: 'vehicle:snapshot', vehicles: [...room.vehicles.values()] });
-      push({ type: 'projectile:snapshot', projectiles: [...room.projectiles.values()].map(publicProjectile) });
+      pushFullRoomState(socket, room);
     }
     broadcast(room.clients, { type: 'player:joined', id, name, role: socket === room.host ? 'host' : 'player' }, socket);
     for (const peer of room.clients) {
@@ -656,7 +837,42 @@ export function createMultiplayerServer({
     }
   }
 
-  /* ----------------------- lobby handlers ------------------------ */
+  function handleSessionResume(socket, message, requestId) {
+    if (!allowRate(socket, 'session:resume', 20, 60_000)) return fail(socket, requestId, 'Too many reconnect attempts.');
+    if (socket.room) return fail(socket, requestId, 'Already in a room.');
+    const code = String(message.code ?? '').trim().toUpperCase();
+    const token = typeof message.resumeToken === 'string' ? message.resumeToken.trim() : '';
+    const room = rooms.get(code);
+    const entry = room?.suspended?.get(token);
+    if (!room || !entry) return fail(socket, requestId, 'Session expired or room closed.');
+    clearTimeout(entry.timer);
+    room.suspended.delete(token);
+    if (socket.playerName && socket.playerName.toLowerCase() !== entry.playerName.toLowerCase()) {
+      releaseName(socket);
+    }
+    socket.playerName = entry.playerName;
+    claimedNames.set(entry.playerName.toLowerCase(), socket);
+    socket.room = room;
+    socket.clientId = entry.clientId;
+    socket.lastState = entry.lastState;
+    socket.resumeToken = randomBytes(18).toString('hex');
+    if (entry.wasHost) room.host = socket;
+    room.clients.add(socket);
+    broadcastOnlinePlayers();
+    send(socket, {
+      type: 'room:joined', requestId, resumed: true, id: socket.clientId, code: room.code, name: room.name,
+      playerName: socket.playerName, role: socket === room.host ? 'host' : 'guest',
+      edition: room.edition || 'beta', ...(room.terrain ? { terrain: room.terrain } : {}),
+      dimension: room.dimension || 'overworld',
+      resumeToken: socket.resumeToken,
+      gameMode: room.gameMode, seed: room.seed, access: room.access, visuals: room.visuals,
+      players: [...room.clients].map(peer => ({ id: peer.clientId, name: peer.playerName, role: peer === room.host ? 'host' : 'player' })),
+    });
+    pushFullRoomState(socket, room);
+    for (const peer of room.clients) {
+      if (peer !== socket && peer.lastState) send(socket, { type: 'player:state', id: peer.clientId, name: peer.playerName, ...peer.lastState });
+    }
+  }
 
   function handleClaim(socket, message, requestId) {
     if (!allowRate(socket, 'player:claim', 12, 60_000)) return fail(socket, requestId, 'Too many name checks. Wait a minute before trying again.');
@@ -723,13 +939,20 @@ export function createMultiplayerServer({
       // The socket or the room table may have changed while the hash was computed.
       if (socket.readyState !== WebSocket.OPEN || socket.room || !socket.playerName) return;
       if (rooms.size >= maxRooms) return fail(socket, requestId, `All ${maxRooms} rooms are in use. Try again later.`);
+      const overworldDim = { edits: new Map(), chests: new Map(), furnaces: new Map() };
+      const netherDim = { edits: new Map(), chests: new Map(), furnaces: new Map() };
       const room = {
         code: createCode(), name, playerName, access, edition, terrain, gameMode, seed, visuals, password: record,
-        clients: new Set(), edits: new Map(), items: new Map(), itemTimes: new Map(),
+        dimension: 'overworld',
+        dimensions: { overworld: overworldDim, nether: netherDim },
+        clients: new Set(), suspended: new Map(),
+        edits: overworldDim.edits, chests: overworldDim.chests, furnaces: overworldDim.furnaces,
+        vehicleContainers: new Map(),
+        items: new Map(), itemTimes: new Map(),
         gameState: null, mobs: [], vehicles: new Map(), projectiles: new Map(), host: socket,
       };
       rooms.set(room.code, room);
-      join(socket, room, playerName, requestId);
+      join(socket, room, playerName, requestId, message.resume === true);
     } catch (error) { fail(socket, requestId, error.message); }
   }
 
@@ -749,7 +972,7 @@ export function createMultiplayerServer({
     if (room.terrain && message.terrain !== room.terrain) return fail(socket, requestId, 'This room uses a newer world generator. Update your game and rejoin.');
     if (socket.readyState !== WebSocket.OPEN || !socket.playerName) return;
     if (rooms.get(code) !== room) return fail(socket, requestId, 'Room not found. Check the code or ask the host to reopen it.');
-    join(socket, room, socket.playerName, requestId);
+    join(socket, room, socket.playerName, requestId, message.resume === true);
   }
 
   function handleRoomLeave(socket, message, requestId) {
@@ -802,6 +1025,37 @@ export function createMultiplayerServer({
     send(socket, { type: 'world:snapshot:accepted', requestId, count: entries.length });
   }
 
+  function spawnServerDrop(room, pos, stack) {
+    const clean = cleanStack(stack);
+    if (!clean || room.items.size >= 4096) return;
+    const uid = `srv:${randomBytes(8).toString('hex')}`;
+    const item = {
+      uid, id: clean.id, count: clean.count, damage: clean.damage || 0,
+      ...(clean.enchants ? { enchants: clean.enchants } : {}),
+      pos: [pos[0] + (Math.random() - 0.5) * 0.4, pos[1] + 0.25, pos[2] + (Math.random() - 0.5) * 0.4],
+      vy: 2.2, age: 0,
+    };
+    room.items.set(uid, item);
+    room.itemTimes.set(uid, Date.now());
+    broadcast(room.clients, { type: 'item:spawn', item });
+  }
+
+  function spillBlockContainersAt(room, key, x, y, z) {
+    const pos = [x + 0.5, y + 0.2, z + 0.5];
+    if (room.chests.has(key)) {
+      const slots = room.chests.get(key);
+      room.chests.delete(key);
+      broadcast(room.clients, { type: 'container:remove', dimension: room.dimension, kind: 'chest', key });
+      for (const stack of slots) if (stack) spawnServerDrop(room, pos, stack);
+    }
+    if (room.furnaces.has(key)) {
+      const f = room.furnaces.get(key);
+      room.furnaces.delete(key);
+      broadcast(room.clients, { type: 'container:remove', dimension: room.dimension, kind: 'furnace', key });
+      for (const stack of [f.input, f.fuel, f.output]) if (stack) spawnServerDrop(room, pos, stack);
+    }
+  }
+
   function handleWorldEdit(socket, message, requestId, room) {
     const { x, y, z, id, meta = 0 } = message.edit ?? {};
     if (!allowRate(socket, 'world:edit', 80, 1000)) return;
@@ -809,7 +1063,202 @@ export function createMultiplayerServer({
     const key = `${x},${y},${z}`;
     if (!room.edits.has(key) && room.edits.size >= MAX_EDITS) return fail(socket, requestId, 'The shared world edit limit has been reached.');
     room.edits.set(key, [id, meta]);
-    broadcast(room.clients, { type: 'world:edit', edit: { x, y, z, id, meta } }, socket);
+    broadcast(room.clients, { type: 'world:edit', dimension: room.dimension, edit: { x, y, z, id, meta } }, socket);
+    if (id === 0) spillBlockContainersAt(room, key, x, y, z);
+  }
+
+  function handleContainerSnapshot(socket, message, requestId, room) {
+    if (room.host !== socket) return fail(socket, requestId, 'Only the host can publish container snapshots.');
+    if (!allowRate(socket, 'container:snapshot', 12, 15_000)) return fail(socket, requestId, 'Container setup is sending too quickly.');
+    const targetDim = message.dimension === 'nether' ? 'nether' : 'overworld';
+    const dim = room.dimensions[targetDim];
+    if (Array.isArray(message.chests)) {
+      for (const entry of message.chests.slice(0, MAX_CONTAINERS)) {
+        if (!Array.isArray(entry) || !validContainerCoordKey({ ...room, dimension: targetDim }, entry[0]) || !Array.isArray(entry[1]) || entry[1].length !== 27) continue;
+        dim.chests.set(entry[0], entry[1].map(cleanStack));
+      }
+    }
+    if (Array.isArray(message.furnaces)) {
+      for (const entry of message.furnaces.slice(0, MAX_CONTAINERS)) {
+        if (!Array.isArray(entry) || !validContainerCoordKey({ ...room, dimension: targetDim }, entry[0]) || !entry[1] || typeof entry[1] !== 'object') continue;
+        const src = entry[1];
+        dim.furnaces.set(entry[0], {
+          input: cleanStack(src.input), output: cleanStack(src.output), fuel: cleanStack(src.fuel),
+          burn: clamp(src.burn, 0, 100_000, 0), burnMax: clamp(src.burnMax, 0, 100_000, 0),
+          cook: clamp(src.cook, 0, 6, 0), storedXp: clamp(src.storedXp, 0, 10_000, 0), soundTimer: 0,
+        });
+      }
+    }
+    if (targetDim === room.dimension) {
+      broadcast(room.clients, {
+        type: 'container:snapshot',
+        dimension: room.dimension,
+        chests: [...room.chests.entries()],
+        furnaces: [...room.furnaces.entries()],
+      }, socket);
+    }
+    send(socket, { type: 'container:snapshot:accepted', requestId });
+  }
+
+  function handleContainerTx(socket, message, requestId, room) {
+    if (!allowRate(socket, 'container:tx', 80, 1000)) return fail(socket, requestId, 'Too many container actions.');
+    const kind = message.kind;
+    const key = String(message.key ?? '');
+    const mode = message.mode || 'click';
+    if (!['chest', 'furnace', 'cart'].includes(kind)) return fail(socket, requestId, 'Unsupported container type.');
+
+    if (kind === 'cart') {
+      const record = room.vehicles.get(key);
+      if (!record || record.vehicle.type !== 'storage') return fail(socket, requestId, 'Storage minecart is no longer available.');
+      if (!room.vehicleContainers.has(key)) {
+        room.vehicleContainers.set(key, Array.isArray(record.vehicle.slots) ? record.vehicle.slots.map(cleanStack) : new Array(27).fill(null));
+      }
+      const slots = room.vehicleContainers.get(key);
+      let reply = { ok: true, kind, key };
+      let changed = false;
+      if (mode === 'click') {
+        const res = interactWithSlotArray(slots, message.slot, cleanStack(message.cursorStack), message.button === 2 ? 2 : 0);
+        changed = res.changed;
+        reply.cursorStack = res.cursorStack;
+      } else if (mode === 'take') {
+        const idx = message.slot;
+        const maxCount = isInt(message.maxCount, 1, 64) ? message.maxCount : 64;
+        const src = Number.isInteger(idx) && idx >= 0 && idx < 27 ? slots[idx] : null;
+        if (src) {
+          const take = Math.min(maxCount, src.count);
+          reply.taken = { ...src, count: take };
+          src.count -= take;
+          if (src.count <= 0) slots[idx] = null;
+          changed = true;
+        } else {
+          reply.taken = null;
+        }
+      } else if (mode === 'insert') {
+        const res = insertIntoSlotArray(slots, message.stack);
+        changed = res.changed;
+        reply.remainder = res.remainder;
+      } else {
+        return fail(socket, requestId, 'Invalid container transaction mode.');
+      }
+      record.vehicle.slots = slots;
+      reply.state = slots;
+      send(socket, { type: 'container:ack', requestId, ...reply });
+      if (changed) broadcast(room.clients, { type: 'container:state', dimension: room.dimension, kind: 'cart', key, state: slots }, socket);
+      return;
+    }
+
+    if (!validContainerCoordKey(room, key)) return fail(socket, requestId, 'Invalid container coordinates.');
+    if (kind === 'chest') {
+      if (!room.chests.has(key)) {
+        if (room.chests.size >= MAX_CONTAINERS) return fail(socket, requestId, 'Shared container limit reached.');
+        room.chests.set(key, new Array(27).fill(null));
+      }
+      const slots = room.chests.get(key);
+      let reply = { ok: true, kind, key };
+      let changed = false;
+      if (mode === 'click') {
+        const res = interactWithSlotArray(slots, message.slot, cleanStack(message.cursorStack), message.button === 2 ? 2 : 0);
+        changed = res.changed;
+        reply.cursorStack = res.cursorStack;
+      } else if (mode === 'take') {
+        const idx = message.slot;
+        const maxCount = isInt(message.maxCount, 1, 64) ? message.maxCount : 64;
+        const src = Number.isInteger(idx) && idx >= 0 && idx < 27 ? slots[idx] : null;
+        if (src) {
+          const take = Math.min(maxCount, src.count);
+          reply.taken = { ...src, count: take };
+          src.count -= take;
+          if (src.count <= 0) slots[idx] = null;
+          changed = true;
+        } else {
+          reply.taken = null;
+        }
+      } else if (mode === 'insert') {
+        const res = insertIntoSlotArray(slots, message.stack);
+        changed = res.changed;
+        reply.remainder = res.remainder;
+      } else {
+        return fail(socket, requestId, 'Invalid container transaction mode.');
+      }
+      reply.state = slots;
+      send(socket, { type: 'container:ack', requestId, ...reply });
+      if (changed) broadcast(room.clients, { type: 'container:state', dimension: room.dimension, kind: 'chest', key, state: slots }, socket);
+      return;
+    }
+
+    // Furnace
+    if (!room.furnaces.has(key)) {
+      if (room.furnaces.size >= MAX_CONTAINERS) return fail(socket, requestId, 'Shared container limit reached.');
+      room.furnaces.set(key, createFurnaceState());
+    }
+    const furnace = room.furnaces.get(key);
+    let reply = { ok: true, kind, key, xpEarned: 0 };
+    let changed = false;
+    if (mode === 'click') {
+      const res = interactWithFurnaceSlot(furnace, message.slot, cleanStack(message.cursorStack), message.button === 2 ? 2 : 0);
+      changed = res.changed;
+      reply.cursorStack = res.cursorStack;
+      reply.xpEarned = res.xpEarned || 0;
+    } else if (mode === 'take') {
+      const slotName = message.slot;
+      const maxCount = isInt(message.maxCount, 1, 64) ? message.maxCount : 64;
+      const src = ['input', 'fuel', 'output'].includes(slotName) ? furnace[slotName] : null;
+      if (src) {
+        const take = Math.min(maxCount, src.count);
+        reply.taken = { ...src, count: take };
+        src.count -= take;
+        if (src.count <= 0) furnace[slotName] = null;
+        if (slotName === 'output' && furnace.storedXp > 0) {
+          const whole = Math.floor(furnace.storedXp);
+          reply.xpEarned = whole + (Math.random() < (furnace.storedXp - whole) ? 1 : 0);
+          furnace.storedXp = 0;
+        }
+        changed = true;
+      } else {
+        reply.taken = null;
+      }
+    } else if (mode === 'insert') {
+      const res = insertIntoFurnace(furnace, message.stack);
+      changed = res.changed;
+      reply.remainder = res.remainder;
+    } else {
+      return fail(socket, requestId, 'Invalid container transaction mode.');
+    }
+    reply.state = furnace;
+    send(socket, { type: 'container:ack', requestId, ...reply });
+    if (changed) broadcast(room.clients, { type: 'container:state', dimension: room.dimension, kind: 'furnace', key, state: furnace }, socket);
+  }
+
+  function handleRoomDimension(socket, message, requestId, room) {
+    if (room.edition === 'classic') return fail(socket, requestId, 'Dimensions are not available in Classic.');
+    const targetDim = message.dimension === 'nether' ? 'nether' : 'overworld';
+    if (socket !== room.host) {
+      // Guest stepped into an active portal: forward travel request to host so the party switches cleanly!
+      if (!allowRate(socket, 'portal:travel', 4, 5000)) return;
+      if (room.host && socket.lastState) {
+        send(room.host, { type: 'portal:travel', fromId: socket.clientId, dimension: targetDim, pos: [socket.lastState.x, socket.lastState.y, socket.lastState.z] });
+      }
+      if (requestId) send(socket, { type: 'room:dimension:queued', requestId, dimension: targetDim });
+      return;
+    }
+    if (!allowRate(socket, 'room:dimension', 8, 5000)) return fail(socket, requestId, 'Switching dimensions too quickly.');
+    const dimObj = room.dimensions[targetDim];
+    room.dimension = targetDim;
+    room.edits = dimObj.edits;
+    room.chests = dimObj.chests;
+    room.furnaces = dimObj.furnaces;
+    room.mobs = [];
+    room.items.clear();
+    room.itemTimes.clear();
+    room.projectiles.clear();
+    room.vehicles.clear();
+    room.vehicleContainers.clear();
+    const spawn = isVec3(message.spawn) ? message.spawn.map(Number) : null;
+    broadcast(room.clients, { type: 'room:dimension', dimension: targetDim, spawn }, socket);
+    for (const peer of room.clients) {
+      if (peer !== socket) pushFullRoomState(peer, room);
+    }
+    if (requestId) send(socket, { type: 'room:dimension:accepted', requestId, dimension: targetDim });
   }
 
   function handleGameState(socket, message, requestId, room) {
@@ -907,6 +1356,12 @@ export function createMultiplayerServer({
     }
     if (room.vehicles.size >= 1024 && !existing) return;
     socket.vehicleTimes.set(safe.uid, now);
+    if (safe.type === 'storage') {
+      if (!room.vehicleContainers.has(safe.uid)) {
+        room.vehicleContainers.set(safe.uid, Array.isArray(safe.slots) ? safe.slots.map(cleanStack) : new Array(27).fill(null));
+      }
+      safe.slots = room.vehicleContainers.get(safe.uid);
+    }
     const record = { vehicle: safe, riding: !!message.riding, owner: socket.clientId };
     room.vehicles.set(safe.uid, record);
     broadcast(room.clients, { type: 'vehicle:update', ...record }, socket);
@@ -914,8 +1369,14 @@ export function createMultiplayerServer({
 
   function handleVehicleRemove(socket, message, requestId, room) {
     const { uid } = message;
-    if (!validEntityId(uid, 100) || !canControl(socket, room.host, room.vehicles.get(uid)?.owner, true)) return;
+    const existing = validEntityId(uid, 100) ? room.vehicles.get(uid) : null;
+    if (!existing || !canControl(socket, room.host, existing.owner, true)) return;
     room.vehicles.delete(uid);
+    const stored = room.vehicleContainers.get(uid);
+    if (stored) {
+      room.vehicleContainers.delete(uid);
+      for (const stack of stored) if (stack) spawnServerDrop(room, existing.vehicle.pos, stack);
+    }
     for (const peer of room.clients) peer.vehicleTimes.delete(uid);
     broadcast(room.clients, { type: 'vehicle:remove', uid }, socket);
   }
@@ -932,24 +1393,30 @@ export function createMultiplayerServer({
   function handlePlayerDamage(socket, message, requestId, room) {
     if (socket !== room.host || typeof message.targetId !== 'string' || !Number.isFinite(message.amount) || message.amount <= 0 || message.amount > 40) return;
     if (!allowRate(socket, 'player:damage', 60, 1000)) return;
+    const source = ['mob', 'fall', 'fire', 'blast', 'projectile'].includes(message.source) ? message.source : 'mob';
     const target = [...room.clients].find(peer => peer.clientId === message.targetId);
-    if (target) send(target, { type: 'player:damage', amount: message.amount });
+    if (target) send(target, { type: 'player:damage', amount: message.amount, source });
   }
 
   function handleMobAttack(socket, message, requestId, room) {
     const now = Date.now();
     if (socket === room.host || now - socket.lastAttackAt < 350 || !socket.lastState || !validEntityId(message.uid, 80)) return;
     socket.lastAttackAt = now;
+    const enchants = normalizeEnchants(message.enchants);
     send(room.host, {
       type: 'mob:attack', attacker: { id: socket.clientId, name: socket.playerName, ...socket.lastState },
       uid: message.uid, heldId: isInt(message.heldId, 0, 4095) ? message.heldId : null, ranged: !!message.ranged,
+      ...(message.ranged && Number.isFinite(message.damage) ? { damage: clamp(message.damage, 0, 24, 4) } : {}),
+      ...(message.ranged && isInt(message.punch, 0, 2) ? { punch: message.punch } : {}),
+      ...(message.ranged && message.flame ? { flame: true } : {}),
+      ...(enchants ? { enchants } : {}),
     });
   }
 
   function handleMobSnapshot(socket, message, requestId, room) {
     if (room.host !== socket) return fail(socket, requestId, 'Only the host can publish shared mob state.');
     if (!allowRate(socket, 'mob:snapshot', 40, 1000)) return;
-    if (!Array.isArray(message.mobs) || message.mobs.length > 18) return fail(socket, requestId, 'Invalid shared mob snapshot.');
+    if (!Array.isArray(message.mobs) || message.mobs.length > MAX_MOBS_SNAPSHOT) return fail(socket, requestId, 'Invalid shared mob snapshot.');
     const mobs = sanitizeMobs(message.mobs);
     if (mobs.length !== message.mobs.length || new Set(mobs.map(mob => mob.uid)).size !== mobs.length) return fail(socket, requestId, 'Invalid or duplicate mob in snapshot.');
     room.mobs = mobs;
@@ -970,13 +1437,14 @@ export function createMultiplayerServer({
   // Maps (not plain objects) so a hostile `type` such as "constructor" can never resolve to a handler.
   const lobbyHandlers = new Map([
     ['player:claim', handleClaim], ['player:release', handleRelease], ['players:list', handlePlayersList],
-    ['ping', handlePing], ['rooms:list', handleRoomsList],
+    ['ping', handlePing], ['rooms:list', handleRoomsList], ['session:resume', handleSessionResume],
   ]);
   const lifecycleHandlers = new Map([
     ['room:create', handleRoomCreate], ['room:join', handleRoomJoin], ['room:leave', handleRoomLeave], ['room:close', handleRoomClose],
   ]);
   const roomHandlers = new Map([
     ['player:state', handlePlayerState], ['world:snapshot', handleWorldSnapshot], ['world:edit', handleWorldEdit],
+    ['container:snapshot', handleContainerSnapshot], ['container:tx', handleContainerTx], ['room:dimension', handleRoomDimension],
     ['game:state', handleGameState], ['item:snapshot', handleItemSnapshot], ['item:spawn', handleItemSpawn],
     ['item:pickup', handleItemPickup], ['projectile:update', handleProjectileUpdate], ['projectile:remove', handleProjectileRemove],
     ['vehicle:update', handleVehicleUpdate], ['vehicle:remove', handleVehicleRemove], ['tnt:ignite', handleTntIgnite],
@@ -1053,8 +1521,12 @@ export function createMultiplayerServer({
         .finally(() => { socket.queued--; });
     });
     socket.on('close', () => {
-      leave(socket);
-      releaseName(socket);
+      if (socket.room && socket.resumeToken) {
+        suspendSocket(socket);
+      } else {
+        leave(socket);
+        releaseName(socket);
+      }
       if (maxConnectionsPerAddress > 0) {
         const open = (connectionsByAddress.get(socket.addressKey) || 1) - 1;
         if (open > 0) connectionsByAddress.set(socket.addressKey, open);
@@ -1064,6 +1536,34 @@ export function createMultiplayerServer({
   });
 
   /* ------------------------- housekeeping ------------------------ */
+
+  let furnaceTickSeq = 0;
+  const furnaceInterval = setInterval(() => {
+    furnaceTickSeq++;
+    for (const room of rooms.values()) {
+      for (const dimName of ['overworld', 'nether']) {
+        const dim = room.dimensions[dimName];
+        for (const [key, furnace] of dim.furnaces) {
+          if (furnace.burn <= 0 && !furnace.input && furnace.cook <= 0) continue;
+          const wasBurning = furnace.burn > 0;
+          const res = tickFurnace(furnace, 0.25);
+          const nowBurning = res.burning;
+          if (dimName === room.dimension && room.clients.size > 0 && (res.cooked > 0 || wasBurning !== nowBurning || (nowBurning && furnaceTickSeq % 2 === 0))) {
+            broadcast(room.clients, { type: 'container:state', dimension: dimName, kind: 'furnace', key, state: furnace });
+          }
+          if (wasBurning !== nowBurning && dimName === room.dimension) {
+            const [fx, fy, fz] = key.split(',').map(Number);
+            const prevEdit = dim.edits.get(key);
+            const meta = Array.isArray(prevEdit) ? prevEdit[1] : 0;
+            const nextBlockId = nowBurning ? 62 : 61;
+            dim.edits.set(key, [nextBlockId, meta]);
+            broadcast(room.clients, { type: 'world:edit', dimension: dimName, edit: { x: fx, y: fy, z: fz, id: nextBlockId, meta } });
+          }
+        }
+      }
+    }
+  }, 250);
+  furnaceInterval.unref?.();
 
   const heartbeat = setInterval(() => {
     for (const socket of wss.clients) {
@@ -1108,8 +1608,10 @@ export function createMultiplayerServer({
   return {
     http, wss, rooms, stats,
     close: () => new Promise(resolveClose => {
+      clearInterval(furnaceInterval);
       clearInterval(heartbeat);
       clearInterval(maintenance);
+      for (const room of rooms.values()) clearSuspended(room);
       for (const socket of wss.clients) {
         if (socket.room) send(socket, { type: 'room:closed', reason: 'The server is restarting.' });
         closeSocket(socket, 1001, 'Server restarting');

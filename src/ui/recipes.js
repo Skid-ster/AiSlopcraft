@@ -1,7 +1,9 @@
 // Minecraft Beta-era shaped/shapeless recipes and furnace results.
 import {
-  PLANKS, LOG, COBBLE, STONE, TORCH, CRAFTING_TABLE, FURNACE,
+  PLANKS, LOG, COBBLE, STONE, TORCH, CRAFTING_TABLE, FURNACE, OBSIDIAN,
   PUMPKIN, JACK_O_LANTERN, STONE_BRICK, WOOL_BASE, FLOWER_YELLOW, FLOWER_RED, CACTUS,
+  STONE_SLAB, OAK_STAIRS, COBBLESTONE_STAIRS, FENCE, NETHERRACK,
+  NETHER_BRICK, NETHER_BRICK_FENCE, NETHER_BRICK_STAIRS, ENCHANTING_TABLE, QUARTZ_ORE, QUARTZ_BLOCK,
 } from '../world/blocks.js';
 
 const STICK = 280, COAL = 263, IRON = 265, GOLD = 266, DIAMOND = 264, LEATHER = 334;
@@ -98,6 +100,25 @@ export const SHAPED = [
   { pattern: [[IRON, 0], [0, IRON]], out: [359, 1] },
   { pattern: [[IRON, 0], [0, FLINT]], out: [FLINT_STEEL, 1] },
   { pattern: [[335, 335, 335], [SUGAR, EGG, SUGAR], [WHEAT, WHEAT, WHEAT]], out: [CAKE, 1] },
+  // Slabs, stairs, fences, minecart variants, paintings, maps
+  { pattern: [[STONE, STONE, STONE]], out: [STONE_SLAB, 6] },
+  { pattern: [[PLANKS, 0, 0], [PLANKS, PLANKS, 0], [PLANKS, PLANKS, PLANKS]], out: [OAK_STAIRS, 4] },
+  { pattern: [[COBBLE, 0, 0], [COBBLE, COBBLE, 0], [COBBLE, COBBLE, COBBLE]], out: [COBBLESTONE_STAIRS, 4] },
+  { pattern: [[PLANKS, STICK, PLANKS], [PLANKS, STICK, PLANKS]], out: [FENCE, 3] },
+  { pattern: [[STICK, STICK, STICK], [STICK, STICK, STICK]], out: [FENCE, 2] },
+  { pattern: [[CHEST], [MINECART]], out: [342, 1] },
+  { pattern: [[FURNACE], [MINECART]], out: [343, 1] },
+  { pattern: [[STICK, STICK, STICK], [STICK, WOOL, STICK], [STICK, STICK, STICK]], out: [321, 1] },
+  { pattern: [[PAPER, PAPER, PAPER], [PAPER, COMPASS, PAPER], [PAPER, PAPER, PAPER]], out: [358, 1] },
+  // 1.7.10 Enchanting & Nether progression
+  { pattern: [[0, BOOK, 0], [DIAMOND, OBSIDIAN, DIAMOND], [OBSIDIAN, OBSIDIAN, OBSIDIAN]], out: [ENCHANTING_TABLE, 1] },
+  { pattern: [[405, 405], [405, 405]], out: [NETHER_BRICK, 1] },
+  { pattern: [[NETHER_BRICK, NETHER_BRICK, NETHER_BRICK], [NETHER_BRICK, NETHER_BRICK, NETHER_BRICK]], out: [NETHER_BRICK_FENCE, 6] },
+  { pattern: [[NETHER_BRICK, 0, 0], [NETHER_BRICK, NETHER_BRICK, 0], [NETHER_BRICK, NETHER_BRICK, NETHER_BRICK]], out: [NETHER_BRICK_STAIRS, 4] },
+  { pattern: [[406, 406], [406, 406]], out: [QUARTZ_BLOCK, 1] },
+  { pattern: [[371, 371, 371], [371, 371, 371], [371, 371, 371]], out: [GOLD, 1] },
+  { pattern: [[371, 371, 371], [371, APPLE, 371], [371, 371, 371]], out: [GOLDEN_APPLE, 1] },
+  { pattern: [[0, 20, 0], [20, 377, 20], [0, GLOWSTONE_DUST, 0]], out: [384, 3] },
 ];
 
 export const SHAPELESS = [
@@ -109,10 +130,25 @@ export const SHAPELESS = [
   { in: [42], out: [IRON, 9] },
   { in: [41], out: [GOLD, 9] },
   { in: [57], out: [DIAMOND, 9] },
+  { in: [GOLD], out: [371, 9] },
+  { in: [369], out: [377, 2] },
+  { in: [CHEST, MINECART], out: [342, 1] },
+  { in: [FURNACE, MINECART], out: [343, 1] },
   { in: [IRON, FLINT], out: [FLINT_STEEL, 1] },
   { in: [WOOL, FLOWER_RED], out: [WOOL_BASE + 14, 1] },    // Red Wool
   { in: [WOOL, FLOWER_YELLOW], out: [WOOL_BASE + 2, 1] },  // Yellow Wool
+  { in: [WOOL, FLOWER_RED, FLOWER_YELLOW], out: [WOOL_BASE + 1, 1] }, // Orange Wool
+  { in: [WOOL_BASE + 4, BONE_MEAL], out: [WOOL_BASE + 3, 1] }, // Lime Wool
+  { in: [WOOL, CACTUS], out: [WOOL_BASE + 4, 1] },         // Green Wool
+  { in: [WOOL, LAPIS, CACTUS], out: [WOOL_BASE + 5, 1] },  // Cyan Wool
+  { in: [WOOL, LAPIS, BONE_MEAL], out: [WOOL_BASE + 6, 1] }, // Light Blue Wool
   { in: [WOOL, LAPIS], out: [WOOL_BASE + 7, 1] },          // Blue Wool
+  { in: [WOOL, LAPIS, FLOWER_RED], out: [WOOL_BASE + 8, 1] }, // Purple Wool
+  { in: [WOOL, LAPIS, FLOWER_RED, BONE_MEAL], out: [WOOL_BASE + 9, 1] }, // Magenta Wool
+  { in: [WOOL, FLOWER_RED, BONE_MEAL], out: [WOOL_BASE + 10, 1] }, // Pink Wool
+  { in: [WOOL, COAL, BONE_MEAL], out: [WOOL_BASE + 11, 1] }, // Gray Wool
+  { in: [WOOL, COAL, BONE_MEAL, BONE_MEAL], out: [WOOL_BASE + 12, 1] }, // Light Gray Wool
+  { in: [WOOL, 39], out: [WOOL_BASE + 13, 1] },            // Brown Wool
   { in: [WOOL, COAL], out: [WOOL_BASE + 15, 1] },          // Black Wool
   { in: [WOOL, BONE_MEAL], out: [WOOL_BASE, 1] },          // White Wool
 ];
@@ -131,6 +167,8 @@ export const SMELTING = Object.freeze({
   349: 350,
   [CLAY_BALL]: BRICK_ITEM,
   [CACTUS]: WOOL_BASE + 4,
+  [NETHERRACK]: 405,
+  [QUARTZ_ORE]: 406,
 });
 
 function normalizePattern(pattern) {

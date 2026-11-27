@@ -85,6 +85,13 @@ export function bindTouchPointers(controls, player, isPlaying) {
 
   function bindHold(id, action, fallbackButton) {
     bind(controls.querySelector(`#${id}`), event => {
+      if (action.startsWith('binding:')) {
+        const keyCode = player.bindings[action.slice(8)];
+        if (!keyCode) return;
+        actions.set(event.pointerId, `key:${keyCode}`);
+        player.setTouchKey(keyCode, true);
+        return;
+      }
       actions.set(event.pointerId, action);
       if (action.startsWith('key:')) { player.setTouchKey(action.slice(4), true); return; }
       if (action === 'attack') player.leftDown = true;
@@ -97,8 +104,8 @@ export function bindTouchPointers(controls, player, isPlaying) {
   }
   bindHold('touch-mine', 'attack', 0);
   bindHold('touch-use', 'use', 2);
-  bindHold('touch-jump', `key:${player.bindings.jump}`);
-  bindHold('touch-sneak', `key:${player.bindings.sneak}`);
+  bindHold('touch-jump', 'binding:jump');
+  bindHold('touch-sneak', 'binding:sneak');
 
   return () => {
     player.clearTouchInput?.();

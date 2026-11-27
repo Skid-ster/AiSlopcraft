@@ -7,7 +7,12 @@ import * as THREE from 'three';
 import {
   getBlock, AIR, WATER, WATER_FLOW, LAVA, LAVA_FLOW, ITEMS,
   LADDER, COBWEB, CACTUS, ICE, SLOW_SAND, WOOD_DOOR, IRON_DOOR, CAKE_BLOCK,
+  NETHER_PORTAL, blockCollisionBoxes,
 } from '../world/blocks.js';
+import {
+  xpStateFromTotal, xpTotalForLevel, sameEnchants, cloneEnchants,
+  armorEnchantReduction, shouldConsumeDurability,
+} from '../enchanting.js';
 
 const W = 0.6;          // player width
 const H = 1.8;          // player height
@@ -72,6 +77,10 @@ export function blockSelectionBounds(world, x, y, z, id) {
     const eaten = Math.min(6, (world.getMeta ? world.getMeta(x, y, z) : 0) & 7);
     return [0.0625 + eaten * 0.125, 0, 0.0625, 0.9375, 0.5, 0.9375];
   }
+  if (id === NETHER_PORTAL) {
+    const meta = world.getMeta ? world.getMeta(x, y, z) : 0;
+    return (meta & 1) === 1 ? [0.375, 0, 0, 0.625, 1, 1] : [0, 0, 0.375, 1, 1, 0.625];
+  }
   if (id === LADDER) {
     if (getBlock(world.getBlock(x, y, z - 1)).solid) return [0, 0, 0, 1, 1, 0.15];
     if (getBlock(world.getBlock(x, y, z + 1)).solid) return [0, 0, 0.85, 1, 1, 1];
@@ -123,6 +132,12 @@ export class Player {
     this.cursorStack = null; // for inventory drag
     this.mining = { active: false, x: 0, y: 0, z: 0, progress: 0, total: 0 };
     this.stats = { distance: 0, jumps: 0, blocksPlaced: 0, blocksMined: 0 };
+    this.xpTotal = 0;
+    this.xpLevel = 0;
+    this.xpProgress = 0;
+    this.xpSeed = 0x51a7c9e3;
+    this.portalTime = 0;
+    this.portalCooldown = 0;
 
     this.keys = {};
     this.touchKeys = new Set();
@@ -282,9 +297,55 @@ export class Player {
     this.mouseDY = 0;
     this.mining.active = false;
     this.mining.progress = 0;
+    this.portalTime = 0;
+    this.portalCooldown = 0;
     this.keys = {};
     this.camera.position.set(spawnX, spawnY + EYE, spawnZ);
     this.camera.lookAt(spawnX, spawnY + EYE, spawnZ - 1);
+  }
+
+  syncXpState() {
+    const state = xpStateFromTotal(this.xpTotal);
+    this.xpTotal = state.total;
+    this.xpLevel = state.level;
+    this.xpProgress = state.progress;
+    return state;
+  }
+
+  addXp(amount, audio = null) {
+    const gain = Math.max(0, Math.floor(Number(amount) || 0));
+    if (!gain) return 0;
+    const prevLevel = this.xpLevel;
+    this.xpTotal = Math.max(0, Math.floor(this.xpTotal || 0) + gain);
+    this.syncXpState();
+    if (audio && this.xpLevel > prevLevel && typeof audio.levelUp === 'function') {
+      audio.levelUp();
+    }
+    return gain;
+  }
+
+  spendXpLevels(levels) {
+    const cost = Math.max(0, Math.floor(Number(levels) || 0));
+    if (!cost) return true;
+    if (this.gameMode !== 'creative' && this.xpLevel < cost) return false;
+    if (this.gameMode !== 'creative') {
+      const nextLevel = Math.max(0, this.xpLevel - cost);
+      const base = xpTotalForLevel(nextLevel);
+      const nextSpan = xpTotalForLevel(nextLevel + 1) - base;
+      this.xpTotal = base + Math.floor((this.xpProgress || 0) * nextSpan);
+      this.syncXpState();
+    }
+    this.xpSeed = (Math.imul(this.xpSeed ^ 0x9e3779b9, 1664525) + 1013904223) >>> 0;
+    return true;
+  }
+
+  _collisionBoxesForBlock(world, x, y, z, b) {
+    if (b === WOOD_DOOR || b === IRON_DOOR || b === CAKE_BLOCK) {
+      const bounds = blockSelectionBounds(world, x, y, z, b);
+      return bounds ? [bounds] : [[0, 0, 0, 1, 1, 1]];
+    }
+    const meta = world.getMeta ? world.getMeta(x, y, z) : 0;
+    return blockCollisionBoxes(b, meta) || [[0, 0, 0, 1, 1, 1]];
   }
 
   _solidBlockAt(world, x, y, z) {
@@ -470,7 +531,7 @@ export class Player {
         const dist = this.fallStart - this.pos.y;
         if (dist > 3.2 && !this.inWater && !this.onLadder && !this.inCobweb) {
           const dmg = Math.floor(dist - 3);
-          if (dmg > 0) this.damage(dmg, audio);
+          if (dmg > 0) this.damage(dmg, audio, false, 'fall');
         }
         this.fallStart = null;
       }
@@ -515,7 +576,7 @@ export class Player {
       this._lavaAcc = (this._lavaAcc || 0) + dt;
       if (this._lavaAcc > 0.5) {
         this._lavaAcc = 0;
-        this.damage(4, audio);
+        this.damage(4, audio, false, 'fire');
       }
     }
     if (this.touchingBlock(world, CACTUS)) {
@@ -526,6 +587,17 @@ export class Player {
       }
     } else {
       this._cactusAcc = 0;
+    }
+
+    if (this.touchingBlock(world, NETHER_PORTAL)) {
+      if (this.portalCooldown <= 0) {
+        this.portalTime += dt;
+      } else {
+        this.portalTime = 0;
+      }
+    } else {
+      this.portalTime = Math.max(0, this.portalTime - dt * 2.5);
+      this.portalCooldown = Math.max(0, this.portalCooldown - dt);
     }
 
     if (this.hurtTime > 0) this.hurtTime = Math.max(0, this.hurtTime - dt);
@@ -572,15 +644,18 @@ export class Player {
     const minX = px - W / 2, maxX = px + W / 2;
     const minY = py, maxY = py + H;
     const minZ = pz - W / 2, maxZ = pz + W / 2;
-    for (let y = Math.floor(minY); y <= Math.floor(maxY); y++) {
+    for (let y = Math.floor(minY - 0.6); y <= Math.floor(maxY); y++) {
       for (let z = Math.floor(minZ); z <= Math.floor(maxZ); z++) {
         for (let x = Math.floor(minX); x <= Math.floor(maxX); x++) {
           if (!this._solidBlockAt(world, x, y, z)) continue;
           const b = world.getBlock(x, y, z);
-          const bounds = blockSelectionBounds(world, x, y, z, b);
-          const bx0 = x + (bounds ? bounds[0] : 0), by0 = y + (bounds ? bounds[1] : 0), bz0 = z + (bounds ? bounds[2] : 0);
-          const bx1 = x + (bounds ? bounds[3] : 1), by1 = y + (bounds ? bounds[4] : 1), bz1 = z + (bounds ? bounds[5] : 1);
-          if (maxX > bx0 && minX < bx1 && maxY > by0 && minY < by1 && maxZ > bz0 && minZ < bz1) return true;
+          const boxes = this._collisionBoxesForBlock(world, x, y, z, b);
+          for (let bi = 0; bi < boxes.length; bi++) {
+            const bounds = boxes[bi];
+            const bx0 = x + bounds[0], by0 = y + bounds[1], bz0 = z + bounds[2];
+            const bx1 = x + bounds[3], by1 = y + bounds[4], bz1 = z + bounds[5];
+            if (maxX > bx0 && minX < bx1 && maxY > by0 && minY < by1 && maxZ > bz0 && minZ < bz1) return true;
+          }
         }
       }
     }
@@ -601,20 +676,23 @@ export class Player {
       let hit = false;
       let maxStepY = -Infinity;
       let canStep = true;
-      for (let y = Math.floor(minY); y <= Math.floor(maxY); y++) {
+      for (let y = Math.floor(minY - 0.6); y <= Math.floor(maxY); y++) {
         for (let z = Math.floor(minZ); z <= Math.floor(maxZ); z++) {
           for (let x = Math.floor(minX); x <= Math.floor(maxX); x++) {
             if (!this._solidBlockAt(world, x, y, z)) continue;
             const b = world.getBlock(x, y, z);
-            const bounds = blockSelectionBounds(world, x, y, z, b);
-            const bx0 = x + (bounds ? bounds[0] : 0), by0 = y + (bounds ? bounds[1] : 0), bz0 = z + (bounds ? bounds[2] : 0);
-            const bx1 = x + (bounds ? bounds[3] : 1), by1 = y + (bounds ? bounds[4] : 1), bz1 = z + (bounds ? bounds[5] : 1);
-            if (maxX > bx0 && minX < bx1 && maxY > by0 && minY < by1 && maxZ > bz0 && minZ < bz1) {
-              hit = true;
-              if (by1 > minY && by1 - minY <= 0.57) {
-                if (by1 > maxStepY) maxStepY = by1;
-              } else {
-                canStep = false;
+            const boxes = this._collisionBoxesForBlock(world, x, y, z, b);
+            for (let bi = 0; bi < boxes.length; bi++) {
+              const bounds = boxes[bi];
+              const bx0 = x + bounds[0], by0 = y + bounds[1], bz0 = z + bounds[2];
+              const bx1 = x + bounds[3], by1 = y + bounds[4], bz1 = z + bounds[5];
+              if (maxX > bx0 && minX < bx1 && maxY > by0 && minY < by1 && maxZ > bz0 && minZ < bz1) {
+                hit = true;
+                if (by1 > minY && by1 - minY <= 0.57) {
+                  if (by1 > maxStepY) maxStepY = by1;
+                } else {
+                  canStep = false;
+                }
               }
             }
           }
@@ -627,38 +705,45 @@ export class Player {
       }
     }
 
-    for (let y = Math.floor(minY); y <= Math.floor(maxY); y++) {
+    let bestOutcome = 'ok';
+    for (let y = Math.floor(minY - 0.6); y <= Math.floor(maxY); y++) {
       for (let z = Math.floor(minZ); z <= Math.floor(maxZ); z++) {
         for (let x = Math.floor(minX); x <= Math.floor(maxX); x++) {
           if (!this._solidBlockAt(world, x, y, z)) continue;
           const b = world.getBlock(x, y, z);
-          const bounds = blockSelectionBounds(world, x, y, z, b);
-          const bx0 = x + (bounds ? bounds[0] : 0);
-          const by0 = y + (bounds ? bounds[1] : 0);
-          const bz0 = z + (bounds ? bounds[2] : 0);
-          const bx1 = x + (bounds ? bounds[3] : 1);
-          const by1 = y + (bounds ? bounds[4] : 1);
-          const bz1 = z + (bounds ? bounds[5] : 1);
+          const boxes = this._collisionBoxesForBlock(world, x, y, z, b);
+          for (let bi = 0; bi < boxes.length; bi++) {
+            const bounds = boxes[bi];
+            const bx0 = x + bounds[0];
+            const by0 = y + bounds[1];
+            const bz0 = z + bounds[2];
+            const bx1 = x + bounds[3];
+            const by1 = y + bounds[4];
+            const bz1 = z + bounds[5];
 
-          if (maxX > bx0 && minX < bx1 && maxY > by0 && minY < by1 && maxZ > bz0 && minZ < bz1) {
-            if (axis === 1) {
-              if (amount > 0) { pos.y = by0 - H - 0.001; this.vel.y = 0; }
-              else { pos.y = by1 + 0.001; this.vel.y = 0; }
-            } else if (axis === 0) {
-              if (amount > 0) pos.x = bx0 - W / 2 - 0.001;
-              else pos.x = bx1 + W / 2 + 0.001;
-              this.vel.x = 0;
-            } else {
-              if (amount > 0) pos.z = bz0 - W / 2 - 0.001;
-              else pos.z = bz1 + W / 2 + 0.001;
-              this.vel.z = 0;
+            const curMinX = pos.x - W / 2, curMaxX = pos.x + W / 2;
+            const curMinY = pos.y, curMaxY = pos.y + H;
+            const curMinZ = pos.z - W / 2, curMaxZ = pos.z + W / 2;
+            if (curMaxX > bx0 && curMinX < bx1 && curMaxY > by0 && curMinY < by1 && curMaxZ > bz0 && curMinZ < bz1) {
+              if (axis === 1) {
+                if (amount > 0) { pos.y = by0 - H - 0.001; this.vel.y = 0; }
+                else { pos.y = by1 + 0.001; this.vel.y = 0; }
+              } else if (axis === 0) {
+                if (amount > 0) pos.x = bx0 - W / 2 - 0.001;
+                else pos.x = bx1 + W / 2 + 0.001;
+                this.vel.x = 0;
+              } else {
+                if (amount > 0) pos.z = bz0 - W / 2 - 0.001;
+                else pos.z = bz1 + W / 2 + 0.001;
+                this.vel.z = 0;
+              }
+              bestOutcome = amount > 0 ? 'blocked' : 'ground';
             }
-            return amount > 0 ? 'blocked' : 'ground';
           }
         }
       }
     }
-    return 'ok';
+    return bestOutcome;
   }
 
   checkGroundAt(world, px, py, pz) {
@@ -666,14 +751,23 @@ export class Player {
     const x1 = Math.floor(px + W / 2 - 0.001);
     const z0 = Math.floor(pz - W / 2 + 0.001);
     const z1 = Math.floor(pz + W / 2 - 0.001);
-    const y = Math.floor(py - 0.02);
-    for (let z = z0; z <= z1; z++) {
-      for (let x = x0; x <= x1; x++) {
-        if (!this._solidBlockAt(world, x, y, z)) continue;
-        const b = world.getBlock(x, y, z);
-        const bounds = blockSelectionBounds(world, x, y, z, b);
-        const topY = y + (bounds ? bounds[4] : 1);
-        if (Math.abs(py - topY) < 0.08 || (!bounds && py >= y)) return true;
+    const yBase = Math.floor(py - 0.02);
+    for (let y = yBase - 1; y <= yBase; y++) {
+      for (let z = z0; z <= z1; z++) {
+        for (let x = x0; x <= x1; x++) {
+          if (!this._solidBlockAt(world, x, y, z)) continue;
+          const b = world.getBlock(x, y, z);
+          const boxes = this._collisionBoxesForBlock(world, x, y, z, b);
+          for (let bi = 0; bi < boxes.length; bi++) {
+            const box = boxes[bi];
+            const bx0 = x + box[0], bx1 = x + box[3];
+            const bz0 = z + box[2], bz1 = z + box[5];
+            if (px + W / 2 - 0.001 <= bx0 || px - W / 2 + 0.001 >= bx1) continue;
+            if (pz + W / 2 - 0.001 <= bz0 || pz - W / 2 + 0.001 >= bz1) continue;
+            const topY = y + box[4];
+            if (Math.abs(py - topY) < 0.08) return true;
+          }
+        }
       }
     }
     return false;
@@ -683,7 +777,7 @@ export class Player {
     return this.checkGroundAt(world, this.pos.x, this.pos.y, this.pos.z);
   }
 
-  damage(amount, audio, bypassArmor = false) {
+  damage(amount, audio, bypassArmor = false, source = 'mob') {
     if (this.dead || this.gameMode === 'creative' || this.gameMode === 'classic') return;
     if (this.hurtTime > 0.35) return;
 
@@ -691,16 +785,22 @@ export class Player {
     if (!bypassArmor && this.armorPoints > 0) {
       // Beta 1.7.3: up to 80% damage reduction at 20 armor points (4% per armor point)
       const reduction = Math.min(0.8, this.armorPoints * 0.04);
-      finalDamage = Math.max(1, Math.round(amount * (1 - reduction)));
+      finalDamage = Math.max(0.5, amount * (1 - reduction));
       const wear = Math.max(1, Math.ceil(amount / 2));
       for (let i = 0; i < 4; i++) {
         const piece = this.armor[i];
         if (!piece) continue;
+        if (!shouldConsumeDurability(piece)) continue;
         const maxDur = ITEMS[piece.id]?.durability || 100;
         piece.damage = (piece.damage || 0) + wear;
         if (piece.damage >= maxDur) this.armor[i] = null;
       }
     }
+    const enchRed = !bypassArmor || source === 'fall' ? armorEnchantReduction(this.armor, source) : 0;
+    if (enchRed > 0) {
+      finalDamage = finalDamage * (1 - enchRed);
+    }
+    finalDamage = Math.max(1, Math.round(finalDamage));
 
     this.health -= finalDamage;
     this.hurtTime = 0.5;
@@ -806,15 +906,16 @@ export class Player {
     return null;
   }
 
-  insertItem(id, count = 1, damage = 0) {
+  insertItem(id, count = 1, damage = 0, enchants = null) {
     let remaining = Math.max(0, Math.floor(count));
     if (!remaining) return 0;
     const maxStack = itemStackLimit(id);
+    const cleanEnchants = cloneEnchants(enchants);
 
     if (maxStack > 1) {
       for (let i = 0; i < this.inventory.length && remaining > 0; i++) {
         const stack = this.inventory[i];
-        if (!stack || stack.id !== id || (stack.damage || 0) !== damage || stack.count >= maxStack) continue;
+        if (!stack || stack.id !== id || (stack.damage || 0) !== damage || !sameEnchants(stack.enchants, cleanEnchants) || stack.count >= maxStack) continue;
         const inserted = Math.min(maxStack - stack.count, remaining);
         stack.count += inserted;
         remaining -= inserted;
@@ -824,25 +925,30 @@ export class Player {
     for (let i = 0; i < this.inventory.length && remaining > 0; i++) {
       if (this.inventory[i]) continue;
       const inserted = Math.min(maxStack, remaining);
-      this.inventory[i] = { id, count: inserted, damage };
+      const next = { id, count: inserted, damage };
+      if (cleanEnchants) next.enchants = cloneEnchants(cleanEnchants);
+      this.inventory[i] = next;
       remaining -= inserted;
     }
     return Math.floor(count) - remaining;
   }
 
-  addItem(id, count = 1, damage = 0) {
+  addItem(id, count = 1, damage = 0, enchants = null) {
     const wanted = Math.max(0, Math.floor(count));
     if (!wanted) return true;
     const maxStack = itemStackLimit(id);
+    const cleanEnchants = cloneEnchants(enchants);
     let capacity = 0;
     if (maxStack > 1) {
       for (const stack of this.inventory) {
-        if (stack && stack.id === id && (stack.damage || 0) === damage) capacity += Math.max(0, maxStack - stack.count);
+        if (stack && stack.id === id && (stack.damage || 0) === damage && sameEnchants(stack.enchants, cleanEnchants)) {
+          capacity += Math.max(0, maxStack - stack.count);
+        }
       }
     }
     capacity += this.inventory.filter(stack => !stack).length * maxStack;
     if (capacity < wanted) return false;
-    return this.insertItem(id, wanted, damage) === wanted;
+    return this.insertItem(id, wanted, damage, cleanEnchants) === wanted;
   }
 
   consumeItemId(id, amount = 1) {
@@ -885,6 +991,7 @@ export class Player {
     if (!s) return null;
     const taken = Math.min(s.count, count);
     const copy = { id: s.id, count: taken, damage: s.damage || 0 };
+    if (s.enchants) copy.enchants = cloneEnchants(s.enchants);
     s.count -= taken;
     if (s.count <= 0) this.inventory[this.hotbarIndex] = null;
     return copy;
@@ -895,6 +1002,7 @@ export class Player {
     if (!s) return;
     const it = ITEMS[s.id];
     if (it && it.durability) {
+      if (!shouldConsumeDurability(s)) return;
       s.damage = (s.damage || 0) + wear;
       if (s.damage >= it.durability) this.inventory[this.hotbarIndex] = null;
     }

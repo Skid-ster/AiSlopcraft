@@ -12,6 +12,12 @@ import { FUEL_TIMES, interactWithFurnaceSlot } from './furnace.js';
 import { OptionsMenu } from './options.js';
 import { CLASSIC_BLOCKS, isClassicBlock } from '../classic.js';
 import { bindTouchPointers, requestGamePointerLock } from '../input.js';
+import {
+  sameEnchants, cloneEnchants, formatEnchantments, countBookshelfPower,
+  getEnchantmentOffers, applyEnchantmentOffer, ENCHANTMENTS,
+} from '../enchanting.js';
+import { getSafeStorage, safeStorageGet, safeStorageSet, safeStorageRemove } from '../storage.js';
+import { PLAYER_OUTFITS, getPlayerSkinTextures, skinBoxGeo } from '../entities/entity-textures.js';
 
 const creativeCatalog = [
   ...Array.from({ length: 255 }, (_, i) => i + 1).filter(id => ![WATER_FLOW, LAVA_FLOW, FURNACE_LIT].includes(id) && getBlock(id) !== getBlock(AIR)),
@@ -34,7 +40,7 @@ export function suggestedMultiplayerRelay(location = window.location) {
 }
 
 function canStack(a, b) {
-  return !!a && !!b && a.id === b.id && (a.damage || 0) === (b.damage || 0) && stackLimit(a) > 1;
+  return !!a && !!b && a.id === b.id && (a.damage || 0) === (b.damage || 0) && sameEnchants(a.enchants, b.enchants) && stackLimit(a) > 1;
 }
 
 const ARMOR_HINTS = [
@@ -52,6 +58,8 @@ export class UI {
     this.craftSlots = new Array(9).fill(null);
     this.craftSize = 2;
     this.furnaceData = null;
+    this.enchantItem = null;
+    this.enchantPos = null;
     this.showDebug = false;
     this.showHud = true;
     this.splash = SPLASHES[Math.floor(Math.random() * SPLASHES.length)];
@@ -65,12 +73,11 @@ export class UI {
     this.playerPingTimer = null;
     this.playerPingInFlight = false;
     this.touchEnabled = Boolean(game.player?.touchSupported || window.matchMedia?.('(pointer: coarse)')?.matches || window.navigator?.maxTouchPoints > 0);
+    this.storage = getSafeStorage();
     // Remove credentials left by older account-based versions; temporary names
     // never use or persist authentication tokens.
-    try {
-      window.localStorage.removeItem('aislopcraft:account-token');
-      window.localStorage.removeItem('aislopcraft:account-name');
-    } catch {}
+    safeStorageRemove(this.storage, 'aislopcraft:account-token');
+    safeStorageRemove(this.storage, 'aislopcraft:account-name');
 
     this.buildTitle();
     this.buildHud();
@@ -424,7 +431,7 @@ export class UI {
       <div class="multiplayer-card">
         <h2 id="mp-title">Multiplayer</h2>
         <p class="mp-connect-help">Pick a name, then create a world or join one. No account or password needed.</p>
-        <p class="mp-limits">Inventory is not fully synchronized. Only the host can use or mine chests and furnaces; storage minecarts cannot be placed, used or broken in multiplayer.</p>
+        <p class="mp-limits">Inventory is not fully synchronized across devices: personal bags stay local, while the relay synchronizes host-seeded chests, furnaces, storage minecarts, and Nether travel.</p>
         <details class="mp-custom-relay">
           <summary>Advanced: custom room service</summary>
           <label>WebSocket address
@@ -526,8 +533,8 @@ export class UI {
       for (const control of multiplayer.querySelectorAll('[data-forced-visual]')) control.disabled = event.target.value !== 'forced';
     });
     this.multiplayerClient = this.game.multiplayerClient || null;
-    multiplayer.querySelector('#mp-relay').value = this.game.multiplayerRelay || new URLSearchParams(window.location.search).get('relay') || window.localStorage.getItem('aislopcraft:multiplayer-relay') || '';
-    multiplayer.querySelector('#mp-username').value = window.localStorage.getItem('aislopcraft:player-name') || '';
+    multiplayer.querySelector('#mp-relay').value = this.game.multiplayerRelay || new URLSearchParams(window.location.search).get('relay') || safeStorageGet(this.storage, 'aislopcraft:multiplayer-relay') || '';
+    multiplayer.querySelector('#mp-username').value = safeStorageGet(this.storage, 'aislopcraft:player-name') || '';
     this.multiplayerName = this.multiplayerClient?.playerName || null;
     this.updateMultiplayerNameUI();
     multiplayer.querySelector('#mp-code').value = new URLSearchParams(window.location.search).get('room') || '';
@@ -627,7 +634,7 @@ export class UI {
     this.multiplayerScreen.querySelector('#mp-join').disabled = !name;
     for (const room of this.multiplayerScreen.querySelectorAll('.mp-room')) room.disabled = !name;
     if (!name && !this.multiplayerScreen.querySelector('#mp-username').value) {
-      try { this.multiplayerScreen.querySelector('#mp-username').value = window.localStorage.getItem('aislopcraft:player-name') || ''; } catch {}
+      this.multiplayerScreen.querySelector('#mp-username').value = safeStorageGet(this.storage, 'aislopcraft:player-name') || '';
     }
   }
 
@@ -663,14 +670,14 @@ export class UI {
 
   async prepareMultiplayerClient() {
     const screen = this.multiplayerScreen;
-    const relay = screen.querySelector('#mp-relay').value.trim() || this.game.multiplayerRelay || suggestedMultiplayerRelay() || window.localStorage.getItem('aislopcraft:multiplayer-relay') || '';
+    const relay = screen.querySelector('#mp-relay').value.trim() || this.game.multiplayerRelay || suggestedMultiplayerRelay() || safeStorageGet(this.storage, 'aislopcraft:multiplayer-relay') || '';
     if (!relay) throw new Error('This static site cannot host rooms. Open the Azure setup guide or enter a custom WebSocket service under Advanced.');
     const { MultiplayerClient } = await import('../network/multiplayer.js');
     if (!this.multiplayerClient) this.multiplayerClient = new MultiplayerClient();
     this.attachMultiplayerListeners(this.multiplayerClient);
     await this.multiplayerClient.connect(relay);
     this.game.multiplayerRelay = relay;
-    try { window.localStorage.setItem('aislopcraft:multiplayer-relay', relay); } catch {}
+    safeStorageSet(this.storage, 'aislopcraft:multiplayer-relay', relay);
     return this.multiplayerClient;
   }
 
@@ -687,7 +694,7 @@ export class UI {
       const client = await this.prepareMultiplayerClient();
       const result = await client.claimPlayerName(name);
       this.multiplayerName = result.name;
-      try { window.localStorage.setItem('aislopcraft:player-name', result.name); } catch {}
+      safeStorageSet(this.storage, 'aislopcraft:player-name', result.name);
       this.updateMultiplayerNameUI();
       status.textContent = `Welcome, ${result.name}. Create a world or choose one to join.`;
       screen.querySelector('#mp-create').focus();
@@ -841,6 +848,7 @@ export class UI {
         status.textContent = `Preparing your world… ${Math.min(index + batchSize, entries.length).toLocaleString()} / ${entries.length.toLocaleString()} edits`;
         await this.multiplayerClient.request('world:snapshot', { entries: entries.slice(index, index + batchSize) });
       }
+      if (this.game.publishHostContainers) await this.game.publishHostContainers(this.multiplayerClient);
       status.textContent = 'Starting your world…';
       this.multiplayerClient.send('chat', { text: `${playerName} opened ${result.gameMode} world “${result.name}”.` });
       await this.enterMultiplayer(result);
@@ -951,6 +959,10 @@ export class UI {
     div.innerHTML = `
       <div class="crosshair">+</div>
       <div class="hotbar" id="hotbar"></div>
+      <div class="xp-bar-wrap" id="xp-bar-wrap" aria-label="Experience bar">
+        <div class="xp-bar-fill" id="xp-bar-fill"></div>
+        <span class="xp-level" id="xp-level" style="display:none">0</span>
+      </div>
       <div class="status-bars">
         <div class="hearts" id="hearts"></div>
         <div class="armor-bar" id="armor-bar" style="display:none"></div>
@@ -1007,6 +1019,9 @@ export class UI {
     this.heartsEl = div.querySelector('#hearts');
     this.hungerBarEl = div.querySelector('#hunger-bar');
     this.armorBarEl = div.querySelector('#armor-bar');
+    this.xpWrapEl = div.querySelector('#xp-bar-wrap');
+    this.xpFillEl = div.querySelector('#xp-bar-fill');
+    this.xpLevelEl = div.querySelector('#xp-level');
     this.statusBarsEl = div.querySelector('.status-bars');
     this.heldNameEl = div.querySelector('#held-name');
     this.toastEl = div.querySelector('#toast-msg');
@@ -1086,7 +1101,7 @@ export class UI {
     if (this.game.edition === 'classic') { touchInventory.textContent = 'Blocks'; touchInventory.setAttribute('aria-label', 'Choose a block'); }
     touchInventory.addEventListener('click', () => {
       if (this.mode === 'game') this.setMode(this.game.edition === 'classic' ? 'classic-blocks' : player.gameMode === 'creative' ? 'creative' : 'inventory');
-      else if (['creative', 'inventory', 'crafting', 'furnace', 'chest', 'classic-blocks'].includes(this.mode)) this.setMode('game');
+      else if (['creative', 'inventory', 'crafting', 'furnace', 'chest', 'enchant', 'classic-blocks'].includes(this.mode)) this.setMode('game');
     });
     controls.querySelector('#touch-pause').addEventListener('click', () => {
       if (this.mode === 'game') this.setMode('pause');
@@ -1240,22 +1255,29 @@ export class UI {
       const camera = new THREE.PerspectiveCamera(32, 120 / 176, 0.1, 20);
       camera.position.set(0, 1.05, 4.1); camera.lookAt(0, 1.05, 0);
       const avatar = new THREE.Group(); scene.add(avatar);
-      const part = (w, h, d, color, x, y, z) => {
-        const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshBasicMaterial({ color }));
-        mesh.position.set(x, y, z); avatar.add(mesh); return mesh;
+      const model = new THREE.Group(); model.rotation.y = Math.PI; avatar.add(model);
+      const outfit = PLAYER_OUTFITS[1];
+      const { texture } = getPlayerSkinTextures(1);
+      const addPart = (geo, map, color, x, y, z) => {
+        const g = geo.clone().toNonIndexed();
+        const norm = g.getAttribute('normal');
+        const cols = new Float32Array(norm.count * 3);
+        const c = new THREE.Color(color);
+        for (let i = 0; i < norm.count; i++) {
+          const nx = norm.getX(i), ny = norm.getY(i);
+          const s = ny > 0.5 ? 1.0 : ny < -0.5 ? 0.55 : Math.abs(nx) > 0.5 ? 0.68 : 0.88;
+          cols[i * 3] = c.r * s; cols[i * 3 + 1] = c.g * s; cols[i * 3 + 2] = c.b * s;
+        }
+        g.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+        const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ map, vertexColors: true }));
+        mesh.position.set(x, y, z); model.add(mesh); return mesh;
       };
-      // A small, original block-character preview, built from voxel shapes.
-      part(.48, .68, .27, 0x167f9c, 0, 1.02, 0); // tunic
-      part(.235, .71, .25, 0x253b83, -.13, .325, 0); // left leg
-      part(.235, .71, .25, 0x253b83, .13, .325, 0); // right leg
-      part(.19, .68, .23, 0xc78d67, -.36, 1.02, 0); // arms
-      part(.19, .68, .23, 0xc78d67, .36, 1.02, 0);
-      part(.47, .47, .47, 0xc78d67, 0, 1.62, 0); // head
-      part(.475, .12, .48, 0x513927, 0, 1.91, 0); // hair cap
-      part(.13, .045, .025, 0xeee7d5, -.105, 1.66, .247); // eyes
-      part(.13, .045, .025, 0xeee7d5, .105, 1.66, .247);
-      part(.055, .055, .012, 0x3c74a6, -.105, 1.66, .264);
-      part(.055, .055, .012, 0x3c74a6, .105, 1.66, .264);
+      addPart(skinBoxGeo(0.48, 0.72, 0.26, 16, 16, 8, 12, 4, 64, 64), texture, outfit.shirt, 0, 1.04, 0);
+      addPart(skinBoxGeo(0.24, 0.72, 0.24, 0, 16, 4, 12, 4, 64, 64), texture, 0xffffff, -0.125, 0.34, 0);
+      addPart(skinBoxGeo(0.24, 0.72, 0.24, 0, 16, 4, 12, 4, 64, 64), texture, 0xffffff, 0.125, 0.34, 0);
+      addPart(skinBoxGeo(0.23, 0.72, 0.24, 40, 16, 4, 12, 4, 64, 64), texture, 0xffffff, -0.355, 1.04, 0);
+      addPart(skinBoxGeo(0.23, 0.72, 0.24, 40, 16, 4, 12, 4, 64, 64), texture, 0xffffff, 0.355, 1.04, 0);
+      addPart(skinBoxGeo(0.48, 0.48, 0.48, 0, 0, 8, 8, 8, 64, 64), texture, 0xffffff, 0, 1.64, 0);
       this.playerPreviewRenderer = renderer;
       this.playerPreviewScene = scene; this.playerPreviewCamera = camera; this.playerPreviewAvatar = avatar;
       this.renderPlayerPreview();
@@ -1300,13 +1322,16 @@ export class UI {
     }
     const name = itemName(stack.id);
     const def = ITEMS[stack.id];
+    const enchLines = formatEnchantments(stack.enchants);
     const meta = [];
     if (def?.food) meta.push(`Restores ${def.food} food`);
     if (def?.defense) meta.push(`+${def.defense} Armor`);
     if (def?.damage) meta.push(`${def.damage} Attack Damage`);
     if (def?.durability) meta.push(`Durability: ${Math.max(1, def.durability - (stack.damage || 0))}/${def.durability}`);
-    this.tooltipEl.innerHTML = `<div class="tt-name">${name}</div>` +
-      (meta.length ? `<div class="tt-sub">${meta.join(' · ')}</div>` : '');
+    const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    this.tooltipEl.innerHTML = `<div class="tt-name">${esc(name)}</div>` +
+      enchLines.map(line => `<div class="tt-ench">${esc(line)}</div>`).join('') +
+      (meta.length ? `<div class="tt-sub">${esc(meta.join(' · '))}</div>` : '');
     this.tooltipEl.style.display = 'block';
     this.positionTooltip(this._mouseX, this._mouseY);
   }
@@ -1330,11 +1355,11 @@ export class UI {
       if (!p.cursorStack) return;
       e.preventDefault();
       if (e.button === 2) {
-        this.game.dropItem?.({ id: p.cursorStack.id, count: 1, damage: p.cursorStack.damage || 0 });
+        this.game.dropItem?.({ id: p.cursorStack.id, count: 1, damage: p.cursorStack.damage || 0, enchants: cloneEnchants(p.cursorStack.enchants) });
         p.cursorStack.count--;
         if (p.cursorStack.count <= 0) p.cursorStack = null;
       } else {
-        this.game.dropItem?.({ ...p.cursorStack });
+        this.game.dropItem?.({ ...p.cursorStack, enchants: cloneEnchants(p.cursorStack.enchants) });
         p.cursorStack = null;
       }
       this.refresh();
@@ -1494,6 +1519,119 @@ export class UI {
     });
 
     this.buildInventoryGrids();
+    this.buildEnchantingModal();
+  }
+
+  buildEnchantingModal() {
+    const screen = document.createElement('div');
+    screen.className = 'screen panel-screen';
+    screen.id = 'enchant-screen';
+    screen.style.display = 'none';
+    screen.setAttribute('role', 'dialog');
+    screen.setAttribute('aria-modal', 'true');
+    screen.setAttribute('aria-labelledby', 'enchant-title');
+    screen.innerHTML = `
+      <div class="panel enchant-panel">
+        <div class="inv-title" id="enchant-title">Enchanting Table</div>
+        <div class="enchant-layout">
+          <div class="enchant-left">
+            <div class="slot" id="enchant-item-slot" tabindex="0" aria-label="Item to enchant"></div>
+            <div class="enchant-books" id="enchant-books">Bookshelves: 0 / 15</div>
+          </div>
+          <div class="enchant-offers" id="enchant-offers" role="group" aria-label="Enchantment offers">
+            <button type="button" class="enchant-offer-btn" data-offer="0" disabled><span>Place a tool, weapon, armor, or book</span><span class="enchant-offer-cost"></span></button>
+            <button type="button" class="enchant-offer-btn" data-offer="1" disabled><span>—</span><span class="enchant-offer-cost"></span></button>
+            <button type="button" class="enchant-offer-btn" data-offer="2" disabled><span>—</span><span class="enchant-offer-cost"></span></button>
+          </div>
+        </div>
+        <div class="inv-title">Inventory</div>
+        <div class="inv-main" id="ench-inv-main"></div>
+        <div class="inv-hotbar" id="ench-inv-hotbar"></div>
+      </div>
+    `;
+    this.root.appendChild(screen);
+    this.enchantScreen = screen;
+    this.bindBackdropDrop(screen);
+
+    const itemSlot = screen.querySelector('#enchant-item-slot');
+    itemSlot.addEventListener('mousedown', e => {
+      this.slotClick(e, 'enchant', 0);
+      this.refreshEnchanting();
+    });
+    itemSlot.addEventListener('contextmenu', e => e.preventDefault());
+    this.bindSlotHover(itemSlot, () => this.enchantItem);
+
+    for (const btn of screen.querySelectorAll('.enchant-offer-btn')) {
+      btn.addEventListener('click', () => {
+        const idx = +btn.dataset.offer;
+        this.chooseEnchantOffer(idx);
+      });
+    }
+
+    const addInv = (parentSel, index) => {
+      const slot = document.createElement('div');
+      slot.className = 'slot';
+      slot.tabIndex = 0;
+      slot.dataset.inv = index;
+      slot.addEventListener('mousedown', e => {
+        this.slotClick(e, 'inv', index);
+        this.refreshEnchanting();
+      });
+      slot.addEventListener('contextmenu', e => e.preventDefault());
+      this.bindSlotHover(slot, () => this.game.player.inventory[index]);
+      screen.querySelector(parentSel).appendChild(slot);
+    };
+    for (let i = 9; i < 36; i++) addInv('#ench-inv-main', i);
+    for (let i = 0; i < 9; i++) addInv('#ench-inv-hotbar', i);
+  }
+
+  openEnchanting(x, y, z) {
+    this.enchantPos = { x, y, z };
+    this.setMode('enchant');
+    this.refreshEnchanting();
+  }
+
+  chooseEnchantOffer(index) {
+    if (!this.enchantItem || !this.enchantPos) return;
+    const player = this.game.player;
+    const bookshelves = this.game.world ? countBookshelfPower(this.game.world, this.enchantPos.x, this.enchantPos.y, this.enchantPos.z) : 0;
+    const applied = applyEnchantmentOffer(player, this.enchantItem, index, bookshelves);
+    if (!applied) return;
+    this.enchantItem = applied.stack;
+    this.game.audio?.levelUp?.();
+    this.refreshEnchanting();
+    this.refresh();
+  }
+
+  refreshEnchanting() {
+    if (!this.enchantScreen || this.mode !== 'enchant') return;
+    const player = this.game.player;
+    const bookshelves = (this.enchantPos && this.game.world)
+      ? countBookshelfPower(this.game.world, this.enchantPos.x, this.enchantPos.y, this.enchantPos.z)
+      : 0;
+    this.enchantScreen.querySelector('#enchant-books').textContent = `Bookshelves: ${bookshelves} / 15`;
+    this.renderSlot(this.enchantScreen.querySelector('#enchant-item-slot'), this.enchantItem);
+    const offers = getEnchantmentOffers(this.enchantItem, bookshelves, player.xpSeed ?? 1);
+    const creative = player.gameMode === 'creative';
+    const buttons = this.enchantScreen.querySelectorAll('.enchant-offer-btn');
+    buttons.forEach((btn, idx) => {
+      const offer = offers[idx];
+      const [labelEl, costEl] = btn.children;
+      if (!offer) {
+        btn.disabled = true;
+        labelEl.textContent = idx === 0 && !this.enchantItem
+          ? 'Place a tool, weapon, armor, or book'
+          : (this.enchantItem?.enchants ? 'Already enchanted' : '—');
+        costEl.textContent = '';
+        return;
+      }
+      labelEl.textContent = `${offer.preview} …?`;
+      costEl.textContent = `${offer.cost}`;
+      btn.disabled = !creative && (player.xpLevel || 0) < offer.cost;
+    });
+    this.enchantScreen.querySelectorAll('[data-inv]').forEach(el => {
+      this.renderSlot(el, player.inventory[+el.dataset.inv]);
+    });
   }
 
   buildInventoryGrids() {
@@ -1571,7 +1709,9 @@ export class UI {
     for (let i = start; i < end && remaining > 0; i++) {
       if (slotsArray[i]) continue;
       const add = Math.min(limit, remaining);
-      slotsArray[i] = { id: stack.id, count: add, damage: stack.damage || 0 };
+      const next = { id: stack.id, count: add, damage: stack.damage || 0 };
+      if (stack.enchants) next.enchants = cloneEnchants(stack.enchants);
+      slotsArray[i] = next;
       remaining -= add;
     }
     return stack.count - remaining;
@@ -1582,8 +1722,28 @@ export class UI {
     const s = player.inventory[index];
     if (!s) return;
 
-    // 1. If chest is open, move into chest
+    // 0. If enchanting table is open, move 1 enchantable item into the enchanting slot
+    if (this.mode === 'enchant' && !this.enchantItem) {
+      this.enchantItem = { ...s, count: 1, ...(s.enchants ? { enchants: cloneEnchants(s.enchants) } : {}) };
+      s.count -= 1;
+      if (s.count <= 0) player.inventory[index] = null;
+      this.refreshEnchanting();
+      return;
+    }
+
+    // 1. If chest is open, move into chest (authoritative in multiplayer)
     if (this.mode === 'chest' && this.game.openChestData?.slots) {
+      if (this.game.networkRoom && this.game.containerTx) {
+        const sending = { ...s, ...(s.enchants ? { enchants: cloneEnchants(s.enchants) } : {}) };
+        player.inventory[index] = null;
+        void this.game.containerTx({
+          mode: 'insert',
+          kind: this.game.openChestData.vehicle ? 'cart' : 'chest',
+          key: this.game.openChestData.vehicle ? this.game.openChestData.vehicle.networkId : this.game.openChestData.key,
+          stack: sending,
+        }, player, index, sending);
+        return;
+      }
       const moved = this._transferToRange(s, this.game.openChestData.slots, 0, 27);
       if (moved > 0) {
         s.count -= moved;
@@ -1594,6 +1754,17 @@ export class UI {
 
     // 2. If furnace is open, move smeltable to input or fuel to fuel
     if (this.mode === 'furnace' && this.game.openFurnaceData?.f) {
+      if (this.game.networkRoom && this.game.containerTx && (smeltResult(s.id) != null || FUEL_TIMES[s.id])) {
+        const sending = { ...s, ...(s.enchants ? { enchants: cloneEnchants(s.enchants) } : {}) };
+        player.inventory[index] = null;
+        void this.game.containerTx({
+          mode: 'insert',
+          kind: 'furnace',
+          key: this.game.openFurnaceData.key,
+          stack: sending,
+        }, player, index, sending);
+        return;
+      }
       const f = this.game.openFurnaceData.f;
       if (smeltResult(s.id) != null) {
         if (!f.input) {
@@ -1647,7 +1818,40 @@ export class UI {
     const player = this.game.player;
     const audio = this.game.audio;
 
-    if (type === 'chest' && this.game.openChestData?.slots) {
+    if (type === 'enchant') {
+      const s = this.enchantItem;
+      if (e.shiftKey && s) {
+        const moved = this._transferToRange(s, player.inventory, 0, 36);
+        if (moved > 0) {
+          s.count -= moved;
+          if (s.count <= 0) this.enchantItem = null;
+        }
+      } else if (!player.cursorStack && s) {
+        player.cursorStack = s;
+        this.enchantItem = null;
+      } else if (player.cursorStack && !s) {
+        this.enchantItem = { ...player.cursorStack, count: 1 };
+        player.cursorStack.count -= 1;
+        if (player.cursorStack.count <= 0) player.cursorStack = null;
+      } else if (player.cursorStack && s && player.cursorStack.count === 1) {
+        this.enchantItem = player.cursorStack;
+        player.cursorStack = s;
+      }
+      this.showSlotTooltip(this.enchantItem);
+    } else if (type === 'chest' && this.game.openChestData?.slots) {
+      if (this.game.networkRoom && this.game.containerTx) {
+        const kind = this.game.openChestData.vehicle ? 'cart' : 'chest';
+        const key = this.game.openChestData.vehicle ? this.game.openChestData.vehicle.networkId : this.game.openChestData.key;
+        if (e.shiftKey) {
+          void this.game.containerTx({ mode: 'take', kind, key, slot: index, maxCount: 64 }, player);
+        } else {
+          const sentCursor = player.cursorStack ? { ...player.cursorStack } : null;
+          player.cursorStack = null;
+          void this.game.containerTx({ mode: 'click', kind, key, slot: index, button: e.button, cursorStack: sentCursor }, player, null, sentCursor);
+        }
+        this.refresh();
+        return;
+      }
       const slots = this.game.openChestData.slots;
       const stack = slots[index];
       if (e.shiftKey && stack) {
@@ -1958,9 +2162,36 @@ export class UI {
       if (this.mode === 'game' && this.game.edition !== 'classic') {
         e.preventDefault();
         this.setMode(this.game.player.gameMode === 'creative' ? 'creative' : 'inventory');
-      } else if (this.mode === 'creative' || this.mode === 'inventory' || this.mode === 'crafting' || this.mode === 'furnace' || this.mode === 'chest') {
+      } else if (['creative', 'inventory', 'crafting', 'furnace', 'chest', 'enchant'].includes(this.mode)) {
         e.preventDefault();
         this.setMode('game');
+      }
+    }
+    if (['inventory', 'crafting', 'furnace', 'chest', 'enchant'].includes(this.mode)) {
+      const activeScreen = document.getElementById(
+        this.mode === 'crafting' ? 'inventory-screen' : `${this.mode}-screen`,
+      );
+      if (activeScreen) {
+        const slots = [...activeScreen.querySelectorAll('.slot')].filter(s => s.style.display !== 'none' && !s.closest('[hidden]'));
+        const curIdx = slots.indexOf(document.activeElement);
+        if (['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp'].includes(e.code) && slots.length) {
+          e.preventDefault();
+          let nextIdx = curIdx;
+          if (curIdx < 0) nextIdx = 0;
+          else if (e.code === 'ArrowRight') nextIdx = (curIdx + 1) % slots.length;
+          else if (e.code === 'ArrowLeft') nextIdx = (curIdx - 1 + slots.length) % slots.length;
+          else if (e.code === 'ArrowDown') nextIdx = Math.min(slots.length - 1, curIdx + 9);
+          else if (e.code === 'ArrowUp') nextIdx = Math.max(0, curIdx - 9);
+          slots[nextIdx]?.focus();
+          slots[nextIdx]?.dispatchEvent(new MouseEvent('mouseenter'));
+          return;
+        }
+        if ((e.code === 'Enter' || e.code === 'Space' || e.code === 'Backspace') && curIdx >= 0) {
+          e.preventDefault();
+          const btnNum = e.code === 'Backspace' ? 2 : 0;
+          slots[curIdx].dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: btnNum, shiftKey: e.shiftKey }));
+          return;
+        }
       }
     }
     if (this.game.edition !== 'classic' && e.code === (this.game.settings?.keys ? this.game.settings.keys.drop : 'KeyQ') && this.mode === 'game' && !this.game.player.dead) {
@@ -1995,26 +2226,32 @@ export class UI {
   returnStack(stack) {
     if (!stack || !stack.count) return;
     const player = this.game.player;
+    const enchants = cloneEnchants(stack.enchants);
     let inserted = 0;
     if (typeof player.insertItem === 'function') {
-      inserted = player.insertItem(stack.id, stack.count, stack.damage || 0);
+      inserted = player.insertItem(stack.id, stack.count, stack.damage || 0, enchants);
     } else {
-      const result = player.addItem?.(stack.id, stack.count, stack.damage || 0);
+      const result = player.addItem?.(stack.id, stack.count, stack.damage || 0, enchants);
       inserted = result === false ? 0 : stack.count;
     }
     const remainder = stack.count - inserted;
     if (remainder > 0 && this.game.dropItem) {
-      this.game.dropItem({ ...stack, count: remainder });
+      this.game.dropItem({ ...stack, count: remainder, ...(enchants ? { enchants } : {}) });
     } else if (remainder > 0) {
-      player.overflowStack = { ...stack, count: remainder };
+      player.overflowStack = { ...stack, count: remainder, ...(enchants ? { enchants } : {}) };
     }
   }
 
   setMode(mode) {
     if (mode === 'creative' && this.game.player.gameMode !== 'creative') return;
+    const previousMode = this.mode;
     this.mode = mode;
+    if (previousMode === 'enchant' && mode !== 'enchant' && this.enchantItem) {
+      this.returnStack(this.enchantItem);
+      this.enchantItem = null;
+    }
     if (this.touchControlsEl) this.touchControlsEl.style.display = this.touchEnabled && mode === 'game' ? 'block' : 'none';
-    if (this.touchPanelReturnEl) this.touchPanelReturnEl.hidden = !this.touchEnabled || !['inventory', 'crafting', 'furnace', 'chest'].includes(mode);
+    if (this.touchPanelReturnEl) this.touchPanelReturnEl.hidden = !this.touchEnabled || !['inventory', 'crafting', 'furnace', 'chest', 'enchant'].includes(mode);
     if (mode !== 'game') {
       this.releaseTouchInputs();
       this.playerListHeld = false;
@@ -2032,6 +2269,7 @@ export class UI {
     const death = document.getElementById('death-screen');
     const furnace = document.getElementById('furnace-screen');
     const chest = document.getElementById('chest-screen');
+    const enchant = document.getElementById('enchant-screen');
     const title = document.getElementById('title-screen');
     const classicBlocks = document.getElementById('classic-block-screen');
 
@@ -2048,6 +2286,7 @@ export class UI {
     death.style.display = mode === 'death' ? 'flex' : 'none';
     if (furnace) furnace.style.display = mode === 'furnace' ? 'flex' : 'none';
     if (chest) chest.style.display = mode === 'chest' ? 'flex' : 'none';
+    if (enchant) enchant.style.display = mode === 'enchant' ? 'flex' : 'none';
     if (classicBlocks) classicBlocks.style.display = mode === 'classic-blocks' ? 'flex' : 'none';
 
     const armorSection = document.getElementById('armor-section');
@@ -2175,6 +2414,22 @@ export class UI {
     const player = this.game.player;
     const survivalHud = this.game.edition !== 'classic' && player.gameMode !== 'creative';
     if (this.statusBarsEl) this.statusBarsEl.style.display = survivalHud ? '' : 'none';
+    if (this.xpWrapEl) {
+      this.xpWrapEl.style.display = survivalHud ? '' : 'none';
+      if (survivalHud) {
+        const lvl = player.xpLevel || 0;
+        const pct = Math.max(0, Math.min(100, Math.round((player.xpProgress || 0) * 1000) / 10));
+        if (this._lastXpPct !== pct) {
+          this._lastXpPct = pct;
+          this.xpFillEl.style.width = `${pct}%`;
+        }
+        if (this._lastXpLvl !== lvl) {
+          this._lastXpLvl = lvl;
+          this.xpLevelEl.textContent = String(lvl);
+          this.xpLevelEl.style.display = lvl > 0 ? 'block' : 'none';
+        }
+      }
+    }
     const waterBar = document.getElementById('water-bar');
     if (waterBar && !survivalHud) waterBar.style.display = 'none';
     const hp = player.health;
@@ -2239,17 +2494,26 @@ export class UI {
 
   renderSlot(el, stack) {
     if (!el) return;
-    const key = stack ? `${stack.id}:${stack.count}:${stack.damage || 0}` : 'empty';
+    if (!el.classList.contains('hotbar-slot') && !el.classList.contains('creative-item-slot') && !el.classList.contains('classic-block-slot') && el.id !== 'cursor-item') {
+      if (el.tabIndex < 0) el.tabIndex = 0;
+    }
+    const enchKey = stack?.enchants ? JSON.stringify(stack.enchants) : '';
+    const key = stack ? `${stack.id}:${stack.count}:${stack.damage || 0}:${enchKey}` : 'empty';
     const hasClass = el.classList.contains('has-item');
     if (el._slotKey === key && (stack ? hasClass : !hasClass)) return;
     el._slotKey = key;
 
     if (!stack) {
       el.innerHTML = el.dataset.placeholder || '';
-      el.classList.remove('has-item');
+      el.classList.remove('has-item', 'is-enchanted');
+      if (el.tabIndex === 0) el.setAttribute('aria-label', 'Empty slot');
       return;
     }
     el.classList.add('has-item');
+    el.classList.toggle('is-enchanted', Boolean(stack.enchants));
+    if (el.tabIndex === 0) {
+      el.setAttribute('aria-label', `${itemName(stack.id)}${stack.count > 1 ? ` × ${stack.count}` : ''}`);
+    }
     const isB = isBlock(stack.id);
     const icon = isB
       ? `<canvas class="block-icon" width="32" height="32" data-block="${stack.id}"></canvas>`
@@ -2458,6 +2722,14 @@ export const ITEM_ICON_INDEX = {
   330: 95,  // iron door
   368: 97,  // bone meal
   356: 98,  // redstone repeater
+  369: 106, // blaze rod
+  370: 107, // ghast tear
+  371: 108, // gold nugget
+  377: 109, // blaze powder
+  384: 110, // bottle o' enchanting
+  403: 111, // enchanted book
+  405: 112, // nether brick
+  406: 113, // nether quartz
 };
 // tools: 40 + mat*5 + kind
 const toolMap = {

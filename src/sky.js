@@ -14,11 +14,14 @@ const CLOUD_DAY = new THREE.Color(0xffffff);
 const CLOUD_SUNSET = new THREE.Color(0xffb894);
 const CLOUD_NIGHT = new THREE.Color(0x23273a);
 const WATER_BLUE = new THREE.Color(0x174a9b);
+const SKY_NETHER = new THREE.Color(0x330808);
+const FOG_NETHER = new THREE.Color(0x3b0c0c);
 
 export class Sky {
   constructor(scene, camera) {
     this.scene = scene;
     this.camera = camera;
+    this.dimension = 'overworld';
     this.time = 0.38; // mid-morning: the title backdrop opens in full daylight
     this.elapsed = 0;
     this.dayFactor = 1;
@@ -159,9 +162,31 @@ export class Sky {
   }
 
   // time: 0.0 = midnight, 0.25 = dawn, 0.50 = noon, 0.75 = dusk
-  update(dt, playerPos, renderDistance = 6, { underwater = false } = {}) {
+  update(dt, playerPos, renderDistance = 6, { underwater = false, dimension = 'overworld' } = {}) {
+    this.dimension = dimension === 'nether' ? 'nether' : 'overworld';
     this.time = (this.time + dt / DAY_LENGTH) % 1;
     this.elapsed += dt;
+
+    if (this.dimension === 'nether') {
+      this.dayFactor = 0.0;
+      this.sunDirection.set(0, -1, 0);
+      this._skyColor.copy(SKY_NETHER);
+      this._fogColor.copy(FOG_NETHER);
+      this.scene.background = this._skyColor;
+      this.skyDome.position.copy(playerPos);
+      this.skyUniforms.uHorizon.value.copy(FOG_NETHER);
+      this.skyUniforms.uZenith.value.copy(SKY_NETHER);
+      this.skyUniforms.uNadir.value.copy(SKY_NETHER);
+      this.skyUniforms.uUnderwater.value = 0;
+      this.sun.visible = this.moon.visible = this.stars.visible = this.clouds.visible = false;
+      if (this.scene.fog) {
+        const far = Math.max(28, renderDistance * 14);
+        this.scene.fog.color.copy(FOG_NETHER);
+        this.scene.fog.near = Math.max(8, far * 0.25);
+        this.scene.fog.far = far;
+      }
+      return this.dayFactor;
+    }
 
     const sunAngle = (this.time - 0.25) * Math.PI * 2;
     this.sunDirection.set(Math.cos(sunAngle), Math.sin(sunAngle), 0.18).normalize();

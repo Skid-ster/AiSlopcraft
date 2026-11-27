@@ -1,10 +1,11 @@
 import { normalizeWorldSave, WORLD_SAVE_VERSION } from './save.js';
+import { safeStorageGet, safeStorageRemove } from './storage.js';
 
 const PREFIX = 'aislopcraft:world:';
 const MODERN_PREFIX = 'aislopcraft:world-v2:'; // Outside the legacy client's keyspace.
 
 export function createWorldSaveStore(storage) {
-  const has = id => [PREFIX, MODERN_PREFIX].some(prefix => storage?.getItem(prefix + id) != null);
+  const has = id => [PREFIX, MODERN_PREFIX].some(prefix => safeStorageGet(storage, prefix + id) != null);
   const parse = (raw, id) => {
     try {
       const save = normalizeWorldSave(JSON.parse(raw ?? 'null'));
@@ -13,7 +14,7 @@ export function createWorldSaveStore(storage) {
   };
   const records = id => {
     const oldKey = PREFIX + id, modernKey = MODERN_PREFIX + id;
-    const oldRaw = storage?.getItem(oldKey) ?? null, modernRaw = storage?.getItem(modernKey) ?? null;
+    const oldRaw = safeStorageGet(storage, oldKey), modernRaw = safeStorageGet(storage, modernKey);
     const old = parse(oldRaw, id), modern = parse(modernRaw, id);
     return { oldKey, modernKey, oldRaw, modernRaw, old, modern: modern?.version === WORLD_SAVE_VERSION ? modern : null };
   };
@@ -21,7 +22,7 @@ export function createWorldSaveStore(storage) {
     if (old?.version !== WORLD_SAVE_VERSION || (modernRaw != null && modernRaw !== oldRaw)) return;
     try {
       if (modernRaw == null) storage.setItem(modernKey, oldRaw);
-      if (storage.getItem(oldKey) === oldRaw) storage.removeItem(oldKey);
+      if (safeStorageGet(storage, oldKey) === oldRaw) safeStorageRemove(storage, oldKey);
     } catch { /* A failed copy keeps the old record readable; never delete it to reclaim quota. */ }
   };
   const readVersions = id => {
