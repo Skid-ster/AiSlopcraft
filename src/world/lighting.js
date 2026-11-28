@@ -4,6 +4,7 @@
 import { CH } from './chunk.js';
 import {
   WATER, WATER_FLOW, ICE, LEAVES, WOOD_DOOR, IRON_DOOR, REDSTONE_TORCH,
+  STONE_SLAB, CHEST, FARMLAND, OAK_STAIRS, COBBLESTONE_STAIRS, NETHER_BRICK_STAIRS, ENCHANTING_TABLE,
   BLOCK_OPAQUE, BLOCK_LIGHT,
 } from './blocks.js';
 
@@ -15,6 +16,13 @@ BASE_FILTER[WATER] = 2;
 BASE_FILTER[WATER_FLOW] = 2;
 BASE_FILTER[ICE] = 2;
 BASE_FILTER[LEAVES] = 1;
+BASE_FILTER[STONE_SLAB] = 2;
+BASE_FILTER[CHEST] = 2;
+BASE_FILTER[FARMLAND] = 15;
+BASE_FILTER[OAK_STAIRS] = 2;
+BASE_FILTER[COBBLESTONE_STAIRS] = 2;
+BASE_FILTER[NETHER_BRICK_STAIRS] = 2;
+BASE_FILTER[ENCHANTING_TABLE] = 2;
 
 const BASE_OPACITY = new Uint8Array(256);
 for (let id = 0; id < 256; id++) {
@@ -98,8 +106,9 @@ export class WorldLighting {
     const skyLight = chunk.skyLight, blockLight = chunk.blockLight;
     let maxDarkY = -1;
 
+    const isNether = this.world.dimension === 'nether';
     for (let z = 0; z < CH; z++) for (let x = 0; x < CH; x++) {
-      let light = 15;
+      let light = isNether ? 0 : 15;
       for (let y = h - 1; y >= 0; y--) {
         const i = (y * CH + z) * CH + x;
         const id = blocks[i];
@@ -284,10 +293,12 @@ export class WorldLighting {
     const emission = lightEmission(id, meta);
     const skyQ = [], blockQ = [];
     this.depth++;
+    const isNether = this.world.dimension === 'nether';
     for (const sky of [true, false]) {
+      if (sky && isNether) continue;
       const old = this.get(x, y, z, sky);
       const opacityChanged = newOpacity !== oldOpacity;
-      const next = sky ? (y === c.chunk.height - 1 ? 15 - newOpacity : newOpacity >= 15 || opacityChanged ? 0 : old)
+      const next = sky ? (y === c.chunk.height - 1 ? Math.max(0, 15 - newOpacity) : newOpacity >= 15 || opacityChanged ? 0 : old)
         : (emission > 0 ? emission : (opacityChanged || oldEmission > 0 ? 0 : old));
       this.set(x, y, z, sky, next);
       if (old > 0 && (opacityChanged || (!sky && emission < old))) {
@@ -332,12 +343,16 @@ export class WorldLighting {
 
   finish() {
     if (this.depth) return;
-    // Rebuild a mesh when its own light OR a sampled border cell changed.
+    // Rebuild a mesh when its own light OR a sampled border/corner cell changed.
+    // Smooth AO/light in mesher.js samples all 8 surrounding chunks (including diagonals).
     const dirty = new Set(this.touched);
     for (const chunk of this.touched) {
-      for (const [dx, dz] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
-        const n = this.world.getChunk(chunk.cx + dx, chunk.cz + dz);
-        if (n?.meshes) dirty.add(n);
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dz === 0) continue;
+          const n = this.world.getChunk(chunk.cx + dx, chunk.cz + dz);
+          if (n?.meshes) dirty.add(n);
+        }
       }
     }
     for (const chunk of dirty) chunk.dirty = true;

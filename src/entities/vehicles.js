@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { AIR, WATER, WATER_FLOW, RAIL, getBlock } from '../world/blocks.js';
 import { CH } from '../world/chunk.js';
+import { getVehicleTexture, skinBoxGeo, uvBox } from './entity-textures.js';
 
 const SIDES = [[1,0],[-1,0],[0,1],[0,-1]];
 const water = id => id === WATER || id === WATER_FLOW;
@@ -17,24 +18,36 @@ export class VehicleManager {
   create(type, x, y, z, networkId = null) {
     if (!['boat','minecart','storage','powered'].includes(type) || ![x,y,z].every(Number.isFinite)) return null;
     const group = new THREE.Group();
-    const color = type === 'boat' ? 0x9e713d : 0x999c9f;
-    const make = (w,h,d,px,py,pz,col=color) => {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), new THREE.MeshBasicMaterial({color:col}));
-      mesh.position.set(px,py,pz); group.add(mesh);
+    const tex = getVehicleTexture();
+    const addMesh = (geo, px, py, pz, emissive = false) => {
+      const mesh = new THREE.Mesh(geo.clone(), new THREE.MeshBasicMaterial({ map: tex }));
+      if (emissive) mesh.userData.emissive = true;
+      mesh.position.set(px, py, pz);
+      group.add(mesh);
+      return mesh;
     };
     if (type === 'boat') {
-      make(1.15,.13,1.55,0,.10,0); make(.12,.38,1.55,-.52,.30,0); make(.12,.38,1.55,.52,.30,0);
-      make(1.15,.38,.12,0,.30,-.71); make(1.15,.38,.12,0,.30,.71);
-      make(.9,.08,.28,0,.25,0,0x77502a);
+      const hull = (w, h, d, px, py, pz) => addMesh(uvBox(w, h, d, { all: [0, 0, 32, 16] }), px, py, pz);
+      hull(1.15, .13, 1.55, 0, .10, 0);
+      hull(.12, .38, 1.55, -.52, .30, 0);
+      hull(.12, .38, 1.55, .52, .30, 0);
+      hull(1.15, .38, .12, 0, .30, -.71);
+      hull(1.15, .38, .12, 0, .30, .71);
+      addMesh(uvBox(.9, .08, .28, { all: [32, 0, 16, 16] }), 0, .25, 0);
     } else {
-      make(.92,.12,1.05,0,.16,0); make(.10,.48,1.05,-.41,.42,0); make(.10,.48,1.05,.41,.42,0);
-      make(.92,.48,.1,0,.42,-.48); make(.92,.48,.1,0,.42,.48);
-      for(const xx of [-.36,.36]) for(const zz of [-.32,.32]) make(.15,.19,.19,xx,.08,zz,0x343434);
+      const iron = (w, h, d, px, py, pz) => addMesh(uvBox(w, h, d, { all: [0, 16, 32, 16] }), px, py, pz);
+      iron(.92, .12, 1.05, 0, .16, 0);
+      iron(.10, .48, 1.05, -.41, .42, 0);
+      iron(.10, .48, 1.05, .41, .42, 0);
+      iron(.92, .48, .1, 0, .42, -.48);
+      iron(.92, .48, .1, 0, .42, .48);
+      for (const xx of [-.36, .36]) for (const zz of [-.32, .32]) {
+        addMesh(uvBox(.15, .19, .19, { all: [32, 16, 16, 16] }), xx, .08, zz);
+      }
       if (type === 'storage') {
-        make(.72,.57,.72,0,.62,0,0x9c703c); make(.72,.06,.72,0,.92,0,0x60442c);
-        make(.12,.13,.025,0,.70,-.37,0xd2c9a3);
+        addMesh(skinBoxGeo(.72, .62, .72, 0, 32, 10, 8, 8), 0, .64, 0);
       } else if (type === 'powered') {
-        make(.72,.65,.72,0,.67,0,0x777777); make(.38,.28,.025,0,.69,-.37,0x303030);
+        addMesh(skinBoxGeo(.72, .66, .72, 0, 48, 8, 8, 8), 0, .67, 0);
       }
     }
     group.position.set(x,y,z); this.lighting?.prepare(group); this.scene.add(group);
@@ -76,15 +89,21 @@ export class VehicleManager {
   dismount(player, force=false) {
     if (!this.mounted) return false;
     const v=this.mounted, p=v.group.position, x=Math.floor(p.x), z=Math.floor(p.z), y=Math.floor(p.y);
+    const maxDismountY = (this.world.height ?? 128) - 3;
     for (const [dx,dz] of SIDES) for (const dy of [0,1,-1]) {
       const xx=x+dx, yy=y+dy, zz=z+dz;
-      if (!this.loaded(xx,zz) || yy < 1 || yy > 125) continue;
+      if (!this.loaded(xx,zz) || yy < 1 || yy > maxDismountY) continue;
       if (getBlock(this.world.getBlock(xx,yy,zz)).solid || getBlock(this.world.getBlock(xx,yy+1,zz)).solid) continue;
       if (!force && !getBlock(this.world.getBlock(xx,yy-1,zz)).solid && !water(this.world.getBlock(xx,yy,zz))) continue;
       player.pos.set(xx+.5,yy+.01,zz+.5); player.vel.set(0,0,0); player.fallStart=null; this.mounted=null; return true;
     }
     if (force) { player.pos.set(p.x,p.y+1,p.z); player.vel.set(0,0,0); this.mounted=null; return true; }
     return false;
+  }
+  clear() {
+    this.mounted = null;
+    for (const v of [...this.vehicles]) this.remove(v);
+    this.vehicles.length = 0;
   }
   remove(v) {
     if (!v || v===this.mounted) return false;
@@ -190,8 +209,9 @@ export class VehicleManager {
     }
     if (!v) return false;
     if (player.dead) { this.dismount(player,true); return false; }
-    if (player.keys[player.bindings.sneak] && this.dismount(player)) return false;
-    const forward=(player.keys[player.bindings.forward]?1:0)-(player.keys[player.bindings.back]?1:0);
+    const isDown = code => (typeof player.isKeyDown === 'function' ? player.isKeyDown(code) : !!player.keys?.[code]);
+    if (isDown(player.bindings.sneak) && this.dismount(player)) return false;
+    const forward=(isDown(player.bindings.forward)?1:0)-(isDown(player.bindings.back)?1:0);
     const p=v.group.position;
     if(v.type==='boat') {
       const speed=3.6;

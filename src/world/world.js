@@ -3,22 +3,32 @@ import { Chunk, CH, SEA_LEVEL } from './chunk.js';
 import { WorldGen } from './worldgen.js';
 import { ClassicWorldGen } from './classic-worldgen.js';
 import { OverworldGen } from './overworld-gen.js';
-import { OVERWORLD_TERRAIN, worldHeight } from './world-profile.js';
+import { NetherGen } from './nether-gen.js';
+import { OVERWORLD_TERRAIN, NETHER_TERRAIN, worldHeight } from './world-profile.js';
 import { AIR, BEDROCK, getBlock, WOOD_DOOR, IRON_DOOR } from './blocks.js';
 import { WorldLighting, lightOpacity, lightEmission } from './lighting.js';
 
 export class World {
-  constructor(seed, scene, edition = 'beta', terrain = null) {
+  constructor(seed, scene, edition = 'beta', terrain = null, dimension = 'overworld') {
     this.seed = seed;
     this.scene = scene;
     this.edition = edition === 'classic' ? 'classic' : 'beta';
+    this.dimension = (this.edition !== 'classic' && (dimension === 'nether' || terrain === NETHER_TERRAIN)) ? 'nether' : 'overworld';
     this.minWorldCoord = this.edition === 'classic' ? -128 : -Infinity;
     this.maxWorldCoord = this.edition === 'classic' ? 127 : Infinity;
-    this.terrain = this.edition === 'classic' ? null : terrain;
-    if (this.terrain !== null && this.terrain !== OVERWORLD_TERRAIN) throw new Error('Unknown world terrain.');
-    this.height = worldHeight(this.edition, this.terrain);
+    this.terrain = this.edition === 'classic' ? null : (this.dimension === 'nether' ? NETHER_TERRAIN : terrain);
+    if (this.terrain !== null && this.terrain !== OVERWORLD_TERRAIN && this.terrain !== NETHER_TERRAIN) {
+      throw new Error('Unknown world terrain.');
+    }
+    this.height = worldHeight(this.edition, this.terrain, this.dimension);
     this.maxWorldY = this.height - 1;
-    this.gen = this.edition === 'classic' ? new ClassicWorldGen(seed) : this.terrain ? new OverworldGen(seed) : new WorldGen(seed);
+    this.gen = this.edition === 'classic'
+      ? new ClassicWorldGen(seed)
+      : this.dimension === 'nether'
+        ? new NetherGen(seed)
+        : this.terrain
+          ? new OverworldGen(seed)
+          : new WorldGen(seed);
     this.chunks = new Map(); // "cx,cz" -> Chunk
     this.edits = new Map();  // player block edits "x,y,z" -> id
     this.metaEdits = new Map(); // player block metadata "x,y,z" -> meta
@@ -40,6 +50,36 @@ export class World {
     this.chunks.delete(k);
     this.lighting.chunkRemoved(chunk);
     for (const listener of this.unloadListeners) listener(cx, cz);
+    return true;
+  }
+
+  switchDimension(targetDimension, baseOverworldTerrain = OVERWORLD_TERRAIN, savedEdits = null) {
+    if (this.edition === 'classic') return false;
+    const nextDim = targetDimension === 'nether' ? 'nether' : 'overworld';
+    for (const chunk of [...this.chunks.values()]) {
+      this.unloadChunk(chunk.cx, chunk.cz);
+    }
+    this.dimension = nextDim;
+    this.terrain = nextDim === 'nether' ? NETHER_TERRAIN : baseOverworldTerrain;
+    this.height = worldHeight(this.edition, this.terrain, this.dimension);
+    this.maxWorldY = this.height - 1;
+    this.gen = nextDim === 'nether'
+      ? new NetherGen(this.seed)
+      : this.terrain
+        ? new OverworldGen(this.seed)
+        : new WorldGen(this.seed);
+    this.edits.clear();
+    this.metaEdits.clear();
+    this.editsByChunk.clear();
+    if (Array.isArray(savedEdits)) {
+      for (const entry of savedEdits) {
+        if (!Array.isArray(entry) || typeof entry[0] !== 'string') continue;
+        const [x, y, z] = entry[0].split(',').map(Number);
+        const id = Array.isArray(entry[1]) ? entry[1][0] : entry[1];
+        const meta = Array.isArray(entry[1]) ? (entry[1][1] || 0) : (entry[2] || 0);
+        if (Number.isInteger(id)) this.recordEdit(x, y, z, id, meta);
+      }
+    }
     return true;
   }
 
@@ -207,11 +247,12 @@ export class World {
   }
 
   getLight(x, y, z) {
-    if (y >= this.height) return 0xf0;
+    const fallback = this.dimension === 'nether' ? 0x00 : 0xf0;
+    if (y >= this.height) return fallback;
     if (y < 0) return 0;
     const cx = Math.floor(x / CH), cz = Math.floor(z / CH);
     const c = this.chunks.get(this.key(cx, cz));
-    if (!c || !c.generated) return 0xf0;
+    if (!c || !c.generated) return fallback;
     return c.getLight(x - cx * CH, y, z - cz * CH);
   }
 
@@ -226,6 +267,17 @@ export class World {
   }
 
   heightAt(x, z) {
+    if (this.dimension === 'nether') {
+      for (let y = 104; y >= 32; y--) {
+        const b = this.getBlock(x, y, z);
+        if (b !== AIR && b !== BEDROCK && getBlock(b).solid
+          && this.getBlock(x, y + 1, z) === AIR
+          && this.getBlock(x, y + 2, z) === AIR) {
+          return y + 1;
+        }
+      }
+      return this.gen.heightAt ? this.gen.heightAt(x, z) : 64;
+    }
     for (let y = this.maxWorldY; y >= 0; y--) {
       const b = this.getBlock(x, y, z);
       if (b !== AIR && getBlock(b).solid) return y + 1;

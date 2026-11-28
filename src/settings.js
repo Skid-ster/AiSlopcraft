@@ -2,6 +2,8 @@
 // Shared by the Options UI, Player input and the renderer so every control
 // actually changes the game and survives a reload.
 
+import { safeStorageGet, safeStorageSet } from './storage.js';
+
 export const DEFAULT_KEYS = Object.freeze({
   forward: 'KeyW',
   back: 'KeyS',
@@ -39,7 +41,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   fov: 70,
   guiScale: 0,            // 0 = auto
   brightness: 1,          // 0.5 .. 1.5
-  shaderStyle: 'classic', // classic | vibrant | cinematic | shader
+  shaderStyle: 'classic', // classic (Normal) | shader (Shader)
   graphics: 'fancy',      // fast | fancy
   smoothLighting: true,
   viewBobbing: true,
@@ -55,7 +57,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   keys: { ...DEFAULT_KEYS },
 });
 
-const SHADER_STYLES = ['classic', 'vibrant', 'cinematic', 'shader', 'psx'];
+const SHADER_STYLES = ['classic', 'shader'];
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const num = (v, fallback) => Number.isFinite(+v) ? +v : fallback;
 
@@ -95,17 +97,14 @@ export function sensitivityToRadians(percent) {
 
 export function loadSettings(storage, worldFallback = null) {
   try {
-    const global = JSON.parse(storage?.getItem?.('aislopcraft:settings') || 'null');
+    const global = JSON.parse(safeStorageGet(storage, 'aislopcraft:settings') || 'null');
     if (global && typeof global === 'object') return sanitizeSettings(global);
   } catch { /* ignore corrupt storage */ }
   return sanitizeSettings(worldFallback || {});
 }
 
 export function persistSettings(storage, settings) {
-  try {
-    storage?.setItem?.('aislopcraft:settings', JSON.stringify(sanitizeSettings(settings)));
-    return true;
-  } catch { return false; }
+  return safeStorageSet(storage, 'aislopcraft:settings', JSON.stringify(sanitizeSettings(settings)));
 }
 
 export function keyLabel(code) {

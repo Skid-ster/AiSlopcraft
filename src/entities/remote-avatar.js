@@ -1,24 +1,20 @@
 import * as THREE from 'three';
-
-const OUTFITS = [
-  { shirt: 0x568b42, pants: 0x384b7e, skin: 0xc99a73, hair: 0x49352c },
-  { shirt: 0x3f76a7, pants: 0x3d4771, skin: 0xe0b28a, hair: 0x563d2f },
-  { shirt: 0x9c573f, pants: 0x574333, skin: 0xd19b73, hair: 0x302522 },
-  { shirt: 0x8c70a7, pants: 0x354b66, skin: 0xe4bb92, hair: 0x5b4638 },
-  { shirt: 0xc09b3c, pants: 0x48613a, skin: 0xb97855, hair: 0x28221e },
-  { shirt: 0x4a8a83, pants: 0x564366, skin: 0xd59f78, hair: 0x61402c },
-];
+import { PLAYER_OUTFITS, getPlayerSkinTextures, skinBoxGeo } from './entity-textures.js';
 
 /** Build a classic six-part remote player at a feet-origin, suitable for lerped network movement. */
 export function createRemoteAvatarModel(id, name, lighting) {
   const root = new THREE.Group();
   const hash = [...String(name || id)].reduce((value, char) => (value * 31 + char.charCodeAt(0)) | 0, 7) >>> 0;
-  const colors = OUTFITS[hash % OUTFITS.length];
-  const material = color => new THREE.MeshBasicMaterial({ color });
-  const shirt = material(colors.shirt), pants = material(colors.pants), skin = material(colors.skin);
-  const hair = material(colors.hair), eyes = material(0x201b18);
-  const addBox = (parent, size, mat, position) => {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(...size), mat);
+  const outfitIndex = hash % PLAYER_OUTFITS.length;
+  const colors = PLAYER_OUTFITS[outfitIndex];
+  const { texture } = getPlayerSkinTextures(outfitIndex);
+
+  const shirt = new THREE.MeshBasicMaterial({ color: colors.shirt, map: texture });
+  const skinAndClothes = new THREE.MeshBasicMaterial({ color: 0xffffff, map: texture });
+
+  const addSkinBox = (parent, size, u, v, pw, ph, pd, tw, th, mat, position) => {
+    const geo = skinBoxGeo(size[0], size[1], size[2], u, v, pw, ph, pd, tw, th).clone();
+    const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(...position);
     parent.add(mesh);
     return mesh;
@@ -26,26 +22,23 @@ export function createRemoteAvatarModel(id, name, lighting) {
 
   // Feet are at the network position: legs meet the torso at y=.72, and the
   // head meets the torso at y=1.44. This prevents the floating-leg gap.
-  const torso = addBox(root, [0.56, 0.72, 0.30], shirt, [0, 1.08, 0]);
+  const torso = addSkinBox(root, [0.56, 0.72, 0.30], 16, 16, 8, 12, 4, 64, 64, shirt, [0, 1.08, 0]);
   const head = new THREE.Group();
-  head.position.y = 1.62;
+  head.position.y = 1.66;
   root.add(head);
-  addBox(head, [0.44, 0.44, 0.44], skin, [0, 0, 0]);
-  addBox(head, [0.46, 0.08, 0.46], hair, [0, 0.20, 0]);
-  addBox(head, [0.052, 0.052, 0.025], eyes, [-0.09, 0.035, -0.223]);
-  addBox(head, [0.052, 0.052, 0.025], eyes, [0.09, 0.035, -0.223]);
+  addSkinBox(head, [0.44, 0.44, 0.44], 0, 0, 8, 8, 8, 64, 64, skinAndClothes, [0, 0, 0]);
 
-  const makeLimb = (x, pivotY, size, mat) => {
+  const makeLimb = (x, pivotY, size, u, v, pw, ph, pd) => {
     const pivot = new THREE.Group();
     pivot.position.set(x, pivotY, 0);
     root.add(pivot);
-    const mesh = addBox(pivot, size, mat, [0, -size[1] / 2, 0]);
+    const mesh = addSkinBox(pivot, size, u, v, pw, ph, pd, 64, 64, skinAndClothes, [0, -size[1] / 2, 0]);
     return { pivot, mesh };
   };
-  const { pivot: leftArm, mesh: leftArmMesh } = makeLimb(-0.405, 1.42, [0.24, 0.72, 0.28], shirt);
-  const { pivot: rightArm, mesh: rightArmMesh } = makeLimb(0.405, 1.42, [0.24, 0.72, 0.28], shirt);
-  const { pivot: leftLeg, mesh: leftLegMesh } = makeLimb(-0.15, 0.72, [0.27, 0.72, 0.28], pants);
-  const { pivot: rightLeg, mesh: rightLegMesh } = makeLimb(0.15, 0.72, [0.27, 0.72, 0.28], pants);
+  const { pivot: leftArm, mesh: leftArmMesh } = makeLimb(-0.405, 1.42, [0.24, 0.72, 0.28], 40, 16, 4, 12, 4);
+  const { pivot: rightArm, mesh: rightArmMesh } = makeLimb(0.405, 1.42, [0.24, 0.72, 0.28], 40, 16, 4, 12, 4);
+  const { pivot: leftLeg, mesh: leftLegMesh } = makeLimb(-0.15, 0.72, [0.27, 0.72, 0.28], 0, 16, 4, 12, 4);
+  const { pivot: rightLeg, mesh: rightLegMesh } = makeLimb(0.15, 0.72, [0.27, 0.72, 0.28], 0, 16, 4, 12, 4);
 
   const safeName = String(name || 'Player').slice(0, 20);
   const labelCanvas = document.createElement('canvas');
@@ -59,7 +52,7 @@ export function createRemoteAvatarModel(id, name, lighting) {
   const labelTexture = new THREE.CanvasTexture(labelCanvas);
   labelTexture.colorSpace = THREE.SRGBColorSpace;
   const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture, transparent: true, depthTest: true, depthWrite: false }));
-  label.position.y = 2.12;
+  label.position.y = 2.16;
   label.scale.set(Math.max(1.35, Math.min(2.8, safeName.length * 0.13)), 0.34, 1);
   root.add(label);
 

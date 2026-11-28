@@ -1528,3 +1528,137 @@ html, body {
   text-shadow: 1px 1px #111;
 }
 #pause-save-status:empty { display: none; }
+
+/* ---------- Nether Portal Overlay, XP Bar, Enchanting & Keyboard Accessibility ---------- */
+#portal-overlay {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(ellipse at center, rgba(162, 42, 235, 0.36) 15%, rgba(86, 12, 148, 0.78) 100%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s linear;
+  z-index: 5;
+}
+
+.xp-bar-wrap {
+  position: absolute;
+  bottom: 66px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 468px;
+  height: 7px;
+  background: rgba(18, 24, 14, 0.85);
+  border: 1px solid #10160c;
+  box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.65);
+  pointer-events: none;
+}
+.xp-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #54d628, #9dff44);
+  box-shadow: 0 0 4px rgba(128, 255, 32, 0.45);
+  transition: width 0.12s ease-out;
+}
+.xp-level {
+  position: absolute;
+  left: 50%;
+  bottom: 3px;
+  transform: translateX(-50%);
+  color: #80ff20;
+  font-size: 15px;
+  font-weight: 900;
+  text-shadow: -1.5px 0 #0b1804, 1.5px 0 #0b1804, 0 -1.5px #0b1804, 0 1.5px #0b1804;
+  pointer-events: none;
+}
+.hud .status-bars {
+  bottom: 78px;
+}
+
+.slot:focus-visible {
+  outline: 3px solid #f6e882;
+  outline-offset: -1px;
+  z-index: 3;
+}
+.slot.is-enchanted::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  background: linear-gradient(125deg, transparent 20%, rgba(184, 108, 255, 0.36) 48%, rgba(232, 170, 255, 0.46) 54%, transparent 80%);
+  background-size: 220% 220%;
+  animation: enchant-glint 2.6s linear infinite;
+  pointer-events: none;
+}
+@keyframes enchant-glint {
+  0% { background-position: 0% 0%; }
+  100% { background-position: 200% 200%; }
+}
+.item-tooltip .tt-ench {
+  color: #c89eff;
+  font-size: 12px;
+  margin-top: 2px;
+  text-shadow: 1px 1px 0 #231136;
+}
+
+.enchant-panel {
+  min-width: min(460px, 94vw);
+}
+.enchant-layout {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 10px 0 14px;
+}
+.enchant-left {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  min-width: 112px;
+}
+.enchant-books {
+  font-size: 11px;
+  color: #e6d7a3;
+  text-shadow: 1px 1px 0 #1b1610;
+  text-align: center;
+}
+.enchant-offers {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.enchant-offer-btn {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  background: linear-gradient(#6e5d47, #514331);
+  border: 2px solid #261e14;
+  color: #f0e3be;
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  text-shadow: 1px 1px 0 #1d160d;
+}
+.enchant-offer-btn:hover:not(:disabled),
+.enchant-offer-btn:focus-visible:not(:disabled) {
+  background: linear-gradient(#7d6cb0, #5b4b8a);
+  color: #ffffb4;
+  outline: 2px solid #f6e882;
+}
+.enchant-offer-btn:disabled {
+  opacity: 0.48;
+  cursor: default;
+  color: #a89f8b;
+}
+.enchant-offer-cost {
+  color: #80ff20;
+  font-weight: 900;
+  font-size: 14px;
+  margin-left: 10px;
+  text-shadow: 1px 1px 0 #0d1d05;
+}
+

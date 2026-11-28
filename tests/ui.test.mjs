@@ -197,8 +197,7 @@ try {
   btn('opt-shader').focus();
   btn('opt-shader').click();
   check('keyboard focus remains on the shader control after changing presets', document.activeElement === btn('opt-shader'));
-  btn('opt-shader').click();
-  check('shader selection applies live to the game renderer', game.shaderStyle === 'cinematic');
+  check('Shader preset applies live to the game renderer', game.shaderStyle === 'shader' && btn('opt-shader').textContent === 'Shaders: Shader');
   btn('opt-brightness').value = '50';
   btn('opt-brightness').dispatchEvent(new dom.window.Event('input'));
   check('brightness slider shows Moody at 50%', document.getElementById('opt-brightness-label')?.textContent === 'Brightness: Moody');
@@ -209,9 +208,7 @@ try {
   btn('opt-brightness').dispatchEvent(new dom.window.Event('input'));
   check('brightness slider applies live', Math.abs(game.brightness - 1.2) < 1e-6);
   btn('opt-shader').click();
-  check('Shader Lite preset applies immediately', game.shaderStyle === 'shader');
-  btn('opt-shader').click();
-  check('Minecraft PSX-compatible WebGL shader preset applies', game.shaderStyle === 'psx');
+  check('Normal preset toggles back cleanly without removed cinematic/PSX modes', game.shaderStyle === 'classic' && btn('opt-shader').textContent === 'Shaders: Normal');
   btn('opt-render').value = '8';
   btn('opt-render').dispatchEvent(new dom.window.Event('input'));
   check('render distance slider applies', game.renderDistance === 8);
@@ -321,12 +318,12 @@ try {
   check('host publishes saved world edits as compact metadata-preserving batches', publishedEdits.length === 2 && publishedEdits[0][1][0] === 4 && publishedEdits[0][1][1] === 1);
   btn('mp-visual-policy').value = 'forced';
   btn('mp-visual-policy').dispatchEvent(new dom.window.Event('change'));
-  btn('mp-host-shader').value = 'psx';
+  btn('mp-host-shader').value = 'shader';
   btn('mp-host-texture-pack').value = 'pack-share';
   btn('mp-mode').value = 'creative';
   check('forced policy enables explicit shader and texture-pack selection', !btn('mp-host-shader').disabled && !btn('mp-host-texture-pack').disabled);
   await ui.createMultiplayerRoom();
-  check('forced room creation sends the selected shader and host texture pack', createdVisuals?.mode === 'forced' && createdVisuals.shaderStyle === 'psx' && createdVisuals.resourcePack?.name === 'Host Pack');
+  check('forced room creation sends the selected shader and host texture pack', createdVisuals?.mode === 'forced' && createdVisuals.shaderStyle === 'shader' && createdVisuals.resourcePack?.name === 'Host Pack');
   check('Creative room creation uses the selected mode', createdRoomOptions?.gameMode === 'creative');
   let createFailureCleanup = false;
   const failingRoomClient = {

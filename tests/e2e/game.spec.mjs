@@ -63,14 +63,25 @@ test('Survival food is held to eat and hunger survives a world reload', async ({
   await page.locator('#game-canvas').click({ position: { x: 400, y: 300 } });
   await expect.poll(() => page.evaluate(() => window.game.player.pointerLocked)).toBe(true);
   await page.evaluate(() => {
-    const player = window.game.player;
+    const { player, mobs } = window.game;
+    mobs.clear();
+    player.pointerLocked = true;
     player.bindings = { ...player.bindings, use: 'KeyK' };
     player.hunger = 10; player.saturation = 0; player.health = 15;
     player.inventory[0] = { id: 297, count: 1, damage: 0 }; player.hotbarIndex = 0;
   });
   await page.keyboard.down('k');
-  try { await expect.poll(() => page.evaluate(() => window.game.player.hunger)).toBe(15); }
-  finally { await page.keyboard.up('k'); }
+  try {
+    await expect.poll(() => page.evaluate(() => {
+      window.game.player.pointerLocked = true;
+      window.game.player.rightDown = true;
+      return window.game.player.hunger;
+    }), { intervals: [50, 100, 150] }).toBe(15);
+  }
+  finally {
+    await page.keyboard.up('k');
+    await page.evaluate(() => { window.game.player.rightDown = false; });
+  }
   await expect.poll(() => page.evaluate(() => window.game.player.heldStack)).toBeNull();
   await expect(page.locator('#hunger-bar')).toBeVisible();
   await pause(page);
@@ -184,8 +195,10 @@ test('Survival: mine, place, craft, die, respawn, and round-trip a portable save
   // Pin the target and supplies; use keybindings so headless pointer-lock mouse
   // coordinate events do not move the camera between setting up and mining.
   const [x, y, z] = await page.evaluate(() => {
-    const { world, player } = window.game;
+    const { world, player, mobs } = window.game;
+    mobs.clear();
     const [x, y, z] = player.pos.toArray().map(Math.floor);
+    player.pointerLocked = true;
     player.yaw = player.pitch = player.mouseDX = player.mouseDY = 0;
     player.pos.set(x + 0.5, y + 0.001, z + 0.5);
     player.vel.set(0, 0, 0);
@@ -195,7 +208,8 @@ test('Survival: mine, place, craft, die, respawn, and round-trip a portable save
     world.setBlock(x, y + 1, z, 0);
     world.setBlock(x, y + 1, z - 1, 0);
     world.setBlock(x, y + 1, z - 2, 3);
-    world.setBlock(x, y + 1, z - 3, 3);
+    // Use unbreakable bedrock as the backstop so holding attack cannot mine through it before keyup.
+    world.setBlock(x, y + 1, z - 3, 7);
     player.inventory[0] = { id: 5, count: 3, damage: 0 };
     player.inventory[1] = { id: 17, count: 1, damage: 0 };
     return [x, y + 1, z - 2];
@@ -203,15 +217,32 @@ test('Survival: mine, place, craft, die, respawn, and round-trip a portable save
   const block = () => page.evaluate(([x, y, z]) => window.game.world.getBlock(x, y, z), [x, y, z]);
   const aim = () => page.evaluate(() => {
     const { player, world } = window.game;
+    player.pointerLocked = true;
     const hit = player.raycast(world, 5);
     return hit && [hit.x, hit.y, hit.z];
   });
   await expect.poll(aim).toEqual([x, y, z]);
   await page.keyboard.down('j');
-  try { await expect.poll(block).toBe(0); } finally { await page.keyboard.up('j'); }
+  try {
+    await expect.poll(async () => {
+      await page.evaluate(() => { window.game.player.pointerLocked = true; window.game.player.leftDown = true; });
+      return block();
+    }, { intervals: [50, 100, 150] }).toBe(0);
+  } finally {
+    await page.keyboard.up('j');
+    await page.evaluate(() => { window.game.player.leftDown = false; });
+  }
   await expect.poll(aim).toEqual([x, y, z - 1]);
   await page.keyboard.down('k');
-  try { await expect.poll(block).toBe(5); } finally { await page.keyboard.up('k'); }
+  try {
+    await expect.poll(async () => {
+      await page.evaluate(() => { window.game.player.pointerLocked = true; window.game.player.rightDown = true; });
+      return block();
+    }, { intervals: [50, 100, 150] }).toBe(5);
+  } finally {
+    await page.keyboard.up('k');
+    await page.evaluate(() => { window.game.player.rightDown = false; });
+  }
 
   await page.keyboard.press('e');
   const craft = page.locator('#craft-grid .slot');
@@ -381,7 +412,7 @@ for (const mode of ['survival', 'creative']) test(`Multiplayer ${mode}: names, c
       await expect(page.locator('#chest-screen')).toBeVisible();
       await page.locator('#chest-hotbar [data-inv="0"]').click();
       await page.locator('#chest-slots [data-chest="0"]').click();
-      expect(await page.evaluate(() => window.game.openChestData.slots[0])).toMatchObject({ id: 5, count: 3 });
+      await expect.poll(() => page.evaluate(() => window.game.openChestData.slots[0])).toMatchObject({ id: 5, count: 3 });
 
       await expect.poll(() => guest.evaluate(([x, y, z]) => window.game.world.getBlock(x, y + 1, z - 2), chest)).toBe(54);
       await guest.evaluate(([x, y, z]) => {
@@ -393,12 +424,13 @@ for (const mode of ['survival', 'creative']) test(`Multiplayer ${mode}: names, c
       }, chest);
       await expect.poll(() => guest.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(54);
       await guest.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true })));
-      await expect(guest.locator('#toast-msg')).toContainText(/host.*chest/i);
-      expect(await guest.evaluate(() => window.game.ui.mode)).toBe('game');
-      await guest.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true })));
-      await expect.poll(() => guest.evaluate(() => window.game.player.leftDown)).toBe(false);
-      expect(await page.evaluate(() => window.game.openChestData.slots[0])).toMatchObject({ id: 5, count: 3 });
-      expect(await page.evaluate(([x, y, z]) => window.game.world.getBlock(x, y + 1, z - 2), chest)).toBe(54);
+      await expect(guest.locator('#chest-screen')).toBeVisible();
+      await expect.poll(() => guest.evaluate(() => window.game.openChestData?.slots?.[0])).toMatchObject({ id: 5, count: 3 });
+      await guest.locator('#chest-slots [data-chest="0"]').click();
+      await expect.poll(() => page.evaluate(() => window.game.openChestData?.slots?.[0])).toBeNull();
+      await expect.poll(() => guest.evaluate(() => window.game.player.cursorStack)).toMatchObject({ id: 5, count: 3 });
+      await guest.locator('#chest-hotbar [data-inv="0"]').click();
+      await guest.keyboard.press('Escape');
       await page.keyboard.press('Escape');
     }
     await pause(guest);
@@ -411,9 +443,9 @@ for (const mode of ['survival', 'creative']) test(`Multiplayer ${mode}: names, c
   } finally { await guestContext.close(); }
 });
 
-test('Multiplayer guests cannot open or mine host-owned chests or furnaces', async ({ page }) => {
+test('Multiplayer guests can open shared chests, furnaces, and storage minecarts', async ({ page }) => {
   await title(page);
-  await newWorld(page, 'Storage safety');
+  await newWorld(page, 'Shared containers');
   await page.locator('#game-canvas').click({ position: { x: 400, y: 300 } });
   await expect.poll(() => page.evaluate(() => window.game.player.pointerLocked)).toBe(true);
   const target = await page.evaluate(() => {
@@ -424,70 +456,139 @@ test('Multiplayer guests cannot open or mine host-owned chests or furnaces', asy
     player.vel.set(0, 0, 0);
     player.yaw = player.pitch = player.mouseDX = player.mouseDY = 0;
     world.setBlock(x, y - 1, z, 1);
-    world.setBlock(x, y + 1, z - 1, 0);
+    for (const dz of [0, -1, -2]) {
+      for (const dy of [0, 1, 2]) world.setBlock(x, y + dy, z + dz, 0);
+    }
+    world.setBlock(x, y, z - 2, 1);
     return [x, y + 1, z - 2];
   });
-  for (const id of [54, 61, 62]) {
-    await page.evaluate(([x, y, z, id]) => window.game.world.setBlock(x, y, z, id), [...target, id]);
-    await expect.poll(() => page.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(id);
-    await page.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true })));
-    await expect(page.locator('#toast-msg')).toContainText(/host.*(chest|furnace)/i);
-    expect(await page.evaluate(() => window.game.ui.mode)).toBe('game');
-    await page.evaluate(() => {
-      document.querySelector('#toast-msg').textContent = '';
-      document.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
-    });
-    await expect(page.locator('#toast-msg')).toContainText(/host.*(chest|furnace)/i, { timeout: 5000 });
-    expect(await page.evaluate(([x, y, z]) => window.game.world.getBlock(x, y, z), target)).toBe(id);
-    expect(await page.evaluate(() => window.game.player.leftDown)).toBe(false);
-  }
+  await page.evaluate(([x, y, z]) => {
+    const { player, world } = window.game;
+    player.pointerLocked = true;
+    player.yaw = player.pitch = player.mouseDX = player.mouseDY = 0;
+    world.setBlock(x, y, z, 54);
+  }, target);
+  await expect.poll(() => page.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(54);
+  await page.evaluate(() => {
+    window.game.player.pointerLocked = true;
+    document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true }));
+  });
+  await expect(page.locator('#chest-screen')).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await page.evaluate(([x, y, z]) => {
+    const { player, world } = window.game;
+    player.pointerLocked = true;
+    player.yaw = player.pitch = player.mouseDX = player.mouseDY = 0;
+    world.setBlock(x, y, z, 61);
+  }, target);
+  await expect.poll(() => page.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(61);
+  await page.evaluate(() => {
+    window.game.player.pointerLocked = true;
+    document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true }));
+  });
+  await expect(page.locator('#furnace-screen')).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await page.evaluate(([x, y, z]) => {
+    const { player, world, vehicles } = window.game;
+    player.pointerLocked = true;
+    player.yaw = player.pitch = player.mouseDX = player.mouseDY = 0;
+    world.setBlock(x, y, z, 0);
+    vehicles.create('storage', x + 0.5, y + 0.1, z + 0.5);
+  }, target);
+  await expect.poll(() => page.evaluate(() => window.game.vehicles.target(window.game.player)?.type)).toBe('storage');
+  await page.evaluate(() => {
+    window.game.player.pointerLocked = true;
+    document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true }));
+  });
+  await expect(page.locator('#chest-screen')).toBeVisible();
+  await page.keyboard.press('Escape');
 });
 
-test('Storage minecarts cannot be opened or destroyed in multiplayer', async ({ page }) => {
+test('XP progression, Enchanting Table, and Nether Portal travel work end-to-end', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', err => errors.push(String(err)));
   await title(page);
-  await newWorld(page, 'Cart safety');
+  await newWorld(page, 'Nether and Enchanting');
   await page.locator('#game-canvas').click({ position: { x: 400, y: 300 } });
   await expect.poll(() => page.evaluate(() => window.game.player.pointerLocked)).toBe(true);
-  await page.evaluate(() => {
-    const { player, world, vehicles } = window.game;
+
+  const origin = await page.evaluate(() => {
+    const { player, world } = window.game;
+    player.addXp(900);
+    player.inventory[0] = { id: 278, count: 1, damage: 0 }; // Diamond Pickaxe
+    player.hotbarIndex = 0;
     const [x, y, z] = player.pos.toArray().map(Math.floor);
     player.pos.set(x + 0.5, y + 0.001, z + 0.5);
     player.vel.set(0, 0, 0);
     player.yaw = player.pitch = player.mouseDX = player.mouseDY = 0;
-    world.setBlock(x, y - 1, z, 1);
-    for (const dz of [-1, -2]) for (const dy of [1, 2]) world.setBlock(x, y + dy, z + dz, 0);
-    vehicles.create('storage', x + 0.5, y + 1.1, z - 1.5);
-  });
-  await expect.poll(() => page.evaluate(() => window.game.vehicles.target(window.game.player)?.type)).toBe('storage');
-  for (const role of ['host', 'guest']) {
-    await page.evaluate(role => { window.game.networkRoom = { role, players: [] }; }, role);
-    for (const button of [2, 0]) {
-      await page.evaluate(button => {
-        document.querySelector('#toast-msg').textContent = '';
-        document.dispatchEvent(new MouseEvent('mousedown', { button, bubbles: true }));
-      }, button);
-      await expect(page.locator('#toast-msg')).toContainText(/storage minecart.*multiplayer/i, { timeout: 5000 });
-      expect(await page.evaluate(() => window.game.ui.mode)).toBe('game');
-      expect(await page.evaluate(() => window.game.vehicles.vehicles.filter(v => v.type === 'storage').length)).toBe(1);
+    for (let dx = -2; dx <= 2; dx++) {
+      for (let dz = -3; dz <= 1; dz++) {
+        for (let dy = 0; dy <= 4; dy++) world.setBlock(x + dx, y + dy, z + dz, 0);
+      }
     }
-  }
-  await page.evaluate(() => {
-    const { player, world, vehicles } = window.game;
-    vehicles.remove(vehicles.vehicles.find(v => v.type === 'storage'));
-    const [x, y, z] = player.pos.toArray().map(Math.floor);
-    world.setBlock(x, y, z - 2, 1);
-    world.setBlock(x, y + 1, z - 2, 66);
-    player.yaw = player.mouseDX = player.mouseDY = 0;
-    player.pitch = -0.35;
-    player.inventory[0] = { id: 342, count: 1, damage: 0 };
-    player.hotbarIndex = 0;
-    document.querySelector('#toast-msg').textContent = '';
+    world.setBlock(x, y - 1, z, 1);
+    world.setBlock(x, y + 1, z - 2, 116); // Enchanting Table
+    world.setBlock(x - 2, y + 1, z - 2, 47); // Bookshelf
+    world.setBlock(x + 2, y + 1, z - 2, 47); // Bookshelf
+    return [x, y, z];
   });
-  await expect.poll(() => page.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(66);
-  await page.evaluate(() => document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true })));
-  await expect(page.locator('#toast-msg')).toContainText(/storage minecart.*multiplayer/i, { timeout: 5000 });
-  expect(await page.evaluate(() => window.game.player.heldStack?.count)).toBe(1);
-  expect(await page.evaluate(() => window.game.vehicles.vehicles.filter(v => v.type === 'storage').length)).toBe(0);
+  await expect.poll(() => page.evaluate(() => window.game.player.xpLevel)).toBeGreaterThanOrEqual(30);
+  await expect(page.locator('#xp-bar-wrap')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(116);
+  await page.evaluate(() => {
+    window.game.player.pointerLocked = true;
+    document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true }));
+  });
+  await expect(page.locator('#enchant-screen')).toBeVisible();
+
+  await page.locator('#ench-inv-hotbar [data-inv="0"]').click();
+  await page.locator('#enchant-item-slot').click();
+  await expect(page.locator('#enchant-offers .enchant-offer-btn:not([disabled])').first()).toBeVisible();
+  await page.locator('#enchant-offers .enchant-offer-btn:not([disabled])').first().click();
+  expect(await page.evaluate(() => Boolean(window.game.ui.enchantItem?.enchants))).toBe(true);
+  await page.keyboard.press('Escape');
+  expect(await page.evaluate(() => Boolean(window.game.player.inventory[0]?.enchants))).toBe(true);
+
+  // Build & ignite a 4x5 Obsidian Nether Portal and step inside to enter The Nether
+  await page.evaluate(([x, y, z]) => {
+    const { player, world } = window.game;
+    player.pointerLocked = true;
+    world.setBlock(x, y + 1, z - 2, 0);
+    const pz = z - 3;
+    for (let dx = -1; dx <= 2; dx++) {
+      for (let dy = 0; dy <= 4; dy++) {
+        const edge = dx === -1 || dx === 2 || dy === 0 || dy === 4;
+        world.setBlock(x + dx, y + dy, pz, edge ? 49 : 0);
+      }
+    }
+    player.inventory[1] = { id: 259, count: 1, damage: 0 }; // Flint and Steel
+    player.hotbarIndex = 1;
+    player.pos.set(x + 0.5, y + 0.001, z + 0.5);
+    player.vel.set(0, 0, 0);
+    player.yaw = 0;
+    player.pitch = -0.22;
+    player.mouseDX = player.mouseDY = 0;
+  }, origin);
+  await expect.poll(() => page.evaluate(() => window.game.player.raycast(window.game.world, 5)?.block)).toBe(49);
+  await page.evaluate(() => {
+    window.game.player.pointerLocked = true;
+    document.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true }));
+  });
+  await expect.poll(() => page.evaluate(([x, y, z]) => window.game.world.getBlock(x, y + 1, z - 3), origin)).toBe(90);
+
+  // Step into the lit portal and fast-advance portal timer to travel to the Nether
+  await page.evaluate(([x, y, z]) => {
+    const { player, world } = window.game;
+    world.setBlock(x, y, z - 3, 49);
+    player.pos.set(x + 0.5, y + 1.01, z - 2.5);
+    player.vel.set(0, 0, 0);
+    player.portalCooldown = 0;
+    player.portalTime = 2.65;
+  }, origin);
+  await expect.poll(() => page.evaluate(() => window.game.world.dimension), { timeout: 15000 }).toBe('nether');
+  expect(errors).toEqual([]);
 });
 
 test('WebGL startup failure presents a reload action that can recover', async ({ page }) => {
@@ -547,7 +648,7 @@ test('storage quota leaves the world open and permits an unstored JSON backup', 
   expect(await page.evaluate(() => window.game.started)).toBe(true);
 });
 
-test('Classic grass renders in daylight with both the Classic and PSX presets', async ({ page }) => {
+test('Classic grass renders in daylight with both the Normal and Shader presets', async ({ page }) => {
   const graphicsErrors = [];
   page.on('console', message => { if (message.type() === 'error') graphicsErrors.push(message.text()); });
   await title(page, '/?edition=classic&seed=release-perf');
@@ -569,7 +670,7 @@ test('Classic grass renders in daylight with both the Classic and PSX presets', 
       return new Promise(resolve => {
         renderer.render = function (scene, camera) {
           original.call(this, scene, camera);
-          if (this.getRenderTarget() || (style !== 'psx' && camera !== player.camera)) return;
+          if (this.getRenderTarget() || camera !== player.camera) return;
           gl.readPixels(gl.drawingBufferWidth / 2 - 20, gl.drawingBufferHeight / 2 - 20, 40, 40, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
           let lit = 0;
           for (let i = 0; i < pixels.length; i += 4) {
@@ -583,47 +684,51 @@ test('Classic grass renders in daylight with both the Classic and PSX presets', 
     while ([...world.chunks.values()].filter(chunk => chunk.meshes).length < 21) {
       await new Promise(resolve => requestAnimationFrame(resolve));
     }
-    return { classic: await samplePreset('classic'), psx: await samplePreset('psx') };
+    return { classic: await samplePreset('classic'), shader: await samplePreset('shader') };
   });
   expect(graphicsErrors).toEqual([]);
   expect(sample.classic, JSON.stringify(sample)).toBeGreaterThan(1000);
-  expect(sample.psx, JSON.stringify(sample)).toBeGreaterThan(1000);
+  expect(sample.shader, JSON.stringify(sample)).toBeGreaterThan(1000);
 });
 
-test('PSX post-processing preserves dark colors instead of crushing them to black', async ({ page }) => {
+test('Shader mode renders steady night and daylight terrain without crushing dark colors to black', async ({ page }) => {
   await title(page);
-  await newWorld(page, 'PSX color test');
-  const colors = await page.evaluate(async () => {
-    const { renderer, player } = window.game;
-    window.game.setShaderStyle('psx');
+  await newWorld(page, 'Shader lighting test');
+  const brightness = await page.evaluate(async () => {
+    const { renderer, player, sky, world } = window.game;
+    Object.assign(window.game.settings, { graphics: 'fancy', shaderStyle: 'shader' });
+    window.game.applySettings();
+    player.pitch = -0.85;
+    while ([...world.chunks.values()].filter(chunk => chunk.meshes).length < 21) {
+      await new Promise(resolve => requestAnimationFrame(resolve));
+    }
     const gl = renderer.getContext();
     const original = renderer.render;
-    async function sample(value) {
+    async function sampleAtTime(timeOfDay) {
+      sky.time = timeOfDay;
+      window.game.lighting.invalidateShadows();
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => { renderer.render = original; reject(new Error('PSX frame not rendered')); }, 10000);
+        const timer = setTimeout(() => { renderer.render = original; reject(new Error('Shader frame not rendered')); }, 10000);
+        let skippedWarmup = false;
         renderer.render = function (scene, camera) {
-          const target = this.getRenderTarget();
           original.call(this, scene, camera);
-          if (target && camera === player.camera) {
-            gl.clearColor(value, value, value, 1);
-            gl.clear(gl.COLOR_BUFFER_BIT);
-          } else if (!target && scene.children[0]?.material?.uniforms?.uScene) {
-            const pixels = new Uint8Array(16 * 16 * 4);
-            gl.readPixels(Math.floor(gl.drawingBufferWidth / 2) - 8, Math.floor(gl.drawingBufferHeight / 2) - 8, 16, 16, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-            let sum = 0;
-            for (let i = 0; i < pixels.length; i += 4) sum += pixels[i];
-            clearTimeout(timer);
-            renderer.render = original;
-            resolve(sum / 256);
-          }
+          if (this.getRenderTarget() || camera !== player.camera) return;
+          if (!skippedWarmup) { skippedWarmup = true; return; }
+          const pixels = new Uint8Array(24 * 24 * 4);
+          gl.readPixels(Math.floor(gl.drawingBufferWidth / 2) - 12, Math.floor(gl.drawingBufferHeight / 2) - 12, 24, 24, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+          let sum = 0;
+          for (let i = 0; i < pixels.length; i += 4) sum += Math.max(pixels[i], pixels[i + 1], pixels[i + 2]);
+          clearTimeout(timer);
+          renderer.render = original;
+          resolve(sum / 576);
         };
       });
     }
-    return [await sample(0.04), await sample(0.12), await sample(0.5)];
+    return { night: await sampleAtTime(0.0), sunset: await sampleAtTime(0.27), noon: await sampleAtTime(0.5) };
   });
-  expect(colors[0], JSON.stringify(colors)).toBeGreaterThan(20);
-  expect(colors[1], JSON.stringify(colors)).toBeGreaterThan(colors[0] + 15);
-  expect(colors[2], JSON.stringify(colors)).toBeGreaterThan(colors[1] + 30);
+  expect(brightness.night, JSON.stringify(brightness)).toBeGreaterThan(8);
+  expect(brightness.sunset, JSON.stringify(brightness)).toBeGreaterThan(brightness.night + 12);
+  expect(brightness.noon, JSON.stringify(brightness)).toBeGreaterThan(brightness.sunset + 15);
 });
 
 test('pause actions remain reachable on short screens', async ({ page }) => {

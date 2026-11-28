@@ -5,7 +5,7 @@ import { CH } from './chunk.js';
 import {
   getBlock, AIR, WATER, WATER_FLOW, LAVA, LAVA_FLOW, TILES, LEAVES, ICE, CACTUS, TORCH, REDSTONE_TORCH,
   LADDER, SNOW, CROPS, FARMLAND, CHEST, LEVER, REDSTONE_WIRE, REDSTONE_REPEATER, RAIL, CAKE_BLOCK, WOOD_DOOR, IRON_DOOR,
-  FURNACE, FURNACE_LIT, PUMPKIN, JACK_O_LANTERN, STONE, BLOCK_OPAQUE, BLOCK_HAS_TILES,
+  FURNACE, FURNACE_LIT, PUMPKIN, JACK_O_LANTERN, STONE, FENCE, NETHER_BRICK_FENCE, ENCHANTING_TABLE, BLOCK_OPAQUE, BLOCK_HAS_TILES,
 } from './blocks.js';
 
 // face definitions: +Y, -Y, +Z, -Z, +X, -X
@@ -179,6 +179,7 @@ let _centerSky = null;
 let _centerBlk = null;
 let _chunkHeight = 128;
 let _useSmooth = true;
+let _topSkyByte = 0xf0;
 
 function getB(x, y, z) {
   if (y < 0 || y >= _chunkHeight) return AIR;
@@ -195,7 +196,7 @@ function getM(x, y, z) {
   return arr ? arr[(y * CH + (z & 15)) * CH + (x & 15)] : 0;
 }
 function getL(x, y, z) {
-  if (y >= _chunkHeight) return 0xf0;
+  if (y >= _chunkHeight) return _topSkyByte;
   if (y < 0) return 0;
   if (x >= 0 && x < CH && z >= 0 && z < CH) {
     const i = (y * CH + z) * CH + x;
@@ -382,6 +383,9 @@ const RENDER_TORCH = 4;
 const RENDER_SLAB = 5;
 const RENDER_DOOR = 6;
 const RENDER_FLAT = 7;
+const RENDER_STAIRS = 9;
+const RENDER_FENCE = 10;
+const RENDER_PORTAL = 11;
 
 const BLOCK_RENDER_CODE = new Uint8Array(256);
 const BLOCK_TINT_CODE = new Uint8Array(256);
@@ -399,6 +403,9 @@ for (let id = 0; id < 256; id++) {
     case 'slab': BLOCK_RENDER_CODE[id] = RENDER_SLAB; break;
     case 'door': BLOCK_RENDER_CODE[id] = RENDER_DOOR; break;
     case 'flat': BLOCK_RENDER_CODE[id] = RENDER_FLAT; break;
+    case 'stairs': BLOCK_RENDER_CODE[id] = RENDER_STAIRS; break;
+    case 'fence': BLOCK_RENDER_CODE[id] = RENDER_FENCE; break;
+    case 'portal': BLOCK_RENDER_CODE[id] = RENDER_PORTAL; break;
     default: BLOCK_RENDER_CODE[id] = RENDER_CUTOUT_CUBE; break;
   }
   BLOCK_TINT_CODE[id] = bd.tint === 'grass' ? 1 : bd.tint === 'foliage' ? 2 : 0;
@@ -419,6 +426,7 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
   const wx0 = chunk.cx * CH, wz0 = chunk.cz * CH;
   const height = _chunkHeight = chunk.height;
   _useSmooth = world.smoothLighting !== false;
+  _topSkyByte = world.dimension === 'nether' ? 0 : 0xf0;
 
   // Biomes are seed/coordinate dependent, not affected by block edits.
   // Classic has no climate values; skip climate evaluation entirely there.
@@ -439,7 +447,7 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
     for (let dx = -1; dx <= 1; dx++) {
       const idx9 = (dz + 1) * 3 + (dx + 1);
       const nc = (dx === 0 && dz === 0) ? chunk : world.getChunk(chunk.cx + dx, chunk.cz + dz);
-      if (nc && nc.generated) {
+      if (nc && nc.generated && (dx === 0 && dz === 0 || nc.lightingReady !== false)) {
         _cBlocks[idx9] = nc.blocks;
         _cMeta[idx9] = nc.meta;
         _cSky[idx9] = nc.skyLight;
@@ -539,7 +547,7 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
 
         let buf = solid;
         if (renderCode === RENDER_LIQUID) buf = isLava ? solid : water;
-        else if (renderCode !== RENDER_CUBE) buf = cutout;
+        else if (renderCode !== RENDER_CUBE && renderCode !== RENDER_STAIRS && renderCode !== RENDER_FENCE) buf = cutout;
 
         if (renderCode === RENDER_CROSS) {
           const light = (centerSky[idxCell] << 4) | centerBlk[idxCell];
@@ -621,6 +629,61 @@ export function buildChunkMesh(world, chunk, atlasTexture, waterTexture, renderD
             const minX = bounds ? bounds[0] : 0, minY = bounds ? bounds[1] : 0, minZ = bounds ? bounds[2] : 0;
             const maxX = bounds ? bounds[3] : 1, maxY = bounds ? bounds[4] : 0.5625, maxZ = bounds ? bounds[5] : 1;
             pushBox(buf, x + minX, y + minY, z + minZ, x + maxX, y + maxY, z + maxZ, tiles, skyL, blkL);
+            if (id === ENCHANTING_TABLE) {
+              pushBox(buf, x + 0.3125, y + 0.78, z + 0.3125, x + 0.6875, y + 0.90, z + 0.6875,
+                [TILES.enchant_top, TILES.bookshelf, TILES.bookshelf, TILES.bookshelf, TILES.bookshelf, TILES.bookshelf],
+                skyL, Math.max(blkL, 12));
+            }
+          }
+          continue;
+        }
+
+        if (renderCode === RENDER_STAIRS) {
+          const light = getL(x, y + 1, z) || ((centerSky[idxCell] << 4) | centerBlk[idxCell]);
+          const skyL = light >> 4, blkL = light & 15;
+          const bdTiles = BLOCK_TILES_TABLE[id];
+          pushBox(buf, x, y, z, x + 1, y + 0.5, z + 1, bdTiles, skyL, blkL);
+          const dir = meta & 3;
+          if (dir === 0) pushBox(buf, x, y + 0.5, z, x + 1, y + 1, z + 0.5, bdTiles, skyL, blkL);
+          else if (dir === 1) pushBox(buf, x, y + 0.5, z + 0.5, x + 1, y + 1, z + 1, bdTiles, skyL, blkL);
+          else if (dir === 2) pushBox(buf, x, y + 0.5, z, x + 0.5, y + 1, z + 1, bdTiles, skyL, blkL);
+          else pushBox(buf, x + 0.5, y + 0.5, z, x + 1, y + 1, z + 1, bdTiles, skyL, blkL);
+          continue;
+        }
+
+        if (renderCode === RENDER_FENCE) {
+          const light = (centerSky[idxCell] << 4) | centerBlk[idxCell];
+          const skyL = light >> 4, blkL = light & 15;
+          const bdTiles = BLOCK_TILES_TABLE[id];
+          pushBox(buf, x + 0.375, y, z + 0.375, x + 0.625, y + 1, z + 0.625, bdTiles, skyL, blkL);
+          const connects = (nb) => nb === id || nb === FENCE || nb === NETHER_BRICK_FENCE || BLOCK_OPAQUE[nb];
+          if (connects(getB(x, y, z - 1))) {
+            pushBox(buf, x + 0.4375, y + 0.375, z, x + 0.5625, y + 0.5625, z + 0.375, bdTiles, skyL, blkL);
+            pushBox(buf, x + 0.4375, y + 0.75, z, x + 0.5625, y + 0.9375, z + 0.375, bdTiles, skyL, blkL);
+          }
+          if (connects(getB(x, y, z + 1))) {
+            pushBox(buf, x + 0.4375, y + 0.375, z + 0.625, x + 0.5625, y + 0.5625, z + 1, bdTiles, skyL, blkL);
+            pushBox(buf, x + 0.4375, y + 0.75, z + 0.625, x + 0.5625, y + 0.9375, z + 1, bdTiles, skyL, blkL);
+          }
+          if (connects(getB(x - 1, y, z))) {
+            pushBox(buf, x, y + 0.375, z + 0.4375, x + 0.375, y + 0.5625, z + 0.5625, bdTiles, skyL, blkL);
+            pushBox(buf, x, y + 0.75, z + 0.4375, x + 0.375, y + 0.9375, z + 0.5625, bdTiles, skyL, blkL);
+          }
+          if (connects(getB(x + 1, y, z))) {
+            pushBox(buf, x + 0.625, y + 0.375, z + 0.4375, x + 1, y + 0.5625, z + 0.5625, bdTiles, skyL, blkL);
+            pushBox(buf, x + 0.625, y + 0.75, z + 0.4375, x + 1, y + 0.9375, z + 0.5625, bdTiles, skyL, blkL);
+          }
+          continue;
+        }
+
+        if (renderCode === RENDER_PORTAL) {
+          const light = (centerSky[idxCell] << 4) | centerBlk[idxCell];
+          const skyL = light >> 4;
+          const bdTiles = BLOCK_TILES_TABLE[id];
+          if ((meta & 1) === 1) {
+            pushBox(buf, x + 0.375, y, z, x + 0.625, y + 1, z + 1, bdTiles, skyL, 15);
+          } else {
+            pushBox(buf, x, y, z + 0.375, x + 1, y + 1, z + 0.625, bdTiles, skyL, 15);
           }
           continue;
         }

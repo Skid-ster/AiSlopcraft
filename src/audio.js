@@ -244,6 +244,17 @@ export class Audio {
     this._tone(500, 0.07, 0.14, 'triangle', 900);
   }
 
+  xpOrb() {
+    const pitch = 780 + Math.random() * 420;
+    this._tone(pitch, 0.07, 0.08, 'sine', pitch * 1.18);
+  }
+
+  portal() {
+    this._tone(160, 0.55, 0.14, 'sine', 290, 0);
+    this._tone(240, 0.45, 0.10, 'triangle', 420, 0.12);
+    this._noise(0.5, 420, 1.4, 0.07, 'bandpass');
+  }
+
   levelUp() {
     this._tone(440, 0.12, 0.12, 'triangle', null, 0);
     this._tone(554, 0.12, 0.12, 'triangle', null, 0.11);

@@ -4,20 +4,23 @@ import { World } from './world/world.js';
 import { applySavedEdits, selectSpawn } from './world/world-loader.js';
 import { CLASSIC_BLOCKS, isClassicBlock } from './classic.js';
 import { CH, SEA_LEVEL } from './world/chunk.js';
-import { OVERWORLD_TERRAIN } from './world/world-profile.js';
+import { OVERWORLD_TERRAIN, NETHER_TERRAIN } from './world/world-profile.js';
 import { buildChunkMesh } from './world/mesher.js';
 import { buildAtlas, buildItemIcons, buildEmissionAtlas } from './world/textures.js';
 import { extractBlockSprites, paintBlockSprites } from './world/resource-pack.js';
 import {
-  AIR, WATER, WATER_FLOW, LAVA, LAVA_FLOW, TORCH, CRAFTING_TABLE, FURNACE, SAND, GRAVEL, LEAVES, GRASS, DIRT,
+  AIR, BEDROCK, WATER, WATER_FLOW, LAVA, LAVA_FLOW, TORCH, CRAFTING_TABLE, FURNACE, SAND, GRAVEL, LEAVES, GRASS, DIRT,
   LOG, GLASS, BRICK, getBlock, breakTime, canHarvest, ITEMS, itemName, isBlock, itemStackLimit, STONE, COBBLE,
   TILES, SAPLING, TALL_GRASS, PLANKS, TNT, WOOD_DOOR, IRON_DOOR, JUKEBOX, STONE_SLAB, DOUBLE_STONE_SLAB,
-  BED_BLOCK, CAKE_BLOCK, CHEST, CROPS, FARMLAND, WOOL_BASE, LEVER, RAIL, REDSTONE_WIRE, REDSTONE_TORCH, REDSTONE_REPEATER, placeableBlockForItem, FURNACE_LIT
+  BED_BLOCK, CAKE_BLOCK, CHEST, CROPS, FARMLAND, WOOL_BASE, LEVER, RAIL, REDSTONE_WIRE, REDSTONE_TORCH, REDSTONE_REPEATER,
+  OBSIDIAN, ICE, GLOWSTONE, COAL_ORE, DIAMOND_ORE, LAPIS_ORE, REDSTONE_ORE,
+  OAK_STAIRS, COBBLESTONE_STAIRS, FENCE, NETHER_PORTAL, NETHER_BRICK, NETHER_BRICK_FENCE, NETHER_BRICK_STAIRS,
+  ENCHANTING_TABLE, QUARTZ_ORE, QUARTZ_BLOCK, placeableBlockForItem, FURNACE_LIT,
 } from './world/blocks.js';
 import { Player } from './entities/player.js';
 import { createRemoteAvatarModel, disposeRemoteAvatarModel } from './entities/remote-avatar.js';
 import { advanceEating, EAT_DURATION } from './entities/eating.js';
-import { MobManager, rollMobDrops, mobAttackDamage } from './entities/mobs.js';
+import { MOB_DEFS, MobManager, rollMobDrops, mobAttackDamage } from './entities/mobs.js';
 import { UI } from './ui/ui.js';
 import { showGraphicsStartupError } from './ui/startup-error.js';
 import { Audio } from './audio.js';
@@ -26,7 +29,7 @@ import { createFurnaceState, tickFurnace, interactWithFurnaceSlot, FUEL_TIMES } 
 import { smeltResult } from './ui/recipes.js';
 import { ParticleManager } from './particles.js';
 import { FirstPersonArm } from './arm.js';
-import { Lighting, PSXPostProcess, SHADER_STYLES, shaderStyleId } from './rendering.js';
+import { Lighting, SHADER_STYLES, shaderStyleId } from './rendering.js';
 import { loadSettings, persistSettings, sensitivityToRadians, keyLabel } from './settings.js';
 import { decodeWorldSave, encodeWorldSave, MAX_WORLD_SAVE_BYTES, WORLD_SAVE_VERSION } from './save.js';
 import { createWorldSaveStore } from './save-manager.js';
@@ -35,6 +38,13 @@ import { FluidSimulator } from './world/fluids.js';
 import { RedstoneSimulator } from './world/redstone.js';
 import { VehicleManager } from './entities/vehicles.js';
 import { DIRECTIONS as STRUCTURE_DIRECTIONS, structurePartner, setDoorOpen } from './world/structures.js';
+import { getSafeStorage, safeStorageGet, safeStorageSet, safeStorageRemove } from './storage.js';
+import {
+  cloneEnchants, sameEnchants, miningSpeedBonus, hasSilkTouch, rollFortuneCount,
+  meleeEnchantBonuses, bowEnchantBonuses, oreXpDrop,
+} from './enchanting.js';
+import { collapseInvalidPortalsNear, resolvePortalDestination } from './world/portals.js';
+import { getProjectileTexture, uvBox } from './entities/entity-textures.js';
 
 const canvas = document.getElementById('game-canvas');
 let renderer;
@@ -95,8 +105,8 @@ defaultAtlas.getContext('2d').clearRect(waterX, waterY, 16, 16);
 defaultAtlas.getContext('2d').drawImage(waterCanvas, waterX, waterY);
 
 const lighting = new Lighting({ atlasTexture: atlasTex, emissionTexture: buildEmissionAtlas(atlasCanvas) });
-const psxPostProcess = new PSXPostProcess(0.25);
 const renderBufferSize = new THREE.Vector2();
+const browserStorage = getSafeStorage();
 let atlasGeneration = 0;
 const RESOURCE_PACKS_KEY = 'aislopcraft:resource-packs';
 const ACTIVE_RESOURCE_PACK_KEY = 'aislopcraft:active-resource-pack';
@@ -106,23 +116,20 @@ let memoryResourcePackSelectionSet = false;
 let multiplayerVisualRestore = null;
 function storedResourcePacks() {
   try {
-    const value = JSON.parse(localStorage.getItem(RESOURCE_PACKS_KEY) || '[]');
+    const value = JSON.parse(safeStorageGet(browserStorage, RESOURCE_PACKS_KEY) || '[]');
     return Array.isArray(value) ? value.filter(pack => pack && typeof pack.id === 'string' && typeof pack.name === 'string') : [];
   } catch { return []; }
 }
 function hasLegacyResourcePack() {
-  try { return !!localStorage.getItem('aislopcraft:block-atlas'); } catch { return false; }
+  return !!safeStorageGet(browserStorage, 'aislopcraft:block-atlas');
 }
 function resourcePackState() {
   const packs = storedResourcePacks();
   if (hasLegacyResourcePack() && !packs.some(pack => pack.id === 'legacy')) packs.unshift({ id: 'legacy', name: 'Previously imported textures', count: 0 });
   for (const pack of resourcePackMemory.values()) if (!packs.some(item => item.id === pack.id)) packs.push(pack);
-  let activeId = null, explicitlyDefault = false;
-  try {
-    const storedActive = localStorage.getItem(ACTIVE_RESOURCE_PACK_KEY);
-    explicitlyDefault = storedActive === '__default__';
-    activeId = explicitlyDefault ? null : storedActive;
-  } catch {}
+  const storedActive = safeStorageGet(browserStorage, ACTIVE_RESOURCE_PACK_KEY);
+  let explicitlyDefault = storedActive === '__default__';
+  let activeId = explicitlyDefault ? null : storedActive;
   if (memoryResourcePackSelectionSet) {
     activeId = memoryActiveResourcePackId;
     explicitlyDefault = activeId === null;
@@ -177,7 +184,7 @@ const WORLD_NAME = WORLD_PARAMS.get('world') || SEED;
 const REQUESTED_EDITION = WORLD_PARAMS.get('edition') === 'classic' ? 'classic' : null;
 const IS_ROOM_LINK = Boolean(WORLD_PARAMS.get('room'));
 const REQUESTED_TERRAIN = WORLD_PARAMS.get('terrain');
-const worldSaves = createWorldSaveStore(localStorage);
+const worldSaves = createWorldSaveStore(browserStorage);
 const requestedVersion = WORLD_PARAMS.get('saveVersion');
 const selectedSaveVersion = requestedVersion === String(WORLD_SAVE_VERSION) ? WORLD_SAVE_VERSION
   : requestedVersion === '1' || REQUESTED_TERRAIN === 'legacy' || REQUESTED_EDITION === 'classic' ? 1 : undefined;
@@ -187,17 +194,35 @@ let saveConflict = false;
 try { saveConflict = !IS_ROOM_LINK && !savedGame && worldSaves.has(WORLD_ID); } catch { /* play without local storage */ }
 const EDITION = savedGame?.edition || REQUESTED_EDITION || 'beta';
 const unsupportedTerrain = !savedGame && REQUESTED_TERRAIN != null && !['legacy', OVERWORLD_TERRAIN].includes(REQUESTED_TERRAIN);
-const TERRAIN = EDITION === 'classic' ? null : savedGame ? savedGame.terrain ?? null
+const BASE_TERRAIN = EDITION === 'classic' ? null : savedGame ? savedGame.terrain ?? null
   : REQUESTED_TERRAIN === OVERWORLD_TERRAIN || (!IS_ROOM_LINK && !REQUESTED_TERRAIN) ? OVERWORLD_TERRAIN : null;
+const INITIAL_DIMENSION = EDITION !== 'classic' && savedGame?.dimension === 'nether' ? 'nether' : 'overworld';
+const TERRAIN = BASE_TERRAIN;
 function setTerrainParam(url, terrain) {
   url.searchParams.set('terrain', terrain || 'legacy');
 }
 const START_GAME_MODE = EDITION === 'classic' ? 'classic' : WORLD_PARAMS.get('mode') === 'creative' ? 'creative' : 'survival';
 const legacySettings = { ...savedGame?.settings };
 if (legacySettings.sensitivity > 0 && legacySettings.sensitivity < 1) legacySettings.sensitivity = legacySettings.sensitivity / 0.0044 * 100;
-const settings = loadSettings(localStorage, legacySettings);
-const world = new World(SEED, scene, EDITION, TERRAIN);
-applySavedEdits(world, savedGame?.edits);
+const settings = loadSettings(browserStorage, legacySettings);
+const dimensionCache = {
+  overworld: {
+    edits: Array.isArray(savedGame?.edits) ? savedGame.edits : [],
+    chests: Array.isArray(savedGame?.chests) ? savedGame.chests : [],
+    furnaces: Array.isArray(savedGame?.furnaces) ? savedGame.furnaces : [],
+    vehicles: Array.isArray(savedGame?.vehicles) ? savedGame.vehicles : [],
+    items: Array.isArray(savedGame?.items) ? savedGame.items : [],
+  },
+  nether: {
+    edits: Array.isArray(savedGame?.nether?.edits) ? savedGame.nether.edits : [],
+    chests: Array.isArray(savedGame?.nether?.chests) ? savedGame.nether.chests : [],
+    furnaces: Array.isArray(savedGame?.nether?.furnaces) ? savedGame.nether.furnaces : [],
+    vehicles: Array.isArray(savedGame?.nether?.vehicles) ? savedGame.nether.vehicles : [],
+    items: Array.isArray(savedGame?.nether?.items) ? savedGame.nether.items : [],
+  },
+};
+const world = new World(SEED, scene, EDITION, BASE_TERRAIN, INITIAL_DIMENSION);
+applySavedEdits(world, dimensionCache[INITIAL_DIMENSION].edits);
 const fluids = new FluidSimulator(world);
 world.onChunkLoad((cx, cz) => fluids.chunkLoaded(cx, cz));
 world.onChunkUnload((cx, cz) => fluids.chunkLoaded(cx, cz));
@@ -209,7 +234,7 @@ const audio = new Audio();
 const sky = new Sky(scene, camera);
 const mobs = new MobManager(world, scene, lighting);
 const vehicles = new VehicleManager(world, scene, lighting);
-vehicles.load(savedGame?.vehicles);
+vehicles.load(dimensionCache[INITIAL_DIMENSION].vehicles);
 const remotePlayers = new Map();
 let applyingNetworkEdit = false;
 let networkStateTimer = 0;
@@ -299,7 +324,7 @@ const game = {
     const pack = packs.find(item => item.id === requestedId);
     if (!pack) throw new Error('That texture pack is no longer installed. Reopen the multiplayer screen and choose another pack.');
     let atlasData = resourcePackMemory.get(requestedId)?.atlasData;
-    try { atlasData ||= requestedId === 'legacy' ? localStorage.getItem('aislopcraft:block-atlas') : localStorage.getItem(`aislopcraft:resource-pack:${requestedId}`); } catch {}
+    atlasData ||= safeStorageGet(browserStorage, requestedId === 'legacy' ? 'aislopcraft:block-atlas' : `aislopcraft:resource-pack:${requestedId}`);
     if (!atlasData || atlasData.length > 700_000) throw new Error('The selected texture pack is too large to share in a multiplayer room. Choose another pack or use built-in textures.');
     return { name: pack.name || 'Host texture pack', atlasData };
   },
@@ -345,13 +370,13 @@ const game = {
     memoryActiveResourcePackId = id;
     memoryResourcePackSelectionSet = true;
     let saved = true;
-    try {
-      const list = storedResourcePacks().filter(item => item.id !== id);
-      list.push(pack);
-      localStorage.setItem(`aislopcraft:resource-pack:${id}`, atlasData);
-      localStorage.setItem(RESOURCE_PACKS_KEY, JSON.stringify(list));
-      localStorage.setItem(ACTIVE_RESOURCE_PACK_KEY, id);
-    } catch { saved = false; }
+    const list = storedResourcePacks().filter(item => item.id !== id);
+    list.push(pack);
+    if (!safeStorageSet(browserStorage, `aislopcraft:resource-pack:${id}`, atlasData)
+      || !safeStorageSet(browserStorage, RESOURCE_PACKS_KEY, JSON.stringify(list))
+      || !safeStorageSet(browserStorage, ACTIVE_RESOURCE_PACK_KEY, id)) {
+      saved = false;
+    }
     atlasCanvas.getContext('2d').clearRect(0, 0, 256, 256);
     atlasCanvas.getContext('2d').drawImage(staged, 0, 0);
     refreshAtlas();
@@ -361,7 +386,7 @@ const game = {
     const pack = resourcePackState().packs.find(item => item.id === id);
     if (!pack) throw new Error('That texture pack is no longer installed.');
     let atlasData = resourcePackMemory.get(id)?.atlasData;
-    try { atlasData ||= id === 'legacy' ? localStorage.getItem('aislopcraft:block-atlas') : localStorage.getItem(`aislopcraft:resource-pack:${id}`); } catch {}
+    atlasData ||= safeStorageGet(browserStorage, id === 'legacy' ? 'aislopcraft:block-atlas' : `aislopcraft:resource-pack:${id}`);
     if (!atlasData?.startsWith('data:image/png;base64,') || atlasData.length > 2_000_000) throw new Error('Saved texture pack data is missing or invalid.');
     const generation = ++atlasGeneration;
     const image = new Image();
@@ -377,7 +402,7 @@ const game = {
     refreshAtlas();
     memoryActiveResourcePackId = id;
     memoryResourcePackSelectionSet = true;
-    try { localStorage.setItem(ACTIVE_RESOURCE_PACK_KEY, id); } catch {}
+    safeStorageSet(browserStorage, ACTIVE_RESOURCE_PACK_KEY, id);
     return true;
   },
   useDefaultResourcePack() {
@@ -387,20 +412,17 @@ const game = {
     atlasCanvas.getContext('2d').clearRect(0, 0, 256, 256);
     atlasCanvas.getContext('2d').drawImage(defaultAtlas, 0, 0);
     refreshAtlas();
-    try { localStorage.setItem(ACTIVE_RESOURCE_PACK_KEY, '__default__'); } catch {}
+    safeStorageSet(browserStorage, ACTIVE_RESOURCE_PACK_KEY, '__default__');
     return true;
   },
   async deleteResourcePack(id) {
     atlasGeneration++;
     const wasActive = resourcePackState().activeId === id;
     resourcePackMemory.delete(id);
-    if (id === 'legacy') {
-      try { localStorage.removeItem('aislopcraft:block-atlas'); } catch {}
-    } else {
-      try { localStorage.removeItem(`aislopcraft:resource-pack:${id}`); } catch {}
-    }
+    if (id === 'legacy') safeStorageRemove(browserStorage, 'aislopcraft:block-atlas');
+    else safeStorageRemove(browserStorage, `aislopcraft:resource-pack:${id}`);
     const list = storedResourcePacks().filter(pack => pack.id !== id);
-    try { localStorage.setItem(RESOURCE_PACKS_KEY, JSON.stringify(list)); } catch {}
+    safeStorageSet(browserStorage, RESOURCE_PACKS_KEY, JSON.stringify(list));
     if (wasActive) this.useDefaultResourcePack();
     return resourcePackState();
   },
@@ -485,6 +507,45 @@ const game = {
       }
     } finally { applyingNetworkEdit = false; }
   },
+  async containerTx(payload, targetPlayer = player, fallbackInvIndex = null, fallbackStack = null) {
+    if (!this.networkRoom || !this.multiplayerClient) return false;
+    try {
+      const ack = await this.multiplayerClient.containerTx(payload);
+      if (ack?.state) applyAuthoritativeContainerState(payload.kind, payload.key, ack.state);
+      if (payload.mode === 'click') {
+        targetPlayer.cursorStack = ack?.cursorStack || null;
+      } else if (payload.mode === 'take' && ack?.taken) {
+        ui.returnStack(ack.taken);
+        if (payload.kind === 'furnace' && payload.slot === 'output') audio.pop();
+      } else if (payload.mode === 'insert' && ack?.remainder) {
+        if (fallbackInvIndex != null && !targetPlayer.inventory[fallbackInvIndex]) {
+          targetPlayer.inventory[fallbackInvIndex] = ack.remainder;
+        } else {
+          ui.returnStack(ack.remainder);
+        }
+      }
+      if (ack?.xpEarned > 0) targetPlayer.addXp(ack.xpEarned, audio);
+      refreshChest();
+      refreshFurnace();
+      ui.refresh();
+      return true;
+    } catch (error) {
+      if (fallbackStack) {
+        if (fallbackInvIndex != null && !targetPlayer.inventory[fallbackInvIndex]) {
+          targetPlayer.inventory[fallbackInvIndex] = fallbackStack;
+        } else if (payload.mode === 'click' && !targetPlayer.cursorStack) {
+          targetPlayer.cursorStack = fallbackStack;
+        } else {
+          ui.returnStack(fallbackStack);
+        }
+      }
+      refreshChest();
+      refreshFurnace();
+      ui.refresh();
+      ui?.notify?.(error?.message || 'Container action failed.');
+      return false;
+    }
+  },
   setMultiplayerRoom(room, client) {
     this.networkOffs?.forEach(off => off());
     this.networkOffs = [];
@@ -494,6 +555,12 @@ const game = {
     this.multiplayerClient = client;
     player.flying = false;
     player.gameMode = this.edition === 'classic' ? 'classic' : room.gameMode === 'creative' ? 'creative' : 'survival';
+    if (room.dimension && room.dimension !== world.dimension && this.edition !== 'classic') {
+      switchWorldDimension(room.dimension, false);
+    }
+    if (room.role === 'host' && (chests.size > 0 || furnaces.size > 0)) {
+      void client.publishContainers(world.dimension, [...chests], [...furnaces]).catch(() => {});
+    }
     for (const peer of room.players || []) if (peer.id !== room.id) createRemoteAvatar(peer.id, peer.name);
     const on = (type, handler) => this.networkOffs.push(client.on(type, handler));
     on('player:joined', message => {
@@ -511,8 +578,59 @@ const game = {
     });
     on('player:state', message => updateRemoteAvatar(message));
     on('player:damage', message => { if (Number.isFinite(message.amount) && message.amount > 0) player.damage(message.amount, audio); });
-    on('world:snapshot', message => this.applyNetworkEdits(message.entries));
-    on('world:edit', message => this.applyNetworkEdits([message.edit]));
+    on('world:snapshot', message => {
+      if (message.dimension && message.dimension !== world.dimension) return;
+      this.applyNetworkEdits(message.entries);
+    });
+    on('world:edit', message => {
+      if (message.dimension && message.dimension !== world.dimension) return;
+      this.applyNetworkEdits([message.edit]);
+    });
+    on('container:snapshot', message => {
+      if (message.dimension && message.dimension !== world.dimension) return;
+      chests.clear();
+      furnaces.clear();
+      if (Array.isArray(message.chests)) {
+        for (const [key, slots] of message.chests) {
+          if (typeof key === 'string' && Array.isArray(slots) && slots.length === 27) chests.set(key, slots);
+        }
+      }
+      if (Array.isArray(message.furnaces)) {
+        for (const [key, furnace] of message.furnaces) {
+          if (typeof key === 'string' && furnace && typeof furnace === 'object') furnaces.set(key, furnace);
+        }
+      }
+      if (game.openChestData?.key && !game.openChestData.vehicle && chests.has(game.openChestData.key)) {
+        game.openChestData.slots = chests.get(game.openChestData.key);
+      }
+      if (game.openFurnaceData?.key && furnaces.has(game.openFurnaceData.key)) {
+        game.openFurnaceData.f = furnaces.get(game.openFurnaceData.key);
+      }
+      refreshChest();
+      refreshFurnace();
+    });
+    on('container:state', message => {
+      if (message.dimension && message.dimension !== world.dimension) return;
+      applyAuthoritativeContainerState(message.kind, message.key, message.state);
+      refreshChest();
+      refreshFurnace();
+    });
+    on('container:remove', message => {
+      if (message.dimension && message.dimension !== world.dimension) return;
+      removeAuthoritativeContainer(message.kind, message.key);
+    });
+    on('room:dimension', message => {
+      if (!message?.dimension || this.edition === 'classic') return;
+      switchWorldDimension(message.dimension, false, message.spawn);
+    });
+    on('portal:travel', message => {
+      if (room.role !== 'host' || !message?.dimension || this.edition === 'classic') return;
+      if (message.dimension !== world.dimension) {
+        const fromPos = Array.isArray(message.pos) && message.pos.length === 3
+          ? new THREE.Vector3(...message.pos) : player.pos.clone();
+        travelPortal(fromPos);
+      }
+    });
     on('item:snapshot', message => applyNetworkItems(message.items));
     on('item:spawn', message => upsertNetworkItem(message.item));
     on('item:remove', message => removeNetworkItem(message.uid));
@@ -520,15 +638,19 @@ const game = {
       removeNetworkItem(message.item?.uid);
       const stack = message.item;
       if (stack) {
-        const inserted = player.insertItem(stack.id, stack.count, stack.damage || 0);
-        if (inserted < stack.count) spawnItem(player.pos.x, player.pos.y, player.pos.z, stack.id, stack.count - inserted, stack.damage || 0);
+        const enchants = cloneEnchants(stack.enchants);
+        const inserted = player.insertItem(stack.id, stack.count, stack.damage || 0, enchants);
+        if (inserted < stack.count) spawnItem(player.pos.x, player.pos.y, player.pos.z, stack.id, stack.count - inserted, stack.damage || 0, null, enchants);
         audio.pop(); ui?.refresh?.();
       }
     });
     on('mob:snapshot', message => { if (room.role !== 'host') mobs.applyNetworkSnapshot(message.mobs); });
     on('vehicle:snapshot', message => { if (room.role !== 'host') vehicles.applyNetworkSnapshot(message.vehicles); });
     on('vehicle:update', message => vehicles.applyNetworkUpdate(message.vehicle, message.riding));
-    on('vehicle:remove', message => vehicles.removeNetworkVehicle(message.uid));
+    on('vehicle:remove', message => {
+      removeAuthoritativeContainer('cart', message.uid);
+      vehicles.removeNetworkVehicle(message.uid);
+    });
     on('projectile:snapshot', message => applyNetworkProjectiles(message.projectiles));
     on('projectile:update', message => upsertNetworkProjectile(message.projectile));
     on('projectile:remove', message => removeNetworkProjectile(message.uid));
@@ -540,10 +662,28 @@ const game = {
         _solidBlockAt: (...args) => player._solidBlockAt(...args),
         raycast: (sharedWorld, distance, options) => Player.prototype.raycast.call(fakePlayer, sharedWorld, distance, options) };
       const ranged = !!message.ranged;
-      const target = mobs.raycastTarget(fakePlayer, ranged ? 24 : 3.5);
-      if (!target || target.networkId !== message.uid || Math.hypot(target.pos.x - attacker.x, target.pos.z - attacker.z) > (ranged ? 24 : 4)) return;
+      const target = mobs.raycastTarget(fakePlayer, ranged ? 28 : 3.5);
+      if (!target || target.networkId !== message.uid || Math.hypot(target.pos.x - attacker.x, target.pos.z - attacker.z) > (ranged ? 28 : 4)) return;
       const dx = target.pos.x - attacker.x, dz = target.pos.z - attacker.z, length = Math.hypot(dx, dz) || 1;
-      target.damage(ranged ? 4 : mobAttackDamage(message.heldId), audio, { knockback: new THREE.Vector3(dx / length * (ranged ? 2 : 3.4), ranged ? 0.7 : 1.15, dz / length * (ranged ? 2 : 3.4)) });
+      if (ranged) {
+        const dmg = Number.isFinite(message.damage) ? Math.max(0, Math.min(24, message.damage)) : 4;
+        const kb = 2 + (Number.isInteger(message.punch) ? Math.max(0, Math.min(2, message.punch)) * 2.2 : 0);
+        target.damage(dmg, audio, {
+          knockback: new THREE.Vector3(dx / length * kb, 0.7, dz / length * kb),
+          fireSeconds: message.flame ? 5 : 0,
+          pack: mobs.mobs,
+        });
+      } else {
+        const ench = meleeEnchantBonuses(message.enchants ? { id: message.heldId, enchants: message.enchants } : null, target.type);
+        const kbScale = 1 + ench.knockback * 0.85;
+        const dmg = Math.max(1, Math.round(mobAttackDamage(message.heldId) + ench.bonusDamage));
+        target.damage(dmg, audio, {
+          knockback: new THREE.Vector3(dx / length * 3.4 * kbScale, 1.15 + ench.knockback * 0.2, dz / length * 3.4 * kbScale),
+          looting: ench.looting,
+          fireSeconds: ench.fireSeconds,
+          pack: mobs.mobs,
+        });
+      }
     });
     on('game:state', message => applySharedGameState(message.state));
     on('tnt:ignite', message => {
@@ -562,10 +702,32 @@ const game = {
       for (const id of [...remotePlayers.keys()]) removeRemoteAvatar(id);
       ui?.updateNetworkPanel?.();
       ui?.notify?.(message?.reason || `Disconnected from ${closedName}.`);
-      if (this.started || this.loading) this.openEditionHome('beta', true);
+      if (this.started || this.loading) this.openEditionHome(this.edition, true);
     };
     on('room:closed', disconnectRoom);
-    on('disconnected', disconnectRoom);
+    on('disconnected', async message => {
+      const code = this.networkRoom?.code;
+      const token = client.resumeToken;
+      const relayUrl = client.relayUrl;
+      if (code && token && relayUrl && !this._reconnecting) {
+        this._reconnecting = true;
+        ui?.notify?.('Connection interrupted — attempting to reconnect…');
+        for (const delay of [400, 1200, 2600]) {
+          await new Promise(r => setTimeout(r, delay));
+          if (!this.networkRoom) break;
+          try {
+            await client.connect(relayUrl);
+            const resumed = await client.resumeSession(code, token);
+            this._reconnecting = false;
+            this.setMultiplayerRoom({ ...this.networkRoom, ...resumed }, client);
+            ui?.notify?.('Reconnected to multiplayer room.');
+            return;
+          } catch { /* try next backoff window */ }
+        }
+        this._reconnecting = false;
+      }
+      disconnectRoom(message);
+    });
     ui?.updateNetworkPanel?.();
   },
   async leaveMultiplayer() {
@@ -581,7 +743,7 @@ const game = {
     player.gameMode = 'survival';
     for (const id of [...remotePlayers.keys()]) removeRemoteAvatar(id);
     ui?.updateNetworkPanel?.();
-    if (this.started || this.loading) this.openEditionHome();
+    if (this.started || this.loading) this.openEditionHome(this.edition);
   },
   onRenderDistanceChange() {
     updateChunks(true);
@@ -592,7 +754,7 @@ const game = {
   multiplayerRelay: new URLSearchParams(location.search).get('relay') || '',
   spawnBed: savedGame?.spawnBed || null,
   dropItem(stack) {
-    spawnItem(player.pos.x, player.pos.y, player.pos.z, stack.id, stack.count, stack.damage || 0);
+    spawnItem(player.pos.x, player.pos.y, player.pos.z, stack.id, stack.count, stack.damage || 0, null, stack.enchants || null);
   },
   publishVehicleState(vehicle, riding = false) {
     if (!this.networkRoom || !this.multiplayerClient || !vehicle) return;
@@ -601,7 +763,7 @@ const game = {
   },
   syncSharedState() {
     if (this.networkRoom?.role !== 'host' || !this.multiplayerClient) return;
-    this.multiplayerClient.send('game:state', { state: { timeOfDay: sky.timeOfDay, chests: [...chests], furnaces: [...furnaces] } });
+    this.multiplayerClient.send('game:state', { state: { timeOfDay: sky.timeOfDay } });
     if (game.openChestData?.vehicle) this.publishVehicleState(game.openChestData.vehicle, false);
   },
   dropHeld(all = false) {
@@ -614,12 +776,19 @@ const game = {
     ui.refresh();
   },
   prepareSpawn() {
+    if (world.dimension === 'nether') {
+      const y = Math.max(34, Math.min(96, world.heightAt(0, 0) + 1));
+      return new THREE.Vector3(0.5, y, 0.5);
+    }
     const { position, bed } = selectSpawn(world, this.spawnBed);
     this.spawnBed = bed;
     return position;
   },
   respawn() {
     vehicles.dismount(player, true);
+    if (world.dimension === 'nether' && !this.networkRoom) {
+      switchWorldDimension('overworld', true);
+    }
     const spawn = this.prepareSpawn();
     player.respawn(spawn.y, spawn.x, spawn.z);
     mobs.attackCooldown = 0;
@@ -628,7 +797,7 @@ const game = {
     ui.setMode('game');
   },
   saveSettings() {
-    persistSettings(localStorage, this.settings);
+    persistSettings(browserStorage, this.settings);
   },
   refreshContainers() {
     refreshChest();
@@ -648,11 +817,27 @@ const game = {
     return true;
   },
   captureWorldSave() {
-    return { version: world.terrain ? WORLD_SAVE_VERSION : 1, ...(world.terrain ? { terrain: world.terrain } : {}), worldId: WORLD_ID, seed: SEED, worldName: this.worldName, edition: this.edition, gameMode: player.gameMode,
-      edits: [...world.edits].map(([key, id]) => [key, id, world.metaEdits.get(key) || 0]),
-      settings: this.settings, spawnBed: this.spawnBed, timeOfDay: sky.timeOfDay, furnaces: [...furnaces], chests: [...chests], vehicles: vehicles.serialize(),
-      items: itemEntities.filter(it => !it.dead).map(it => ({ id: it.id, count: it.count, damage: it.damage, pos: it.mesh.position.toArray(), vy: it.vy, age: it.age })),
-      player: { pos: player.pos.toArray(), yaw: player.yaw, pitch: player.pitch, health: player.health, hunger: player.hunger, saturation: player.saturation, exhaustion: player.exhaustion, inventory: player.inventory, armor: player.armor, hotbarIndex: player.hotbarIndex, stats: player.stats } };
+    snapshotCurrentDimensionIntoCache();
+    const ow = dimensionCache.overworld;
+    const ne = dimensionCache.nether;
+    const hasNetherData = world.dimension === 'nether' || ne.edits.length > 0 || ne.chests.length > 0 || ne.furnaces.length > 0 || ne.vehicles.length > 0;
+    return {
+      version: BASE_TERRAIN ? WORLD_SAVE_VERSION : 1,
+      ...(BASE_TERRAIN ? { terrain: BASE_TERRAIN } : {}),
+      ...(world.dimension === 'nether' ? { dimension: 'nether' } : {}),
+      ...(hasNetherData ? { nether: ne } : {}),
+      worldId: WORLD_ID, seed: SEED, worldName: this.worldName, edition: this.edition, gameMode: player.gameMode,
+      edits: ow.edits,
+      settings: this.settings, spawnBed: this.spawnBed, timeOfDay: sky.timeOfDay,
+      furnaces: ow.furnaces, chests: ow.chests, vehicles: ow.vehicles,
+      items: ow.items,
+      player: {
+        pos: player.pos.toArray(), yaw: player.yaw, pitch: player.pitch,
+        health: player.health, hunger: player.hunger, saturation: player.saturation, exhaustion: player.exhaustion,
+        inventory: player.inventory, armor: player.armor, hotbarIndex: player.hotbarIndex,
+        xpTotal: player.xpTotal, xpSeed: player.xpSeed, stats: player.stats,
+      },
+    };
   },
   saveGame() {
     // Multiplayer rooms are temporary; never overwrite a local world with room state.
@@ -667,7 +852,7 @@ const game = {
     if ((this.onlineSession || this.networkRoom) && requestedWorldId === WORLD_ID) throw new Error('Leave the multiplayer room before exporting a local world save.');
     const version = terrain === undefined ? savedGame?.version ?? selectedSaveVersion : terrain ? WORLD_SAVE_VERSION : 1;
     // Download current progress directly, even if the browser will not store it.
-    const save = this.started && requestedWorldId === WORLD_ID && (terrain === undefined || terrain === world.terrain)
+    const save = this.started && requestedWorldId === WORLD_ID && (terrain === undefined || terrain === BASE_TERRAIN)
       ? this.captureWorldSave()
       : worldSaves.read(requestedWorldId, version);
     if (!save || save.worldId !== requestedWorldId) throw new Error('There is no saved world for that selection yet.');
@@ -690,7 +875,7 @@ const game = {
       if (error.name === 'QuotaExceededError') throw new Error('Browser storage is full. Free some space and try again. Existing saves were not changed.');
       throw error;
     }
-    persistSettings(localStorage, save.settings);
+    persistSettings(browserStorage, save.settings);
     this.openLocalWorld(save.seed, save.worldName, save.gameMode, save.worldId, save.edition, save.terrain ?? null);
     return true;
   },
@@ -698,9 +883,9 @@ const game = {
     if (this.onlineSession || saveConflict || unsupportedTerrain) return;
     try {
       const id = this.newLocalWorldId('world');
-      worldSaves.remove(WORLD_ID, world.terrain ? WORLD_SAVE_VERSION : 1);
+      worldSaves.remove(WORLD_ID, BASE_TERRAIN ? WORLD_SAVE_VERSION : 1);
       this.started = false; // Do not resurrect the deleted save in beforeunload.
-      this.openLocalWorld(SEED, this.worldName, savedGame?.gameMode ?? player.gameMode, id, EDITION, world.terrain);
+      this.openLocalWorld(SEED, this.worldName, savedGame?.gameMode ?? player.gameMode, id, EDITION, BASE_TERRAIN);
     } catch (error) { ui.notify(error.message); }
   },
   start() {
@@ -728,6 +913,8 @@ const game = {
           if (Array.isArray(saved.inventory) && saved.inventory.length === 36) player.inventory = saved.inventory;
           if (Array.isArray(saved.armor) && saved.armor.length === 4) player.armor = saved.armor;
           player.hotbarIndex = Math.max(0, Math.min(8, Number(saved.hotbarIndex) || 0));
+          if (Number.isFinite(saved.xpTotal)) { player.xpTotal = Math.max(0, Math.floor(saved.xpTotal)); player.syncXpState(); }
+          if (Number.isInteger(saved.xpSeed)) player.xpSeed = saved.xpSeed >>> 0;
           if (saved.stats && typeof saved.stats === 'object') Object.assign(player.stats, saved.stats);
           camera.position.set(player.pos.x, player.pos.y + 1.62, player.pos.z);
         }
@@ -750,9 +937,10 @@ const game = {
         if (this.edition !== 'classic' && mobs.mobs.length === 0 && this.networkRoom?.role !== 'guest') mobs.spawnInitial(player);
         if (!loadedItems) {
           loadedItems = true;
-          if (Array.isArray(savedGame?.items)) for (const item of savedGame.items.slice(0, 4096)) {
+          const activeSavedItems = dimensionCache[INITIAL_DIMENSION].items;
+          if (Array.isArray(activeSavedItems)) for (const item of activeSavedItems.slice(0, 4096)) {
             if (!item || !Number.isInteger(item.id) || !Number.isFinite(item.count) || item.count <= 0 || !Array.isArray(item.pos) || item.pos.length !== 3 || !item.pos.every(Number.isFinite)) continue;
-            spawnItem(item.pos[0] - 0.5, item.pos[1] - 0.3, item.pos[2] - 0.5, item.id, item.count, item.damage || 0);
+            spawnItem(item.pos[0] - 0.5, item.pos[1] - 0.3, item.pos[2] - 0.5, item.id, item.count, item.damage || 0, null, item.enchants || null);
             const entity = itemEntities[itemEntities.length - 1];
             entity.vy = Number.isFinite(item.vy) ? item.vy : 0;
             entity.age = Number.isFinite(item.age) ? Math.max(0, item.age) : 0;
@@ -959,6 +1147,7 @@ function processChunkQueue(budget = performance.now() + 4) {
       if (w) { scene.add(w); meshes.water = w; }
       chunk.meshes = meshes;
       chunk.dirty = false;
+      lighting.invalidateShadows();
     }
   }
 }
@@ -979,6 +1168,7 @@ function rebuildDirtyChunks(budget = performance.now() + 4) {
       // buildChunkMesh already removed/disposed the previous meshes.
       chunk.meshes = meshes;
       chunk.dirty = false;
+      lighting.invalidateShadows();
       n++;
     }
   }
@@ -991,9 +1181,10 @@ let loadedItems = false;
 const itemGroup = new THREE.Group();
 scene.add(itemGroup);
 
-function spawnItem(x, y, z, id, count = 1, damage = 0, uid = null) {
+function spawnItem(x, y, z, id, count = 1, damage = 0, uid = null, enchants = null) {
   // Geometry/UVs are immutable per item ID. Materials remain per entity so
   // local light uniforms can differ without one dropped item affecting another.
+  const cleanEnch = cloneEnchants(enchants);
   let geometry = dropGeometryCache.get(id);
   const block = isBlock(id);
   if (!geometry) {
@@ -1020,13 +1211,109 @@ function spawnItem(x, y, z, id, count = 1, damage = 0, uid = null) {
   lighting.refreshObject(mesh, world, mesh.position, 0);
   itemGroup.add(mesh);
   const sourceUid = uid || globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
-  const entity = { mesh, id, count, damage, vy: 2, age: 0, onGround: false, uid: sourceUid };
+  const entity = { mesh, id, count, damage, ...(cleanEnch ? { enchants: cleanEnch } : {}), vy: 2, age: 0, onGround: false, uid: sourceUid };
   itemEntities.push(entity);
   if (!uid && game.networkRoom?.role === 'guest') {
     entity.uid = `${game.networkRoom.id}:${sourceUid}`;
-    game.multiplayerClient?.send('item:spawn', { item: { uid: sourceUid, id, count, damage: damage || 0, pos: mesh.position.toArray(), vy: entity.vy, age: entity.age } });
+    game.multiplayerClient?.send('item:spawn', {
+      item: {
+        uid: sourceUid, id, count, damage: damage || 0,
+        ...(cleanEnch ? { enchants: cleanEnch } : {}),
+        pos: mesh.position.toArray(), vy: entity.vy, age: entity.age,
+      },
+    });
   }
   return entity;
+}
+
+// ---- glowing experience orbs ----
+const xpOrbs = [];
+const xpOrbGroup = new THREE.Group();
+scene.add(xpOrbGroup);
+const xpOrbGeo = uvBox(0.22, 0.22, 0.22, { all: [0, 0, 16, 16] }, 16, 16);
+
+function spawnXpOrb(x, y, z, value) {
+  const total = Math.max(0, Math.floor(Number(value) || 0));
+  if (!total || world.edition === 'classic') return;
+  let remaining = total;
+  while (remaining > 0) {
+    const chunkVal = remaining >= 11 ? 11 : remaining >= 5 ? 5 : remaining >= 3 ? 3 : 1;
+    remaining -= chunkVal;
+    const mat = new THREE.MeshBasicMaterial({
+      map: getProjectileTexture('xp_orb'),
+      color: chunkVal >= 5 ? 0xd8ff62 : 0x9cff54,
+      transparent: true,
+      alphaTest: 0.2,
+    });
+    const mesh = new THREE.Mesh(xpOrbGeo, mat);
+    mesh.userData.emissive = true;
+    lighting.prepare(mesh);
+    mesh.position.set(x + (Math.random() - 0.5) * 0.35, y + 0.25, z + (Math.random() - 0.5) * 0.35);
+    xpOrbGroup.add(mesh);
+    xpOrbs.push({
+      mesh,
+      value: chunkVal,
+      vx: (Math.random() - 0.5) * 2.2,
+      vy: 2.2 + Math.random() * 1.4,
+      vz: (Math.random() - 0.5) * 2.2,
+      age: 0,
+    });
+  }
+}
+
+function clearXpOrbs() {
+  for (const orb of xpOrbs) {
+    xpOrbGroup.remove(orb.mesh);
+    lighting.forget(orb.mesh);
+    orb.mesh.material?.dispose?.();
+  }
+  xpOrbs.length = 0;
+}
+
+function updateXpOrbs(dt, allowPickup) {
+  for (const orb of xpOrbs) {
+    orb.age += dt;
+    orb.vy -= 12 * dt;
+    const dx = player.pos.x - orb.mesh.position.x;
+    const dy = (player.pos.y + 0.9) - orb.mesh.position.y;
+    const dz = player.pos.z - orb.mesh.position.z;
+    const distSq = dx * dx + dy * dy + dz * dz;
+    if (!player.dead && distSq < 30.25) {
+      const dist = Math.sqrt(distSq) || 0.001;
+      const pull = (1 - dist / 5.5) * 14;
+      orb.vx += (dx / dist) * pull * dt;
+      orb.vy += (dy / dist) * pull * dt;
+      orb.vz += (dz / dist) * pull * dt;
+    }
+    orb.vx *= 0.92; orb.vz *= 0.92;
+    orb.mesh.position.x += orb.vx * dt;
+    orb.mesh.position.y += orb.vy * dt;
+    orb.mesh.position.z += orb.vz * dt;
+    const bx = Math.floor(orb.mesh.position.x), by = Math.floor(orb.mesh.position.y - 0.12), bz = Math.floor(orb.mesh.position.z);
+    if (getBlock(world.getBlock(bx, by, bz)).solid && orb.vy < 0) {
+      orb.mesh.position.y = by + 1.12;
+      orb.vy = 0;
+    }
+    const pulse = 0.85 + Math.sin(orb.age * 8) * 0.18;
+    orb.mesh.scale.setScalar(pulse);
+    orb.mesh.rotation.y += dt * 3.2;
+    if (allowPickup && !player.dead && orb.age > 0.25 && distSq < 1.35 * 1.35) {
+      player.addXp(orb.value, audio);
+      audio.xpOrb?.();
+      orb.dead = true;
+    }
+    if (orb.age > 180) orb.dead = true;
+  }
+  for (const orb of xpOrbs) {
+    if (orb.dead) {
+      xpOrbGroup.remove(orb.mesh);
+      lighting.forget(orb.mesh);
+      orb.mesh.material?.dispose?.();
+    }
+  }
+  for (let i = xpOrbs.length - 1; i >= 0; i--) {
+    if (xpOrbs[i].dead) xpOrbs.splice(i, 1);
+  }
 }
 
 let _itemTex = null;
@@ -1056,8 +1343,9 @@ function removeNetworkItem(uid) {
 function upsertNetworkItem(item) {
   if (!item || typeof item.uid !== 'string' || !Number.isInteger(item.id) || !Number.isFinite(item.count) || !Array.isArray(item.pos) || item.pos.length !== 3 || !item.pos.every(Number.isFinite)) return;
   let entity = itemEntities.find(candidate => candidate.uid === item.uid);
-  if (!entity) entity = spawnItem(item.pos[0] - 0.5, item.pos[1] - 0.3, item.pos[2] - 0.5, item.id, item.count, item.damage || 0, item.uid);
+  if (!entity) entity = spawnItem(item.pos[0] - 0.5, item.pos[1] - 0.3, item.pos[2] - 0.5, item.id, item.count, item.damage || 0, item.uid, item.enchants || null);
   entity.count = item.count; entity.mesh.position.fromArray(item.pos);
+  if (item.enchants) entity.enchants = cloneEnchants(item.enchants);
   entity.vy = Number.isFinite(item.vy) ? item.vy : 0;
   entity.age = Number.isFinite(item.age) ? item.age : 0;
 }
@@ -1071,6 +1359,47 @@ function applyNetworkItems(items) {
     upsertNetworkItem(item);
   }
   for (const item of [...itemEntities]) if (!seen.has(item.uid)) removeNetworkItem(item.uid);
+}
+
+function applyAuthoritativeContainerState(kind, key, state) {
+  if (typeof key !== 'string' || !key) return;
+  if (kind === 'chest' && Array.isArray(state) && state.length === 27) {
+    let target = chests.get(key);
+    if (!target) {
+      target = new Array(27).fill(null);
+      chests.set(key, target);
+    }
+    for (let i = 0; i < 27; i++) target[i] = state[i] || null;
+    if (game.openChestData?.key === key && !game.openChestData.vehicle) game.openChestData.slots = target;
+  } else if (kind === 'cart' && Array.isArray(state) && state.length === 27) {
+    const cart = vehicles.vehicles.find(v => v.networkId === key && v.type === 'storage');
+    if (cart) {
+      if (!Array.isArray(cart.slots) || cart.slots.length !== 27) cart.slots = new Array(27).fill(null);
+      for (let i = 0; i < 27; i++) cart.slots[i] = state[i] || null;
+      if (game.openChestData?.vehicle?.networkId === key) game.openChestData.slots = cart.slots;
+    }
+  } else if (kind === 'furnace' && state && typeof state === 'object') {
+    let target = furnaces.get(key);
+    if (!target) {
+      target = createFurnaceState();
+      furnaces.set(key, target);
+    }
+    Object.assign(target, state);
+    if (game.openFurnaceData?.key === key) game.openFurnaceData.f = target;
+  }
+}
+
+function removeAuthoritativeContainer(kind, key) {
+  if (typeof key !== 'string' || !key) return;
+  if (kind === 'chest') {
+    chests.delete(key);
+    if (ui?.mode === 'chest' && game.openChestData?.key === key && !game.openChestData.vehicle) ui.setMode('game');
+  } else if (kind === 'cart') {
+    if (ui?.mode === 'chest' && game.openChestData?.vehicle?.networkId === key) ui.setMode('game');
+  } else if (kind === 'furnace') {
+    furnaces.delete(key);
+    if (ui?.mode === 'furnace' && game.openFurnaceData?.key === key) ui.setMode('game');
+  }
 }
 
 function applySharedGameState(state) {
@@ -1148,7 +1477,7 @@ function updateItems(dt, allowPickup) {
       if (networked) {
         it.pendingPickup = game.multiplayerClient?.send('item:pickup', { uid: it.uid }) || false;
       } else {
-        const inserted = player.insertItem(it.id, it.count, it.damage || 0);
+        const inserted = player.insertItem(it.id, it.count, it.damage || 0, it.enchants || null);
         if (inserted > 0) {
           it.count -= inserted;
           audio.pop();
@@ -1174,14 +1503,25 @@ function updateItems(dt, allowPickup) {
 // ---- block breaking / placing ----
 function releaseContainer(x, y, z, id) {
   const key = `${x},${y},${z}`;
-  const stacks = id === CHEST ? chests.get(key) : (id === FURNACE || id === FURNACE_LIT) && furnaces.has(key) ? Object.values(furnaces.get(key)).filter(v => v && typeof v === 'object' && Number.isFinite(v.id)) : null;
-  if (stacks) for (const stack of stacks) if (stack?.count > 0) spawnItem(x, y, z, stack.id, stack.count, stack.damage || 0);
+  if (!game.networkRoom) {
+    const stacks = id === CHEST ? chests.get(key) : (id === FURNACE || id === FURNACE_LIT) && furnaces.has(key) ? Object.values(furnaces.get(key)).filter(v => v && typeof v === 'object' && Number.isFinite(v.id)) : null;
+    if (stacks) for (const stack of stacks) if (stack?.count > 0) spawnItem(x, y, z, stack.id, stack.count, stack.damage || 0, null, stack.enchants || null);
+  }
   if (id === CHEST) chests.delete(key);
   if (id === FURNACE || id === FURNACE_LIT) furnaces.delete(key);
 }
-function dropBlock(x, y, z, id) {
+
+const SILK_TOUCH_BLOCKS = new Set([
+  GRASS, STONE, GLASS, ICE, GLOWSTONE, COAL_ORE, DIAMOND_ORE, LAPIS_ORE, REDSTONE_ORE, QUARTZ_ORE, LEAVES,
+]);
+
+function dropBlock(x, y, z, id, held = null) {
+  if (held && hasSilkTouch(held) && SILK_TOUCH_BLOCKS.has(id)) {
+    spawnItem(x, y, z, id, 1);
+    return;
+  }
   const bd = getBlock(id);
-  const count = bd.dropCount || 1;
+  const baseCount = bd.dropCount || 1;
   // leaves drop apples/saplings rarely
   if (id === LEAVES) {
     const r = Math.random();
@@ -1195,7 +1535,24 @@ function dropBlock(x, y, z, id) {
     if (Math.random() < 0.3) spawnItem(x, y, z, 295, 1); // seeds
     return;
   }
-  if (bd.drops) spawnItem(x, y, z, bd.drops, count);
+  if (id === GRAVEL) {
+    const fortune = held?.enchants?.fortune | 0;
+    const flintChance = [0.10, 0.14, 0.25, 1.0][Math.min(3, Math.max(0, fortune))];
+    spawnItem(x, y, z, Math.random() < flintChance ? 318 : GRAVEL, 1);
+    return;
+  }
+  if (id === GLOWSTONE) {
+    const fortune = held?.enchants?.fortune | 0;
+    const dust = Math.min(4, 2 + Math.floor(Math.random() * (3 + fortune)));
+    spawnItem(x, y, z, 348, dust);
+    return;
+  }
+  if (bd.drops) {
+    const finalCount = rollFortuneCount(baseCount, held, id);
+    spawnItem(x, y, z, bd.drops, finalCount);
+  }
+  const xp = oreXpDrop(id);
+  if (xp > 0) spawnXpOrb(x + 0.5, y + 0.35, z + 0.5, xp);
 }
 
 function tryBreakBlock(dt) {
@@ -1206,15 +1563,12 @@ function tryBreakBlock(dt) {
     return;
   }
   const id = world.getBlock(hit.x, hit.y, hit.z);
-  if (game.networkRoom?.role === 'guest' && (id === CHEST || id === FURNACE || id === FURNACE_LIT)) {
-    player.leftDown = false;
-    player.mining.active = false;
-    player.mining.progress = 0;
-    ui.notify('Only the host can use or mine chests and furnaces in multiplayer.');
-    return;
-  }
   const held = player.heldStack;
-  const total = player.gameMode === 'creative' ? 0 : player.gameMode === 'classic' ? id === BEDROCK ? Infinity : 0 : breakTime(id, held ? held.id : null);
+  const harvestable = canHarvest(id, held ? held.id : null);
+  const baseBreak = breakTime(id, held ? held.id : null);
+  const effBonus = miningSpeedBonus(held, harvestable);
+  const survivalBreak = effBonus > 0 && Number.isFinite(baseBreak) ? Math.max(0.05, baseBreak / (1 + effBonus * 0.25)) : baseBreak;
+  const total = player.gameMode === 'creative' ? 0 : player.gameMode === 'classic' ? id === BEDROCK ? Infinity : 0 : survivalBreak;
 
   if (!player.mining.active || player.mining.x !== hit.x || player.mining.y !== hit.y || player.mining.z !== hit.z) {
     player.mining.active = true;
@@ -1237,13 +1591,16 @@ function tryBreakBlock(dt) {
     const containerKey = `${hit.x},${hit.y},${hit.z}`;
     releaseContainer(hit.x, hit.y, hit.z, id);
     world.setBlock(hit.x, hit.y, hit.z, AIR);
+    if (id === OBSIDIAN || id === NETHER_PORTAL) {
+      collapseInvalidPortalsNear(world, hit.x, hit.y, hit.z);
+    }
     if (player.gameMode !== 'creative' && player.gameMode !== 'classic') {
       if (id === CROPS) {
         cropLocations.delete(containerKey);
         for (const stack of cropDrops(previousMeta)) spawnItem(hit.x, hit.y, hit.z, stack.id, stack.count);
       } else if (id === LEAVES && held?.id === 359) {
         spawnItem(hit.x, hit.y, hit.z, LEAVES, 1);
-      } else if (canHarvest(id, held ? held.id : null)) dropBlock(hit.x, hit.y, hit.z, id);
+      } else if (harvestable) dropBlock(hit.x, hit.y, hit.z, id, held);
       if (held) player.useHeldOn(id);
     }
     audio.breakBlock(id);
@@ -1318,7 +1675,10 @@ function tryPlaceBlock() {
     if (dy < 0) return;
     meta = dx > 0 ? 1 : dx < 0 ? 2 : dz > 0 ? 3 : dz < 0 ? 4 : 0;
     if (!getBlock(world.getBlock(px-dx,py-dy,pz-dz)).solid) return;
-  } else if (placeId === FURNACE || placeId === CRAFTING_TABLE || placeId === REDSTONE_REPEATER) {
+  } else if (
+    placeId === FURNACE || placeId === CRAFTING_TABLE || placeId === REDSTONE_REPEATER
+    || placeId === CHEST || placeId === OAK_STAIRS || placeId === COBBLESTONE_STAIRS || placeId === NETHER_BRICK_STAIRS
+  ) {
     const fx = -Math.sin(player.yaw), fz = -Math.cos(player.yaw);
     meta = Math.abs(fz) >= Math.abs(fx) ? (fz > 0 ? 1 : 0) : (fx > 0 ? 3 : 2);
   }
@@ -1342,7 +1702,7 @@ function tryPlaceBlock() {
 
 
 
-// ---- explosions (creepers, TNT) ----
+// ---- explosions (creepers, TNT, Ghast fireballs, Nether beds) ----
 function explode(pos, radius, player, damageMultiplier = 1) {
   audio.explosion();
   const r2 = radius * radius;
@@ -1353,7 +1713,7 @@ function explode(pos, radius, player, damageMultiplier = 1) {
         if (d2 > r2 * (0.72 + Math.random() * 0.5)) continue;
         const x = Math.floor(pos.x + dx), y = Math.floor(pos.y + dy), z = Math.floor(pos.z + dz);
         const b = world.getBlock(x, y, z);
-        if (b === AIR || b === 7) continue; // no bedrock
+        if (b === AIR || b === BEDROCK) continue;
         const bd = getBlock(b);
         if (bd.hardness < 0) continue;
         if (Math.random() < 0.62) {
@@ -1361,86 +1721,159 @@ function explode(pos, radius, player, damageMultiplier = 1) {
           const partner = structurePartner(world, x, y, z, b);
           if (partner) world.setBlock(partner.x, partner.y, partner.z, AIR);
           world.setBlock(x, y, z, AIR);
+          if (b === OBSIDIAN || b === NETHER_PORTAL) collapseInvalidPortalsNear(world, x, y, z);
           if (Math.random() < 0.18) dropBlock(x, y, z, b);
         }
       }
     }
   }
-  // damage player
+  // damage local player
   const dist = player.pos.distanceTo(pos);
   if (dist < radius * 1.6) {
-    player.damage(Math.ceil((1 - dist / (radius * 1.6)) * 12 * damageMultiplier), audio);
+    player.damage(Math.ceil((1 - dist / (radius * 1.6)) * 12 * damageMultiplier), audio, false, 'blast');
+  }
+  // damage remote guests in blast radius when host simulates
+  if (game.networkRoom?.role === 'host' && game.multiplayerClient) {
+    for (const [peerId, avatar] of remotePlayers.entries()) {
+      const rDist = avatar.target.distanceTo(pos);
+      if (rDist < radius * 1.6) {
+        const amount = Math.ceil((1 - rDist / (radius * 1.6)) * 12 * damageMultiplier);
+        if (amount > 0) game.multiplayerClient.send('player:damage', { targetId: peerId, amount });
+      }
+    }
   }
   // knockback
   const kb = player.pos.clone().sub(pos).normalize().multiplyScalar(Math.max(0, 8 - dist * 1.6));
   player.vel.add(kb);
 }
 
-// ---- arrows & throwables ----
+// ---- arrows, throwables, fireballs & XP bottles ----
 const arrows = [];
-const arrowGeometry = new THREE.BoxGeometry(0.08, 0.08, 0.5);
-const throwableGeometry = new THREE.BoxGeometry(0.18, 0.18, 0.18);
-function createArrow(from, velocity, owner, targetId = null, uid = null, networkRemote = false, damage = 2, kind = 'arrow') {
-  const geo = kind === 'arrow' ? arrowGeometry : throwableGeometry;
-  const color = kind === 'snowball' ? 0xf2f8ff : kind === 'egg' ? 0xefe2be : 0x8a6a42;
-  const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color }));
+const projGeos = {
+  arrow: uvBox(0.08, 0.08, 0.52, { all: [5, 0, 6, 16] }, 16, 16),
+  snowball: uvBox(0.18, 0.18, 0.18, { all: [2, 2, 12, 12] }, 16, 16),
+  egg: uvBox(0.17, 0.21, 0.17, { all: [3, 2, 10, 12] }, 16, 16),
+  xp_bottle: uvBox(0.19, 0.22, 0.19, { all: [3, 3, 10, 10] }, 16, 16),
+  fireball: uvBox(0.46, 0.46, 0.46, { all: [1, 1, 14, 14] }, 16, 16),
+  blaze_bolt: uvBox(0.24, 0.24, 0.24, { all: [2, 2, 12, 12] }, 16, 16),
+};
+
+function createArrow(from, velocity, owner, targetId = null, uid = null, networkRemote = false, damage = 2, kind = 'arrow', extra = {}) {
+  const texKind = projGeos[kind] ? kind : 'arrow';
+  const geo = projGeos[texKind];
+  const emissive = texKind === 'fireball' || texKind === 'blaze_bolt' || texKind === 'xp_bottle' || !!extra.flame;
+  const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+    map: getProjectileTexture(texKind),
+    color: extra.flame && texKind === 'arrow' ? 0xffb85c : 0xffffff,
+  }));
+  if (emissive) mesh.userData.emissive = true;
   lighting.prepare(mesh);
   mesh.position.copy(from);
   lighting.refreshObject(mesh, world, mesh.position, 0);
   scene.add(mesh);
-  const entry = { mesh, vel: velocity, age: 0, owner, targetId, kind,
-    uid: uid || globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`, networkRemote, networkTimer: 0, damage };
+  const entry = {
+    mesh, vel: velocity, age: 0, owner, targetId, kind,
+    punch: extra.punch || 0, flame: !!extra.flame,
+    uid: uid || globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
+    networkRemote, networkTimer: 0, damage,
+  };
   arrows.push(entry);
   return entry;
 }
-function shootArrow(fromMob, player, damage = 2) {
+
+function shootArrow(fromMob, targetPlayer, damage = 2) {
   const from = fromMob.pos.clone().add(new THREE.Vector3(0, 1.6, 0));
-  const to = player.pos.clone().add(new THREE.Vector3(0, 1.2, 0));
-  createArrow(from, to.sub(from).normalize().multiplyScalar(18), 'mob', player.id || null, null, false, damage);
+  const to = targetPlayer.pos.clone().add(new THREE.Vector3(0, 1.2, 0));
+  createArrow(from, to.sub(from).normalize().multiplyScalar(18), 'mob', targetPlayer.id || null, null, false, damage, 'arrow');
 }
-function shootPlayerArrow() {
+
+function shootMobFireball(fromMob, targetPlayer, damage = 6, explosive = true) {
+  const from = fromMob.pos.clone().add(new THREE.Vector3(0, explosive ? 1.05 : 1.25, 0));
+  const to = targetPlayer.pos.clone().add(new THREE.Vector3(0, 1.15, 0));
+  const speed = explosive ? 13.5 : 16;
+  const kind = explosive ? 'fireball' : 'blaze_bolt';
+  createArrow(from, to.sub(from).normalize().multiplyScalar(speed), 'mob', targetPlayer.id || null, null, false, damage, kind, { flame: true });
+}
+
+function shootPlayerArrow(heldStack = null) {
+  const bonuses = bowEnchantBonuses(heldStack);
   const dir = new THREE.Vector3(-Math.sin(player.yaw) * Math.cos(player.pitch), Math.sin(player.pitch), -Math.cos(player.yaw) * Math.cos(player.pitch));
-  createArrow(camera.position.clone().addScaledVector(dir, 0.45), dir.multiplyScalar(22), 'player');
+  createArrow(
+    camera.position.clone().addScaledVector(dir, 0.45),
+    dir.multiplyScalar(22),
+    'player', null, null, false,
+    bonuses.damage, 'arrow',
+    { punch: bonuses.punch, flame: bonuses.flame },
+  );
   audio.bow();
 }
+
 function shootThrowable(itemId) {
-  const kind = itemId === 332 ? 'snowball' : 'egg';
+  const kind = itemId === 332 ? 'snowball' : itemId === 384 ? 'xp_bottle' : 'egg';
   const dir = new THREE.Vector3(-Math.sin(player.yaw) * Math.cos(player.pitch), Math.sin(player.pitch), -Math.cos(player.yaw) * Math.cos(player.pitch));
-  createArrow(camera.position.clone().addScaledVector(dir, 0.45), dir.multiplyScalar(17), 'player', null, null, false, 0, kind);
+  createArrow(camera.position.clone().addScaledVector(dir, 0.45), dir.multiplyScalar(kind === 'xp_bottle' ? 14 : 17), 'player', null, null, false, 0, kind);
   audio.bow();
 }
+
+function tryDeflectFireball() {
+  const dir = new THREE.Vector3(-Math.sin(player.yaw) * Math.cos(player.pitch), Math.sin(player.pitch), -Math.cos(player.yaw) * Math.cos(player.pitch));
+  for (const a of arrows) {
+    if (a.dead || a.kind !== 'fireball' || a.owner !== 'mob') continue;
+    const toBall = a.mesh.position.clone().sub(camera.position);
+    const dist = toBall.length();
+    if (dist < 3.4 && toBall.normalize().dot(dir) > 0.55) {
+      a.owner = 'player';
+      a.targetId = null;
+      a.damage = Math.max(a.damage, 12);
+      a.vel.copy(dir).multiplyScalar(22);
+      audio.bow();
+      firstPersonArm.triggerAttackSwing();
+      return true;
+    }
+  }
+  return false;
+}
+
 function upsertNetworkProjectile(shot) {
   if (!shot || typeof shot.uid !== 'string' || !Array.isArray(shot.pos) || shot.pos.length !== 3 || !shot.pos.every(Number.isFinite) || !Array.isArray(shot.vel) || shot.vel.length !== 3 || !shot.vel.every(Number.isFinite)) return;
+  const kind = typeof shot.kind === 'string' && projGeos[shot.kind] ? shot.kind : 'arrow';
   let arrow = arrows.find(candidate => candidate.uid === shot.uid);
-  if (!arrow) arrow = createArrow(new THREE.Vector3(...shot.pos), new THREE.Vector3(...shot.vel), shot.owner === 'mob' ? 'mob' : 'player', shot.targetId, shot.uid, true);
+  if (!arrow) arrow = createArrow(new THREE.Vector3(...shot.pos), new THREE.Vector3(...shot.vel), shot.owner === 'mob' ? 'mob' : 'player', shot.targetId, shot.uid, true, shot.damage || 2, kind, { flame: !!shot.flame, punch: shot.punch || 0 });
   arrow.mesh.position.fromArray(shot.pos);
   arrow.vel.fromArray(shot.vel);
   arrow.age = Number.isFinite(shot.age) ? Math.max(0, shot.age) : arrow.age;
   arrow.damage = Number.isFinite(shot.damage) ? Math.max(0, Math.min(40, shot.damage)) : arrow.damage;
   arrow.targetId = typeof shot.targetId === 'string' ? shot.targetId : null;
 }
+
 function applyNetworkProjectiles(projectiles) {
   if (!Array.isArray(projectiles)) return;
   const seen = new Set();
   for (const shot of projectiles) { upsertNetworkProjectile(shot); if (typeof shot?.uid === 'string') seen.add(shot.uid); }
   for (const arrow of [...arrows]) if (arrow.networkRemote && !seen.has(arrow.uid)) removeNetworkProjectile(arrow.uid);
 }
+
 function removeNetworkProjectile(uid) {
   const index = arrows.findIndex(arrow => arrow.uid === uid && arrow.networkRemote);
   if (index < 0) return;
   const [arrow] = arrows.splice(index, 1);
   scene.remove(arrow.mesh); lighting.forget(arrow.mesh); arrow.mesh.material.dispose();
 }
+
 function updateArrows(dt) {
   for (const a of arrows) {
+    const gravity = (a.kind === 'fireball' || a.kind === 'blaze_bolt') ? 0 : 12;
     if (a.networkRemote) {
-      a.age += dt; a.vel.y -= 12 * dt; a.mesh.position.addScaledVector(a.vel, dt);
+      a.age += dt; a.vel.y -= gravity * dt; a.mesh.position.addScaledVector(a.vel, dt);
       a.mesh.lookAt(a.mesh.position.clone().add(a.vel)); lighting.refreshObject(a.mesh, world, a.mesh.position, 0);
-      if (a.age > 6) a.dead = true;
+      if (a.age > 8) a.dead = true;
       continue;
     }
     a.age += dt;
-    a.vel.y -= 12 * dt;
+    a.vel.y -= gravity * dt;
+    if ((a.kind === 'fireball' || a.kind === 'blaze_bolt' || a.flame) && Math.random() < dt * 14) {
+      particles.spawnEffect(a.mesh.position.clone(), { color: 0xff9424, life: 0.3, scale: 0.5, vy: 0.6, gravity: -0.1 });
+    }
     // Small steps prevent fast projectiles tunnelling through thin targets/blocks.
     const steps = Math.max(1, Math.ceil(a.vel.length() * dt / 0.15));
     const step = dt / steps;
@@ -1450,6 +1883,18 @@ function updateArrows(dt) {
       const block = world.getBlock(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z));
       if (getBlock(block).solid) {
         a.dead = true;
+        if (a.kind === 'fireball') {
+          if (!game.networkRoom || game.networkRoom.role === 'host') {
+            explode(pos.clone(), 2.2, player, 0.75);
+          }
+          break;
+        }
+        if (a.kind === 'xp_bottle') {
+          particles.spawnEffect(pos.clone(), { color: 0x9cff54, life: 0.45, scale: 0.65, vy: 1.8 });
+          spawnXpOrb(pos.x, pos.y + 0.2, pos.z, 3 + Math.floor(Math.random() * 9));
+          audio.xpOrb?.();
+          break;
+        }
         if (a.owner === 'player') {
           if (a.kind === 'arrow') spawnItem(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z), 262, 1);
           else {
@@ -1461,27 +1906,49 @@ function updateArrows(dt) {
         break;
       }
       if (a.owner === 'mob') {
+        const hitPad = a.kind === 'fireball' ? 0.65 : 0.42;
         const remoteTarget = a.targetId ? remotePlayers.get(a.targetId)?.target : null;
         if (remoteTarget) {
-          if (Math.abs(pos.x - remoteTarget.x) < 0.4 && Math.abs(pos.z - remoteTarget.z) < 0.4 && pos.y >= remoteTarget.y && pos.y <= remoteTarget.y + 1.8) {
-            game.multiplayerClient?.send('player:damage', { targetId: a.targetId, amount: a.damage });
+          if (Math.abs(pos.x - remoteTarget.x) < hitPad && Math.abs(pos.z - remoteTarget.z) < hitPad && pos.y >= remoteTarget.y && pos.y <= remoteTarget.y + 1.8) {
+            if (a.kind === 'fireball') explode(pos.clone(), 2.2, player, 0.75);
+            else game.multiplayerClient?.send('player:damage', { targetId: a.targetId, amount: a.damage });
             a.dead = true; audio.arrowHit();
           }
-        } else if (!a.targetId && Math.abs(pos.x - player.pos.x) < 0.4 && Math.abs(pos.z - player.pos.z) < 0.4 && pos.y >= player.pos.y && pos.y <= player.pos.y + 1.8) {
-          player.damage(a.damage, audio); a.dead = true; audio.arrowHit();
+        } else if (!a.targetId && Math.abs(pos.x - player.pos.x) < hitPad && Math.abs(pos.z - player.pos.z) < hitPad && pos.y >= player.pos.y && pos.y <= player.pos.y + 1.8) {
+          if (a.kind === 'fireball') explode(pos.clone(), 2.2, player, 0.75);
+          else player.damage(a.damage, audio, false, a.kind === 'blaze_bolt' ? 'fire' : 'projectile');
+          a.dead = true; audio.arrowHit();
         }
       } else {
         for (const mob of mobs.mobs) {
           if (mob.dead) continue;
-          const half = mob.def.w / 2 + 0.05;
+          const half = mob.def.w / 2 + (a.kind === 'fireball' ? 0.3 : 0.05);
           if (Math.abs(pos.x - mob.pos.x) <= half && Math.abs(pos.z - mob.pos.z) <= half && pos.y >= mob.pos.y && pos.y <= mob.pos.y + mob.def.h) {
-            if (game.networkRoom?.role === 'guest') {
-              game.multiplayerClient?.send('mob:attack', { uid: mob.networkId, heldId: null, ranged: true });
-            } else {
-              const knockback = a.vel.clone().normalize().multiplyScalar(a.kind === 'arrow' ? 2 : 1.4);
-              mob.damage(a.kind === 'arrow' ? 4 : 0, audio, { knockback });
+            if (a.kind === 'xp_bottle') {
+              particles.spawnEffect(pos.clone(), { color: 0x9cff54, life: 0.45, scale: 0.65, vy: 1.8 });
+              spawnXpOrb(pos.x, pos.y + 0.2, pos.z, 3 + Math.floor(Math.random() * 9));
+              a.dead = true; audio.xpOrb?.(); break;
             }
-            if (a.kind !== 'arrow') particles.spawnEffect(pos.clone(), { color: a.kind === 'snowball' ? 0xffffff : 0xf2e4c4, life: 0.35, scale: 0.55, vy: 1.4 });
+            if (game.networkRoom?.role === 'guest') {
+              game.multiplayerClient?.send('mob:attack', {
+                uid: mob.networkId, heldId: null, ranged: true,
+                damage: a.kind === 'arrow' || a.kind === 'fireball' ? a.damage : 0,
+                punch: a.punch || 0, flame: !!a.flame,
+              });
+            } else {
+              if (a.kind === 'fireball') {
+                mob.damage(a.damage, audio, { fireSeconds: 5, pack: mobs.mobs });
+                explode(pos.clone(), 2.0, player, 0.6);
+              } else {
+                const kbForce = a.kind === 'arrow' ? 2 + (a.punch || 0) * 2.2 : 1.4;
+                const knockback = a.vel.clone().normalize().multiplyScalar(kbForce);
+                const hitDmg = a.kind === 'arrow' ? a.damage : (a.kind === 'snowball' && mob.type === 'blaze' ? 3 : 0);
+                mob.damage(hitDmg, audio, { knockback, fireSeconds: a.flame ? 5 : 0, pack: mobs.mobs });
+              }
+            }
+            if (a.kind !== 'arrow' && a.kind !== 'fireball') {
+              particles.spawnEffect(pos.clone(), { color: a.kind === 'snowball' ? 0xffffff : 0xf2e4c4, life: 0.35, scale: 0.55, vy: 1.4 });
+            }
             a.dead = true; audio.arrowHit(); break;
           }
         }
@@ -1489,7 +1956,7 @@ function updateArrows(dt) {
     }
     a.mesh.lookAt(a.mesh.position.clone().add(a.vel));
     lighting.refreshObject(a.mesh, world, a.mesh.position, 0);
-    if (a.age > 6) a.dead = true;
+    if (a.age > 8) a.dead = true;
   }
   for (const a of arrows) {
     if (!a.networkRemote && game.networkRoom && game.multiplayerClient) {
@@ -1497,7 +1964,12 @@ function updateArrows(dt) {
       else {
         a.networkTimer -= dt;
         if (a.networkTimer <= 0) {
-          game.multiplayerClient.send('projectile:update', { projectile: { uid: a.uid, owner: a.owner, pos: a.mesh.position.toArray(), vel: a.vel.toArray(), age: a.age, targetId: a.targetId, damage: a.damage } });
+          game.multiplayerClient.send('projectile:update', {
+            projectile: {
+              uid: a.uid, owner: a.owner, kind: a.kind, flame: !!a.flame, punch: a.punch || 0,
+              pos: a.mesh.position.toArray(), vel: a.vel.toArray(), age: a.age, targetId: a.targetId, damage: a.damage,
+            },
+          });
           a.networkTimer = 0.12;
         }
       }
@@ -1511,6 +1983,7 @@ function updateArrows(dt) {
 const effects = {
   explosion: (pos, radius, p, damageMultiplier = 1) => explode(pos, radius, p, damageMultiplier),
   shootArrow: (mob, p, damage) => shootArrow(mob, p, damage),
+  shootFireball: (mob, p, damage, explosive) => shootMobFireball(mob, p, damage, explosive),
   mobBurn: (mob) => {
     const pos = new THREE.Vector3(mob.pos.x, mob.pos.y + 0.45, mob.pos.z);
     particles.spawnEffect(pos, { color: Math.random() < 0.5 ? 0xff8a1c : 0xffd247, life: 0.35, scale: 0.7, vy: 1.5, gravity: -0.2 });
@@ -1521,12 +1994,139 @@ const effects = {
     for (const { id, count } of rollMobDrops(mob)) {
       spawnItem(Math.floor(mob.pos.x), Math.floor(mob.pos.y), Math.floor(mob.pos.z), id, count);
     }
+    const xpVal = MOB_DEFS[mob.type]?.xp || 0;
+    if (xpVal > 0) spawnXpOrb(mob.pos.x, mob.pos.y + 0.35, mob.pos.z, xpVal);
   },
 };
 
-// ---- furnace handling ----
-const furnaces = new Map(Array.isArray(savedGame?.furnaces) ? savedGame.furnaces.filter(e => Array.isArray(e) && typeof e[0] === 'string' && e[1] && typeof e[1] === 'object') : []);
-const chests = new Map(Array.isArray(savedGame?.chests) ? savedGame.chests.filter(e => Array.isArray(e) && typeof e[0] === 'string' && Array.isArray(e[1]) && e[1].length === 27) : []);
+// ---- furnace & chest containers + dimension switching ----
+const furnaces = new Map(Array.isArray(dimensionCache[INITIAL_DIMENSION].furnaces) ? dimensionCache[INITIAL_DIMENSION].furnaces.filter(e => Array.isArray(e) && typeof e[0] === 'string' && e[1] && typeof e[1] === 'object') : []);
+const chests = new Map(Array.isArray(dimensionCache[INITIAL_DIMENSION].chests) ? dimensionCache[INITIAL_DIMENSION].chests.filter(e => Array.isArray(e) && typeof e[0] === 'string' && Array.isArray(e[1]) && e[1].length === 27) : []);
+
+function snapshotCurrentDimensionIntoCache() {
+  if (world.edition === 'classic') return;
+  const dim = world.dimension === 'nether' ? 'nether' : 'overworld';
+  dimensionCache[dim] = {
+    edits: [...world.edits].map(([key, id]) => [key, id, world.metaEdits.get(key) || 0]),
+    chests: [...chests],
+    furnaces: [...furnaces],
+    vehicles: vehicles.serialize(),
+    items: itemEntities.filter(it => !it.dead).map(it => ({
+      id: it.id, count: it.count, damage: it.damage || 0,
+      ...(it.enchants ? { enchants: cloneEnchants(it.enchants) } : {}),
+      pos: it.mesh.position.toArray(), vy: it.vy, age: it.age,
+    })),
+  };
+}
+
+function clearTransientWorldEntities() {
+  mobs.clear();
+  for (const it of itemEntities) {
+    itemGroup.remove(it.mesh);
+    lighting.forget(it.mesh);
+    it.mesh.material?.dispose?.();
+  }
+  itemEntities.length = 0;
+  clearXpOrbs();
+  for (const a of arrows) {
+    scene.remove(a.mesh);
+    lighting.forget(a.mesh);
+    a.mesh.material?.dispose?.();
+  }
+  arrows.length = 0;
+  tntFuses.length = 0;
+  clearFishing();
+}
+
+function switchWorldDimension(targetDim, restoreLocalState = true, forcedSpawn = null) {
+  const nextDim = targetDim === 'nether' ? 'nether' : 'overworld';
+  if (world.edition === 'classic' || world.dimension === nextDim) return false;
+  vehicles.dismount(player, true);
+  if (restoreLocalState) snapshotCurrentDimensionIntoCache();
+  clearTransientWorldEntities();
+  vehicles.clear();
+  chests.clear();
+  furnaces.clear();
+  const targetData = restoreLocalState ? dimensionCache[nextDim] : null;
+  applyingNetworkEdit = true;
+  try {
+    world.switchDimension(nextDim, BASE_TERRAIN, targetData?.edits || null);
+  } finally {
+    applyingNetworkEdit = false;
+  }
+  fluids.queue = []; fluids.head = 0; fluids.pending.clear(); fluids.deferred.clear();
+  redstone.nodes.clear(); redstone.pending.clear(); redstone.dirty = true;
+  cropLocations.clear();
+  for (const [k, id] of world.edits) if (id === CROPS) cropLocations.add(k);
+  if (targetData) {
+    for (const [k, s] of targetData.chests) if (Array.isArray(s) && s.length === 27) chests.set(k, s);
+    for (const [k, f] of targetData.furnaces) if (f && typeof f === 'object') furnaces.set(k, f);
+    vehicles.load(targetData.vehicles);
+    for (const item of (targetData.items || []).slice(0, 4096)) {
+      spawnItem(item.pos[0] - 0.5, item.pos[1] - 0.3, item.pos[2] - 0.5, item.id, item.count, item.damage || 0, null, item.enchants || null);
+    }
+  }
+  lastCX = null; lastCZ = null;
+  if (Array.isArray(forcedSpawn) && forcedSpawn.length === 3 && forcedSpawn.every(Number.isFinite)) {
+    player.pos.set(forcedSpawn[0], forcedSpawn[1], forcedSpawn[2]);
+    player.vel.set(0, 0, 0);
+    player.fallStart = null;
+    player.portalCooldown = 3.0;
+    player.portalTime = 0;
+  }
+  updateChunks(true);
+  processChunkQueue(performance.now() + 35);
+  return true;
+}
+
+function travelPortal(originPos = player.pos) {
+  if (world.edition === 'classic') return false;
+  const fromDim = world.dimension;
+  const toDim = fromDim === 'nether' ? 'overworld' : 'nether';
+  if (game.networkRoom && game.networkRoom.role !== 'host') {
+    player.portalTime = 0;
+    player.portalCooldown = 3.5;
+    audio.portal?.();
+    void game.multiplayerClient?.switchDimension(toDim).catch(() => {});
+    return true;
+  }
+  const departure = originPos.clone();
+  switchWorldDimension(toDim, !game.networkRoom);
+  let dest;
+  const suppressLiveEdits = game.networkRoom?.role === 'host';
+  if (suppressLiveEdits) applyingNetworkEdit = true;
+  try {
+    dest = resolvePortalDestination(departure, fromDim, world);
+  } finally {
+    if (suppressLiveEdits) applyingNetworkEdit = false;
+  }
+  player.pos.set(dest.x, dest.y, dest.z);
+  player.vel.set(0, 0, 0);
+  player.fallStart = null;
+  player.portalTime = 0;
+  player.portalCooldown = 3.2;
+  camera.position.set(player.pos.x, player.pos.y + 1.62, player.pos.z);
+  updateChunks(true);
+  processChunkQueue(performance.now() + 40);
+  audio.portal?.();
+  ui?.notify?.(toDim === 'nether' ? 'Entered The Nether' : 'Returned to the Overworld');
+  if (game.networkRoom?.role === 'host' && game.multiplayerClient) {
+    const entries = [...world.edits].map(([k, id]) => [k, [id, world.metaEdits.get(k) || 0]]);
+    const client = game.multiplayerClient;
+    void (async () => {
+      await client.switchDimension(toDim, [dest.x, dest.y, dest.z]);
+      for (let i = 0; i < entries.length; i += 800) {
+        await client.request('world:snapshot', { entries: entries.slice(i, i + 800) });
+      }
+      if (chests.size > 0 || furnaces.size > 0) {
+        await client.publishContainers(toDim, [...chests], [...furnaces]);
+      }
+    })().catch(() => {});
+  } else {
+    game.saveGame();
+  }
+  return true;
+}
 
 function refreshChest() {
   const panel = document.getElementById('chest-screen');
@@ -1565,6 +2165,8 @@ function openChestSlots(slots, key, title, vehicle = null) {
 }
 
 function updateFurnaces(dt) {
+  // In multiplayer, the relay ticks room.furnaces authoritatively across dimensions.
+  if (game.networkRoom) return;
   for (const [key, furnace] of furnaces) {
     const [x, y, z] = key.split(',').map(Number);
     const chunk = world.getChunk(Math.floor(x / CH), Math.floor(z / CH));
@@ -1621,7 +2223,7 @@ function buildFurnaceUI() {
     const onInvSlot = index => event => {
       event.preventDefault();
       const current = game.openFurnaceData?.f;
-      if (event.shiftKey && current) {
+      if (event.shiftKey && current && !game.networkRoom) {
         const stack = player.inventory[index];
         if (!stack) return;
         const targetKey = smeltResult(stack.id) != null ? 'input' : FUEL_TIMES[stack.id] ? 'fuel' : null;
@@ -1631,7 +2233,7 @@ function buildFurnaceUI() {
           if (!dest) {
             current[targetKey] = { ...stack };
             player.inventory[index] = null;
-          } else if (dest.id === stack.id && (dest.damage || 0) === (stack.damage || 0) && dest.count < limit) {
+          } else if (dest.id === stack.id && (dest.damage || 0) === (stack.damage || 0) && sameEnchants(dest.enchants, stack.enchants) && dest.count < limit) {
             const take = Math.min(stack.count, limit - dest.count);
             dest.count += take;
             stack.count -= take;
@@ -1639,7 +2241,6 @@ function buildFurnaceUI() {
           }
           refreshFurnace();
           ui.refresh();
-          game.syncSharedState();
           return;
         }
       }
@@ -1671,26 +2272,44 @@ function buildFurnaceUI() {
     const onFurnaceSlot = which => event => {
       event.preventDefault();
       const current = game.openFurnaceData?.f;
-      if (!current) return;
+      const key = game.openFurnaceData?.key;
+      if (!current || !key) return;
+      if (game.networkRoom) {
+        if (event.shiftKey) {
+          void game.containerTx({ mode: 'take', kind: 'furnace', key, slot: which, maxCount: 64 }, player);
+        } else {
+          const sentCursor = player.cursorStack ? { ...player.cursorStack } : null;
+          player.cursorStack = null;
+          void game.containerTx({ mode: 'click', kind: 'furnace', key, slot: which, button: event.button, cursorStack: sentCursor }, player, null, sentCursor);
+        }
+        return;
+      }
       if (event.shiftKey && current[which]) {
         const src = current[which];
-        const inserted = player.insertItem(src.id, src.count, src.damage || 0);
+        const inserted = player.insertItem(src.id, src.count, src.damage || 0, src.enchants || null);
         if (inserted > 0) {
           src.count -= inserted;
           if (src.count <= 0) current[which] = null;
-          if (which === 'output') audio.pop();
+          if (which === 'output') {
+            audio.pop();
+            if (current.storedXp > 0) {
+              const whole = Math.floor(current.storedXp);
+              const xp = whole + (Math.random() < (current.storedXp - whole) ? 1 : 0);
+              current.storedXp = 0;
+              if (xp > 0) player.addXp(xp, audio);
+            }
+          }
           refreshFurnace();
           ui.refresh();
-          game.syncSharedState();
         }
         return;
       }
       const result = interactWithFurnaceSlot(current, which, player.cursorStack, event.button);
       if (!result.changed) return;
       player.cursorStack = result.cursorStack;
+      if (result.xpEarned > 0) player.addXp(result.xpEarned, audio);
       refreshFurnace();
       ui.refresh();
-      game.syncSharedState();
     };
     const fIn = panel.querySelector('#f-in');
     const fFuel = panel.querySelector('#f-fuel');
@@ -1790,17 +2409,18 @@ const tntFuses = []; // {x, y, z, timer}
 document.addEventListener('mousedown', (e) => {
   if (ui.mode !== 'game' || !player.controlsActive) return;
   if (`Mouse${e.button}` === player.bindings.attack) {
-    const target = vehicles.target(player);
-    if (target?.type === 'storage' && game.networkRoom) {
+    if (tryDeflectFireball()) {
       player.leftDown = false;
-      ui.notify('Storage minecarts are unavailable in multiplayer.');
       return;
     }
+    const target = vehicles.target(player);
     if (target && vehicles.remove(target)) {
       game.multiplayerClient?.send('vehicle:remove', { uid: target.networkId });
       const x = target.group.position.x - 0.5, y = target.group.position.y, z = target.group.position.z - 0.5;
       spawnItem(x, y, z, ({boat:333,minecart:328,storage:342,powered:343})[target.type], 1);
-      if (target.slots) for (const stack of target.slots) if (stack?.count > 0) spawnItem(x,y,z,stack.id,stack.count,stack.damage || 0);
+      if (!game.networkRoom && target.slots) {
+        for (const stack of target.slots) if (stack?.count > 0) spawnItem(x, y, z, stack.id, stack.count, stack.damage || 0, null, stack.enchants || null);
+      }
       player.leftDown = false; audio.pop(); return;
     }
   }
@@ -1808,11 +2428,7 @@ document.addEventListener('mousedown', (e) => {
     const vehicle = vehicles.target(player);
     if (vehicle) {
       player.rightDown = false;
-      if (vehicle.type === 'storage' && game.networkRoom) {
-        ui.notify('Storage minecarts are unavailable in multiplayer.');
-        return;
-      }
-      if (vehicle.type === 'storage') { openChestSlots(vehicle.slots, null, 'Minecart with Chest', vehicle); return; }
+      if (vehicle.type === 'storage') { openChestSlots(vehicle.slots, vehicle.networkId, 'Minecart with Chest', vehicle); return; }
       if (vehicle.type === 'powered') {
         if (player.heldStack?.id === 263) {
           player.consumeHeld(); vehicle.fuel = Math.min(3600, vehicle.fuel + 180);
@@ -1832,16 +2448,14 @@ document.addEventListener('mousedown', (e) => {
     const hit = player.raycast(world, 5, { includeLiquids: held?.id === 325 || held?.id === 333 });
     if (hit) {
       const id = world.getBlock(hit.x, hit.y, hit.z);
-      if (game.networkRoom?.role === 'guest' && (id === CHEST || id === FURNACE || id === FURNACE_LIT)) {
-        player.rightDown = false;
-        ui.notify('Only the host can use or mine chests and furnaces in multiplayer.');
-        return;
-      }
-      if (id === CHEST) { openChest(hit.x, hit.y, hit.z); return; }
+      if (id === CHEST) { player.rightDown = false; openChest(hit.x, hit.y, hit.z); return; }
       if (id === CRAFTING_TABLE) {
-        ui.craftSize = 3; ui.setMode('crafting'); return;
+        player.rightDown = false; ui.craftSize = 3; ui.setMode('crafting'); return;
       }
-      if (id === FURNACE || id === FURNACE_LIT) { openFurnace(hit.x, hit.y, hit.z); return; }
+      if (id === ENCHANTING_TABLE) {
+        player.rightDown = false; ui.openEnchanting(hit.x, hit.y, hit.z); return;
+      }
+      if (id === FURNACE || id === FURNACE_LIT) { player.rightDown = false; openFurnace(hit.x, hit.y, hit.z); return; }
       if (id === REDSTONE_REPEATER) {
         const meta = world.getMeta(hit.x, hit.y, hit.z);
         world.setMeta(hit.x, hit.y, hit.z, (meta & ~24) | ((((meta >> 3) + 1) & 3) << 3));
@@ -1861,6 +2475,14 @@ document.addEventListener('mousedown', (e) => {
       }
       if (id === BED_BLOCK) {
         player.rightDown = false;
+        if (world.dimension === 'nether') {
+          const partner = structurePartner(world, hit.x, hit.y, hit.z, BED_BLOCK);
+          if (partner) world.setBlock(partner.x, partner.y, partner.z, AIR);
+          world.setBlock(hit.x, hit.y, hit.z, AIR);
+          ui.notify('Beds explode in The Nether!');
+          explode(new THREE.Vector3(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5), 4.2, player, 1.2);
+          return;
+        }
         if (sky.timeOfDay >= 0.22 && sky.timeOfDay < 0.78) ui.notify('You can only sleep at night');
         else if (mobs.nearestHostile(player.pos, 8)) ui.notify('Monsters are nearby');
         else {
@@ -1882,28 +2504,25 @@ document.addEventListener('mousedown', (e) => {
       }
       if (useOnBlock(world, player, hit, { drop: (item, count) => spawnItem(player.pos.x - 0.5, player.pos.y, player.pos.z - 0.5, item, count) })) {
         if (world.getBlock(hit.x, hit.y + 1, hit.z) === CROPS) cropLocations.add(`${hit.x},${hit.y + 1},${hit.z}`);
-        player.rightDown = false; audio.pop(); firstPersonArm.triggerPlaceSwing(); ui.refresh();
+        if (held?.id === 259 && id === OBSIDIAN) audio.portal?.();
+        else audio.pop();
+        player.rightDown = false; firstPersonArm.triggerPlaceSwing(); ui.refresh();
         return;
       }
-    }
-    if (held?.id === 342 && game.networkRoom) {
-      player.rightDown = false;
-      ui.notify('Storage minecarts are unavailable in multiplayer.');
-      return;
     }
     if ([333,328,342,343].includes(held?.id)) {
       player.rightDown = false;
       const type = ({333:'boat',328:'minecart',342:'storage',343:'powered'})[held.id];
       const placedVehicle = vehicles.place(type, hit);
       if (placedVehicle) {
-        if (game.networkRoom?.role === 'guest') game.publishVehicleState(placedVehicle, false);
+        if (game.networkRoom) game.publishVehicleState(placedVehicle, false);
         player.consumeHeld(); audio.place(PLANKS); ui.refresh();
       }
       else ui.notify(held.id === 333 ? 'Place boats on water' : 'Place minecarts on rails');
       return;
     }
     if (held?.id === 346) { player.rightDown = false; useFishingRod(); return; }
-    if (held?.id === 332 || held?.id === 344) {
+    if (held?.id === 332 || held?.id === 344 || held?.id === 384) {
       player.rightDown = false;
       const throwId = held.id;
       if (player.gameMode !== 'creative' && player.gameMode !== 'classic') player.consumeHeld();
@@ -1914,10 +2533,11 @@ document.addEventListener('mousedown', (e) => {
     }
     if (held?.id === 261) {
       player.rightDown = false;
-      if (player.hasItem(262)) {
-        player.consumeItemId(262, 1);
+      const bowBonuses = bowEnchantBonuses(held);
+      if (player.gameMode === 'creative' || player.hasItem(262)) {
+        if (player.gameMode !== 'creative' && !bowBonuses.infinity) player.consumeItemId(262, 1);
         player.useHeldOn(AIR);
-        shootPlayerArrow();
+        shootPlayerArrow(held);
         firstPersonArm.triggerPlaceSwing();
         ui.refresh();
       }
@@ -1959,7 +2579,7 @@ function frame() {
   lastT = now;
   if (dt > 0.1) dt = 0.1;
   const simulationPaused = game.started && ui.mode !== 'title' &&
-    ['pause', 'death', 'creative', 'inventory', 'crafting', 'furnace', 'chest'].includes(ui.mode);
+    ['pause', 'death', 'creative', 'inventory', 'crafting', 'furnace', 'chest', 'enchant'].includes(ui.mode);
   const networked = Boolean(game.networkRoom);
   if (!simulationPaused || networked) game.time += dt;
   if (game.started && ui.mode !== 'title' && !game.networkRoom) {
@@ -1978,6 +2598,14 @@ function frame() {
       const mountedBeforeVehicleUpdate = vehicles.mounted;
       const ridingVehicle = vehicles.update(dt, player);
       if (!ridingVehicle) player.update(dt, world, audio);
+      if (player.portalTime > 0 && Math.random() < dt * 16) {
+        particles.spawnEffect(player.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.7, 0.4 + Math.random() * 1.2, (Math.random() - 0.5) * 0.7)), {
+          color: Math.random() < 0.5 ? 0xb43cff : 0xe47cff, life: 0.5, scale: 0.48, vy: 0.9, gravity: -0.05,
+        });
+      }
+      if (!player.dead && player.portalTime >= (player.gameMode === 'creative' ? 0.2 : 2.6)) {
+        travelPortal(player.pos);
+      }
       if (player.pos.y < -32 && !player.dead) {
         if (player.gameMode === 'survival') player.damage(40, audio, true);
         else game.respawn();
@@ -1991,9 +2619,12 @@ function frame() {
         }
       }
       if (player.leftDown && player.controlsActive) {
-        if (mobs.raycastTarget(player, 3.5)) {
+        if (tryDeflectFireball()) {
+          player.mining.active = false;
+          player.mining.progress = 0;
+        } else if (mobs.raycastTarget(player, 3.5)) {
           mobs.attack(player, player.heldStack?.id ?? null, audio, 3.5, game.networkRoom?.role === 'guest'
-            ? (uid, heldId) => game.multiplayerClient?.send('mob:attack', { uid, heldId })
+            ? (uid, heldId, enchants) => game.multiplayerClient?.send('mob:attack', { uid, heldId, ...(enchants ? { enchants } : {}) })
             : null);
           player.mining.active = false;
           player.mining.progress = 0;
@@ -2038,6 +2669,7 @@ function frame() {
       const hostSimulates = !networked || game.networkRoom.role === 'host';
       if (hostSimulates && game.edition !== 'classic') mobs.update(dt, player, sky.timeOfDay, effects, audio, networked ? remoteMobTargets() : [], game.settings.difficulty);
       updateItems(dt, !paused);
+      updateXpOrbs(dt, !paused);
       updateArrows(dt);
       if (hostSimulates) {
         fluids.tick(dt);
@@ -2072,7 +2704,11 @@ function frame() {
         }
         networkItemTimer -= dt;
         if (networkItemTimer <= 0) {
-          const itemStates = itemEntities.filter(item => !item.dead).map(item => ({ uid: item.uid, id: item.id, count: item.count, damage: item.damage, pos: item.mesh.position.toArray(), vy: item.vy, age: item.age }));
+          const itemStates = itemEntities.filter(item => !item.dead).map(item => ({
+            uid: item.uid, id: item.id, count: item.count, damage: item.damage || 0,
+            ...(item.enchants ? { enchants: item.enchants } : {}),
+            pos: item.mesh.position.toArray(), vy: item.vy, age: item.age,
+          }));
           game.multiplayerClient.send('item:snapshot', { items: itemStates });
           networkItemTimer = 0.4;
         }
@@ -2080,7 +2716,7 @@ function frame() {
       if (networked && hostSimulates && game.multiplayerClient) {
         sharedStateTimer -= dt;
         if (sharedStateTimer <= 0) {
-          game.multiplayerClient.send('game:state', { state: { timeOfDay: sky.timeOfDay, chests: [...chests], furnaces: [...furnaces] } });
+          game.multiplayerClient.send('game:state', { state: { timeOfDay: sky.timeOfDay } });
           sharedStateTimer = 1.25;
         }
       }
@@ -2129,7 +2765,7 @@ function frame() {
 
     const head = world.getBlock(Math.floor(player.pos.x), Math.floor(player.pos.y + 1.62), Math.floor(player.pos.z));
     const underwater = head === WATER || head === WATER_FLOW;
-    const dayFactor = sky.update(paused && !networked ? 0 : dt, camera.position, game.renderDistance, { underwater });
+    const dayFactor = sky.update(paused && !networked ? 0 : dt, camera.position, game.renderDistance, { underwater, dimension: world.dimension });
 
     // hurt flash overlay
     const hurtOverlay = document.getElementById('hurt-overlay');
@@ -2156,9 +2792,9 @@ function frame() {
         `XYZ: ${p.x.toFixed(3)} / ${p.y.toFixed(3)} / ${p.z.toFixed(3)}`,
         `Block: ${Math.floor(p.x)} ${Math.floor(p.y)} ${Math.floor(p.z)}`,
         `Facing: ${cardinal} (${dirX.toFixed(2)}, ${dirZ.toFixed(2)})`,
-        `Biome: ${biome.biome}  Time: ${(sky.timeOfDay * 24).toFixed(2)}h  Day: ${(dayFactor * 100) | 0}%`,
+        `Biome: ${biome.biome} (${world.dimension})  Time: ${(sky.timeOfDay * 24).toFixed(2)}h  Day: ${(dayFactor * 100) | 0}%`,
         `Seed: ${SEED}  Light: ${((world.getLight(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) >> 4))}/${(world.getLight(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) & 15)}`,
-        `Mobs: ${mobs.mobs.length}  Items: ${itemEntities.length}`,
+        `Mobs: ${mobs.mobs.length}  Items: ${itemEntities.length}  XP Lvl: ${player.xpLevel}`,
       ]);
     } else if (!ui.showDebug) {
       ui.updateDebug([]);
@@ -2171,6 +2807,10 @@ function frame() {
       if (!game.keepInventory) {
         for (const stack of [...player.inventory, ...player.armor, player.cursorStack]) if (stack) game.dropItem(stack);
         player.inventory.fill(null); player.armor.fill(null); player.cursorStack = null;
+        if (player.xpTotal > 0) {
+          spawnXpOrb(player.pos.x, player.pos.y + 0.4, player.pos.z, Math.min(100, (player.xpLevel || 0) * 7));
+          player.xpTotal = 0; player.syncXpState();
+        }
       }
       ui.showDeath(player.stats.blocksMined * 10 + player.stats.blocksPlaced * 5);
     }
@@ -2182,7 +2822,7 @@ function frame() {
       Math.sin(game.time * 0.08) * 12 + 8
     );
     camera.lookAt(8, world.heightAt(8, 8), 8);
-    sky.update(dt, camera.position, game.renderDistance);
+    sky.update(dt, camera.position, game.renderDistance, { dimension: world.dimension });
     if (!game.started) {
       // pregenerate spawn chunks for the title backdrop
       processChunkQueue();
@@ -2212,14 +2852,10 @@ function frame() {
   // the title backdrop and gameplay frames.
   lighting.update({ sky, time: game.time, style: game.shaderStyle, fog: scene.fog });
   renderer.getDrawingBufferSize(renderBufferSize);
-  if (game.shaderStyle === 'psx') psxPostProcess.setSize(renderBufferSize.x, renderBufferSize.y);
-  // Vertex snapping follows the full viewport grid; the later post pass handles
-  // the independent low-resolution image scale.
   lighting.shared.uScreenSize.value.copy(renderBufferSize);
   lighting.updateShadows(renderer, scene, camera, sky, game.shaderStyle, game.time, false, game.settings.graphics !== 'fast');
-  const drawArm = game.started && ui.mode !== 'title' ? targetRenderer => firstPersonArm.render(targetRenderer) : null;
-  if (game.shaderStyle === 'psx') psxPostProcess.render(renderer, scene, camera, drawArm);
-  else { renderer.render(scene, camera); drawArm?.(renderer); }
+  renderer.render(scene, camera);
+  if (game.started && ui.mode !== 'title') firstPersonArm.render(renderer);
 }
 
 frame();

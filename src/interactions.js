@@ -1,9 +1,10 @@
 // Small, testable survival interactions shared by the game and regression tests.
 import {
   AIR, GRASS, DIRT, FARMLAND, CROPS, CAKE_BLOCK, WATER, WATER_FLOW, LAVA, SAPLING, LOG, LEAVES,
-  ITEMS, WOOL_BASE,
+  ITEMS, WOOL_BASE, OBSIDIAN,
 } from './world/blocks.js';
 import { CH, WORLD_H } from './world/chunk.js';
+import { tryIgnitePortal } from './world/portals.js';
 
 export function hasNearbyWater(world, x, y, z) {
   for (let dy = 0; dy <= 1; dy++) {
@@ -79,10 +80,23 @@ export function useOnBlock(world, player, hit, { drop } = {}) {
     replaceOneHeld(player, block === WATER ? 326 : 327, drop);
     return true;
   }
+  if (id === 259 && block === OBSIDIAN && world.edition !== 'classic') {
+    if (tryIgnitePortal(world, x, y, z, face)) {
+      player.useHeldOn(OBSIDIAN);
+      return true;
+    }
+    return false;
+  }
   if (id === 326 || id === 327) {
     const px = x + face[0], py = y + face[1], pz = z + face[2];
+    if (world.getBlock(px, py, pz) !== AIR) return false;
+    if (id === 326 && world.dimension === 'nether') {
+      if (!world.getChunk(Math.floor(px / CH), Math.floor(pz / CH))?.generated) return false;
+      replaceOneHeld(player, 325, drop);
+      return true;
+    }
     // Never replace solid terrain or silently consume a bucket in an unloaded chunk.
-    if (world.getBlock(px, py, pz) !== AIR || !world.setBlock(px, py, pz, id === 326 ? WATER : LAVA)) return false;
+    if (!world.setBlock(px, py, pz, id === 326 ? WATER : LAVA)) return false;
     replaceOneHeld(player, 325, drop);
     return true;
   }

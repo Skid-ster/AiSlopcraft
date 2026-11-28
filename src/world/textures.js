@@ -839,6 +839,111 @@ export function buildAtlas() {
   });
   put(TILES.cake_bottom, (ox, oy, rnd) => noiseFill(ctx, ox, oy, [184, 124, 62], 8, rnd));
 
+  put(TILES.portal, (ox, oy, rnd) => {
+    for (let y = 0; y < TS; y++) for (let x = 0; x < TS; x++) {
+      const dx = x - 7.5, dy = y - 7.5;
+      const dist = Math.hypot(dx, dy);
+      const swirl = Math.sin(dist * 0.95 - Math.atan2(dy, dx) * 2.0);
+      const v = (rnd() - 0.5) * 18;
+      const core = Math.max(0, 1 - dist / 6.5) * 42;
+      const r = Math.max(88, Math.min(255, 156 + swirl * 62 + core + v));
+      const g = Math.max(18, Math.min(196, 40 + swirl * 36 + core * 0.8 + v * 0.5));
+      const b = Math.max(156, Math.min(255, 228 + swirl * 26 + core * 0.5 + v));
+      px(ctx, ox + x, oy + y, r, g, b, 236);
+    }
+  });
+
+  put(TILES.nether_brick, (ox, oy, rnd) => {
+    for (let y = 0; y < TS; y++) {
+      const row = (y >> 2);
+      const localY = y & 3;
+      const shift = (row & 1) ? 4 : 0;
+      for (let x = 0; x < TS; x++) {
+        const localX = (x + shift) & 7;
+        const v = (rnd() - 0.5) * 9;
+        if (localY === 0 || localX === 0) px(ctx, ox + x, oy + y, 30 + v * 0.4, 14 + v * 0.3, 18 + v * 0.4);
+        else if (localY === 1) px(ctx, ox + x, oy + y, 70 + v, 36 + v * 0.7, 43 + v * 0.8);
+        else px(ctx, ox + x, oy + y, 54 + v, 26 + v * 0.7, 32 + v * 0.8);
+      }
+    }
+  });
+
+  put(TILES.enchant_top, (ox, oy, rnd) => {
+    // Deep obsidian base with crimson velvet runner & diamond corners
+    for (let y = 0; y < TS; y++) for (let x = 0; x < TS; x++) {
+      const v = (rnd() - 0.5) * 10;
+      const obsidian = x < 2 || x > 13 || y < 2 || y > 13;
+      if (obsidian) px(ctx, ox + x, oy + y, 28 + v * 0.7, 20 + v * 0.6, 44 + v * 0.9);
+      else px(ctx, ox + x, oy + y, 172 + v, 26 + v * 0.4, 36 + v * 0.4);
+    }
+    // Faceted diamond corner inlays
+    for (const [cx, cy] of [[1, 1], [14, 1], [1, 14], [14, 14], [2, 1], [13, 1], [1, 2], [14, 2], [2, 14], [13, 14], [1, 13], [14, 13]]) {
+      px(ctx, ox + cx, oy + cy, 86, 232, 224);
+    }
+    for (const [cx, cy] of [[1, 1], [14, 1], [1, 14], [14, 14]]) px(ctx, ox + cx, oy + cy, 198, 255, 252);
+    // Open illuminated grimoire pages & gold clasp at table center
+    for (let y = 5; y <= 10; y++) for (let x = 4; x <= 11; x++) {
+      if (x === 7 || x === 8) px(ctx, ox + x, oy + y, 118, 68, 28); // leather spine
+      else px(ctx, ox + x, oy + y, (x + y) % 2 === 0 ? 242 : 226, (x + y) % 2 === 0 ? 232 : 210, 176);
+    }
+    px(ctx, ox + 5, oy + 7, 138, 92, 186); px(ctx, ox + 10, oy + 8, 138, 92, 186); // arcane runes
+  });
+
+  put(TILES.enchant_side, (ox, oy, rnd) => {
+    for (let y = 0; y < TS; y++) for (let x = 0; x < TS; x++) {
+      const v = (rnd() - 0.5) * 11;
+      if (y < 3) px(ctx, ox + x, oy + y, 178 + v, 28 + v * 0.4, 38 + v * 0.4);
+      else if (y === 3 && (x >= 5 && x <= 10)) px(ctx, ox + x, oy + y, 196 + v, 36, 46); // hanging cloth tab
+      else if (y === 4 && (x >= 6 && x <= 9)) px(ctx, ox + x, oy + y, 152, 22, 30);
+      else px(ctx, ox + x, oy + y, 26 + v * 0.7, 18 + v * 0.6, 40 + v * 0.9);
+    }
+    // Gold trim along cloth hem + glowing diamond inlays on obsidian pedestal
+    for (let x = 5; x <= 10; x++) px(ctx, ox + x, oy + 2, 228, 192, 72);
+    for (const [dx, dy] of [[2, 5], [3, 5], [2, 6], [12, 5], [13, 5], [13, 6], [7, 8], [8, 8]]) {
+      px(ctx, ox + dx, oy + dy, 88, 234, 226);
+    }
+    px(ctx, ox + 2, oy + 5, 204, 255, 252); px(ctx, ox + 12, oy + 5, 204, 255, 252);
+  });
+
+  put(TILES.quartz_ore, (ox, oy, rnd) => {
+    noiseFill(ctx, ox, oy, [110, 44, 42], 16, rnd);
+    // Sharp white-ivory crystal shards jutting out of dark netherrack
+    const shards = [
+      [[2, 3], [3, 2], [3, 3], [4, 3], [4, 4]],
+      [[10, 3], [11, 3], [10, 4], [11, 4], [12, 5]],
+      [[6, 8], [7, 8], [6, 9], [7, 9], [8, 10]],
+      [[2, 11], [3, 11], [3, 12], [4, 12]],
+      [[11, 11], [12, 11], [11, 12], [13, 12]],
+    ];
+    for (const shard of shards) {
+      shard.forEach(([qx, qy], idx) => {
+        if (idx === 0) px(ctx, ox + qx, oy + qy, 255, 254, 250);
+        else if (idx === shard.length - 1) px(ctx, ox + qx, oy + qy, 198, 188, 178);
+        else px(ctx, ox + qx, oy + qy, 238, 232, 224);
+      });
+    }
+  });
+
+  put(TILES.quartz_top, (ox, oy, rnd) => {
+    noiseFill(ctx, ox, oy, [238, 234, 226], 6, rnd);
+    for (let i = 0; i < TS; i++) {
+      px(ctx, ox + i, oy, 248, 245, 240); px(ctx, ox, oy + i, 248, 245, 240);
+      px(ctx, ox + i, oy + 15, 206, 198, 188); px(ctx, ox + 15, oy + i, 206, 198, 188);
+    }
+  });
+
+  put(TILES.quartz_side, (ox, oy, rnd) => {
+    noiseFill(ctx, ox, oy, [235, 230, 222], 7, rnd);
+    for (let x = 0; x < TS; x++) {
+      px(ctx, ox + x, oy, 248, 245, 240);
+      px(ctx, ox + x, oy + 15, 198, 190, 180);
+    }
+    for (let y = 1; y < TS - 1; y++) {
+      px(ctx, ox, oy + y, 244, 240, 234);
+      px(ctx, ox + 15, oy + y, 210, 202, 192);
+    }
+  });
+
   applyClassicTextures(ctx);
   return canvas;
 }
@@ -869,6 +974,9 @@ export function buildEmissionAtlas(atlasCanvas) {
   paint(TILES.torch, (x, y, r, g, b, a) => a > 0 && y < 7 && x >= 6 && x < 10 ? 1 : 0);
   paint(TILES.furnace_front_lit, (x, y, r, g) => y >= 9 && y < 13 && x >= 4 && x < 12 && r > 200 ? 1 : 0);
   paint(TILES.jack_o_lantern, (x, y, r, g) => r > 240 && g > 200 ? 1 : 0);
+  paint(TILES.portal, () => 0.92);
+  paint(TILES.enchant_top, (x, y, r, g, b) => (b > 200 && g > 200) ? 0.95 : (r > 200 && g > 170 ? 0.75 : 0));
+  paint(TILES.enchant_side, (x, y, r, g, b) => (b > 200 && g > 200) ? 0.95 : 0);
   const texture = new THREE.CanvasTexture(canvas);
   texture.magFilter = texture.minFilter = THREE.NearestFilter;
   texture.generateMipmaps = false;
@@ -1379,6 +1487,80 @@ export function buildItemIcons() {
     rect(ox, oy, 3, 9, 10, 2, 118, 118, 118);
     rect(ox, oy, 3, 12, 3, 2, 76, 76, 76); rect(ox, oy, 10, 12, 3, 2, 76, 76, 76);
   });
+  // 106: blaze rod — molten golden core with dark ember outline
+  draw(106, (ox, oy) => {
+    for (let i = 0; i < 11; i++) {
+      rect(ox, oy, 2 + i, 12 - i, 3, 3, 184, 88, 14);
+      rect(ox, oy, 3 + i, 12 - i, 2, 2, 248, 184, 32);
+      rect(ox, oy, 3 + i, 12 - i, 1, 1, 255, 246, 128);
+    }
+  });
+  // 107: ghast tear — pearlescent teardrop with dark slate border & specular gleam
+  draw(107, (ox, oy) => {
+    rect(ox, oy, 7, 2, 2, 2, 132, 162, 178);
+    rect(ox, oy, 6, 4, 4, 3, 132, 162, 178);
+    rect(ox, oy, 4, 7, 8, 5, 132, 162, 178);
+    rect(ox, oy, 5, 12, 6, 2, 112, 142, 158);
+    rect(ox, oy, 7, 3, 2, 2, 224, 246, 252);
+    rect(ox, oy, 6, 5, 4, 3, 214, 238, 248);
+    rect(ox, oy, 5, 8, 6, 4, 198, 228, 242);
+    rect(ox, oy, 6, 12, 4, 1, 174, 206, 224);
+    rect(ox, oy, 6, 7, 2, 3, 255, 255, 255);
+  });
+  // 108: gold nugget — beveled irregular nugget with dark bronze outline
+  draw(108, (ox, oy) => {
+    rect(ox, oy, 5, 4, 6, 8, 156, 108, 18);
+    rect(ox, oy, 4, 5, 8, 6, 156, 108, 18);
+    rect(ox, oy, 6, 5, 4, 6, 242, 198, 44);
+    rect(ox, oy, 5, 6, 6, 4, 242, 198, 44);
+    rect(ox, oy, 6, 6, 2, 2, 255, 244, 148);
+    rect(ox, oy, 8, 9, 2, 1, 206, 154, 28);
+  });
+  // 109: blaze powder — swirling fiery sparks & incandescent embers
+  draw(109, (ox, oy, rnd) => {
+    for (let i = 0; i < 20; i++) {
+      const x = 3 + ((rnd() * 9) | 0), y = 4 + ((rnd() * 8) | 0);
+      rect(ox, oy, x, y, 2, 2, i % 4 === 0 ? 255 : 238, i % 4 === 0 ? 242 : (i % 2 === 0 ? 156 : 96), 22);
+    }
+    rect(ox, oy, 7, 7, 2, 2, 255, 252, 168);
+  });
+  // 110: bottle o' enchanting — corked glass flask filled with glowing lime-gold essence
+  draw(110, (ox, oy) => {
+    rect(ox, oy, 6, 1, 4, 2, 168, 122, 68);
+    rect(ox, oy, 5, 3, 6, 2, 132, 172, 192);
+    rect(ox, oy, 6, 3, 4, 2, 208, 236, 248);
+    rect(ox, oy, 3, 5, 10, 8, 72, 128, 56);
+    rect(ox, oy, 4, 13, 8, 1, 58, 104, 44);
+    rect(ox, oy, 4, 6, 8, 6, 154, 244, 88);
+    rect(ox, oy, 5, 7, 3, 3, 244, 255, 156);
+    rect(ox, oy, 9, 10, 2, 2, 238, 196, 255);
+  });
+  // 111: enchanted book — bound purple tome with gold ribbon & clasp
+  draw(111, (ox, oy) => {
+    rect(ox, oy, 2, 2, 11, 12, 82, 32, 112);
+    rect(ox, oy, 3, 3, 9, 10, 152, 68, 198);
+    rect(ox, oy, 11, 3, 2, 10, 236, 228, 206); // page edges
+    rect(ox, oy, 4, 4, 6, 8, 182, 96, 232);
+    rect(ox, oy, 2, 7, 11, 2, 238, 198, 56); // gold ribbon
+    rect(ox, oy, 6, 6, 3, 4, 255, 238, 132); // jeweled clasp
+  });
+  // 112: nether brick item — beveled dark crimson-plum ingot
+  draw(112, (ox, oy) => {
+    rect(ox, oy, 2, 5, 12, 6, 38, 16, 20);
+    rect(ox, oy, 3, 6, 10, 4, 72, 36, 44);
+    rect(ox, oy, 4, 5, 8, 2, 98, 52, 60);
+    rect(ox, oy, 3, 10, 10, 1, 48, 22, 26);
+  });
+  // 113: nether quartz — sharp hexagonal crystal prism with warm shadow & bright facet
+  draw(113, (ox, oy) => {
+    rect(ox, oy, 6, 2, 4, 3, 184, 174, 164);
+    rect(ox, oy, 4, 5, 8, 6, 184, 174, 164);
+    rect(ox, oy, 5, 11, 6, 3, 164, 154, 144);
+    rect(ox, oy, 7, 2, 2, 3, 248, 244, 238);
+    rect(ox, oy, 5, 5, 6, 6, 238, 232, 224);
+    rect(ox, oy, 6, 11, 4, 2, 218, 210, 200);
+    rect(ox, oy, 6, 4, 2, 5, 255, 255, 254);
+  });
   return canvas;
 }
 
@@ -1450,6 +1632,25 @@ export function buildMobTexture(name) {
       noise(0, 0, 64, 32, [42, 32, 32], 10);
       fill(9, 10, 2, 2, 182, 22, 22); fill(13, 10, 2, 2, 182, 22, 22);
       fill(6, 12, 2, 2, 182, 22, 22); fill(16, 12, 2, 2, 182, 22, 22);
+      break;
+    case 'pigman':
+      noise(0, 0, 64, 32, [212, 132, 138], 12);
+      noise(16, 16, 24, 12, [74, 128, 68], 14);
+      fill(8, 9, 4, 5, 224, 222, 208); // exposed skull half
+      fill(9, 10, 2, 2, 24, 24, 24); fill(13, 10, 2, 2, 172, 32, 32);
+      fill(18, 26, 20, 4, 132, 96, 52); // loincloth
+      break;
+    case 'blaze':
+      noise(0, 0, 64, 32, [238, 158, 24], 20);
+      noise(8, 8, 8, 8, [252, 196, 42], 14);
+      fill(9, 10, 2, 2, 255, 250, 180); fill(13, 10, 2, 2, 255, 250, 180);
+      fill(9, 12, 6, 2, 142, 58, 14);
+      break;
+    case 'ghast':
+      noise(0, 0, 64, 32, [240, 240, 244], 8);
+      fill(8, 10, 3, 2, 58, 58, 64); fill(13, 10, 3, 2, 58, 58, 64);
+      fill(9, 12, 1, 4, 178, 188, 198); fill(14, 12, 1, 4, 178, 188, 198); // tear tracks
+      fill(10, 14, 4, 2, 64, 42, 46);
       break;
     default:
       noise(0, 0, 64, 32, [182, 182, 182], 20);

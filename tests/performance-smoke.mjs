@@ -4,7 +4,7 @@ import { buildChunkMesh } from '../src/world/mesher.js';
 
 const p95 = samples => samples.sort((a, b) => a - b)[Math.ceil(samples.length * 0.95) - 1];
 const results = [];
-for (const [edition, terrain, distance] of [['classic', null, 2], ['classic', null, 12], ['beta', 'overworld-v1', 2]]) {
+for (const [edition, terrain, distance] of [['classic', null, 2], ['classic', null, 12], ['beta', 'overworld-v1', 2], ['beta', 'nether-v1', 2]]) {
   const world = new World('release-perf', undefined, edition, terrain);
   const coordinates = [];
   for (let z = -8; z < 8; z++) for (let x = -8; x < 8; x++) {

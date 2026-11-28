@@ -14,11 +14,14 @@ const CLOUD_DAY = new THREE.Color(0xffffff);
 const CLOUD_SUNSET = new THREE.Color(0xffb894);
 const CLOUD_NIGHT = new THREE.Color(0x23273a);
 const WATER_BLUE = new THREE.Color(0x174a9b);
+const SKY_NETHER = new THREE.Color(0x330808);
+const FOG_NETHER = new THREE.Color(0x3b0c0c);
 
 export class Sky {
   constructor(scene, camera) {
     this.scene = scene;
     this.camera = camera;
+    this.dimension = 'overworld';
     this.time = 0.38; // mid-morning: the title backdrop opens in full daylight
     this.elapsed = 0;
     this.dayFactor = 1;
@@ -36,15 +39,24 @@ export class Sky {
       uHorizon: { value: new THREE.Color() },
       uZenith: { value: new THREE.Color() },
       uNadir: { value: new THREE.Color() },
+      uSunDir: { value: new THREE.Vector3(0, 1, 0) },
+      uSunGlow: { value: 0 },
       uUnderwater: { value: 0 },
       uWaterColor: { value: new THREE.Color() },
     };
     this.skyDome = new THREE.Mesh(this.skyDomeGeometry, new THREE.ShaderMaterial({
       uniforms: this.skyUniforms,
-      vertexShader: `varying float vHeight; void main() { vHeight = normalize(position).y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-      fragmentShader: `uniform vec3 uHorizon; uniform vec3 uZenith; uniform vec3 uNadir; uniform float uUnderwater; uniform vec3 uWaterColor; varying float vHeight;
-        void main() { float h = max(vHeight, 0.0); vec3 c = mix(uHorizon, uZenith, pow(h, 0.7)); c = mix(c, uNadir, max(-vHeight, 0.0)); gl_FragColor = vec4(mix(c, uWaterColor, uUnderwater), 1.0);
-        #include <colorspace_fragment>
+      vertexShader: `varying vec3 vDir; void main() { vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: `uniform vec3 uHorizon; uniform vec3 uZenith; uniform vec3 uNadir; uniform vec3 uSunDir; uniform float uSunGlow; uniform float uUnderwater; uniform vec3 uWaterColor; varying vec3 vDir;
+        void main() {
+          vec3 dir = normalize(vDir);
+          float h = max(dir.y, 0.0);
+          vec3 c = mix(uHorizon, uZenith, pow(h, 0.68));
+          c = mix(c, uNadir, max(-dir.y, 0.0));
+          float mie = pow(max(dot(dir, normalize(uSunDir)), 0.0), 8.0) * (1.0 - smoothstep(0.0, 0.65, abs(dir.y)));
+          c += vec3(1.0, 0.68, 0.38) * mie * uSunGlow * 0.28;
+          gl_FragColor = vec4(mix(c, uWaterColor, uUnderwater), 1.0);
+          #include <colorspace_fragment>
         }`,
       side: THREE.BackSide, depthWrite: false, fog: false,
     }));
@@ -94,7 +106,8 @@ export class Sky {
     });
     this.clouds = new THREE.Mesh(new THREE.PlaneGeometry(2048, 2048), this.cloudMat);
     this.clouds.rotation.x = -Math.PI / 2;
-    this.clouds.position.y = 108;
+    // Non-integer Y above mountain terrain prevents Z-fighting with block tops.
+    this.clouds.position.y = 132.15;
     this.clouds.renderOrder = -5;
     scene.add(this.clouds);
 
@@ -159,9 +172,32 @@ export class Sky {
   }
 
   // time: 0.0 = midnight, 0.25 = dawn, 0.50 = noon, 0.75 = dusk
-  update(dt, playerPos, renderDistance = 6, { underwater = false } = {}) {
+  update(dt, playerPos, renderDistance = 6, { underwater = false, dimension = 'overworld' } = {}) {
+    this.dimension = dimension === 'nether' ? 'nether' : 'overworld';
     this.time = (this.time + dt / DAY_LENGTH) % 1;
     this.elapsed += dt;
+
+    if (this.dimension === 'nether') {
+      this.dayFactor = 0.0;
+      this.sunDirection.set(0, -1, 0);
+      this._skyColor.copy(SKY_NETHER);
+      this._fogColor.copy(FOG_NETHER);
+      this.scene.background = this._skyColor;
+      this.skyDome.position.copy(playerPos);
+      this.skyUniforms.uHorizon.value.copy(FOG_NETHER);
+      this.skyUniforms.uZenith.value.copy(SKY_NETHER);
+      this.skyUniforms.uNadir.value.copy(SKY_NETHER);
+      this.skyUniforms.uSunGlow.value = 0;
+      this.skyUniforms.uUnderwater.value = 0;
+      this.sun.visible = this.moon.visible = this.stars.visible = this.clouds.visible = false;
+      if (this.scene.fog) {
+        const far = Math.max(28, renderDistance * 14);
+        this.scene.fog.color.copy(FOG_NETHER);
+        this.scene.fog.near = Math.max(8, far * 0.25);
+        this.scene.fog.far = far;
+      }
+      return this.dayFactor;
+    }
 
     const sunAngle = (this.time - 0.25) * Math.PI * 2;
     this.sunDirection.set(Math.cos(sunAngle), Math.sin(sunAngle), 0.18).normalize();
@@ -178,12 +214,14 @@ export class Sky {
     this.stars.rotation.z = sunAngle * 0.25;
     this.stars.material.opacity = Math.max(0, 1 - this.dayFactor * 1.8) * 0.9;
 
-    // clouds drift & take day/sunset/night tint
-    this.clouds.position.x = playerPos.x;
-    this.clouds.position.z = playerPos.z;
-    // Compensate the camera-following mesh so clouds stay anchored to the world.
-    this.cloudMat.map.offset.x = playerPos.x / 128 + this.elapsed * 0.0015;
-    this.cloudMat.map.offset.y = -playerPos.z / 128;
+    // Snap cloud plane in 128-block tile steps so nearest-filtered cloud pixels
+    // never sub-texel shimmer when the player moves.
+    const snapX = Math.round(playerPos.x / 128) * 128;
+    const snapZ = Math.round(playerPos.z / 128) * 128;
+    this.clouds.position.x = snapX;
+    this.clouds.position.z = snapZ;
+    this.cloudMat.map.offset.x = (this.elapsed * 0.0015) % 1;
+    this.cloudMat.map.offset.y = 0;
     this.cloudMat.opacity = 0.65 + this.dayFactor * 0.25;
 
     const sky = this._skyColor;
@@ -210,6 +248,8 @@ export class Sky {
     this.skyUniforms.uHorizon.value.copy(fog);
     this.skyUniforms.uZenith.value.copy(sky).multiplyScalar(0.78);
     this.skyUniforms.uNadir.value.copy(sky).multiplyScalar(0.55);
+    this.skyUniforms.uSunDir.value.copy(this.sunDirection);
+    this.skyUniforms.uSunGlow.value = this.dayFactor;
     this.skyUniforms.uUnderwater.value = underwater ? 1 : 0;
     this._waterColor.copy(FOG_NIGHT).lerp(WATER_BLUE, this.dayFactor);
     this.skyUniforms.uWaterColor.value.copy(this._waterColor);
