@@ -1,4 +1,4 @@
-# AiSlopcraft v1.1.0 — Shared Multiplayer Containers, XP & Enchanting, The Nether, and Entity Pixel Art
+# AiSlopcraft v1.2.0 — Shared Multiplayer Containers, XP & Enchanting, The Nether, Pixel-Art Skins, and Shader Overhaul
 
 **Base:** `main` · **Head:** `arena/b2755a2d-aislopcraft`
 
